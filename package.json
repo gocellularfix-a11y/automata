@@ -1,0 +1,23 @@
+{
+  "name": "automata",
+  "productName": "Automata",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude construye. Codex dirige. Tu tienes el control.",
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "start": "node scripts/desktop.mjs",
+    "server": "node server/index.mjs",
+    "demo": "node scripts/desktop.mjs --demo",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "build:windows": "node scripts/build-windows.mjs",
+    "build:android": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1"
+  },
+  "devDependencies": {
+    "electron": "42.1.0",
+    "playwright-core": "1.61.1"
+  },
+  "engines": { "node": ">=22" }
+}

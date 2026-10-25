@@ -5,3 +5,9 @@
 runs/
 .automata/
 project.local.json
+node_modules/
+dist/
+artifacts/
+android/build/
+android/*.keystore
+*.tmp
