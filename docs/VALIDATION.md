@@ -1,15 +1,16 @@
-# Validación de Automata 0.2.0
+# Validación de Automata 0.3.0
 
 Fecha: 2026-10-25. Primera implementación; no equivale a una certificación para trabajo desatendido.
 
 | Comprobación | Resultado |
 | --- | --- |
-| `node --test test/*.test.mjs` | **25 aprobadas, 0 fallidas** |
+| `node --test test/*.test.mjs` | **30 aprobadas, 0 fallidas** |
 | `node scripts/smoke.mjs` | **13 comprobaciones aprobadas** en Chrome de Windows |
-| `node scripts/smoke-auth.mjs` | **11 comprobaciones aprobadas**, login con procesos simulados y navegador real |
-| `node scripts/smoke-recovery.mjs --live` | **Aprobado**: EXE 0.2.0 abre la ventana de cuentas por IPC, consulta las CLI instaladas y mantiene la recuperación de Windows |
+| `node scripts/smoke-auth.mjs` | **14 comprobaciones aprobadas**, login de AI/GitHub con procesos simulados y navegador real |
+| `node scripts/smoke-github.mjs` | **10 comprobaciones aprobadas**, GitHub simulado con clonación real de un repositorio Git local de prueba |
+| `node scripts/smoke-recovery.mjs --live` | **Aprobado**: EXE 0.3.0 abre la ventana de cuentas por IPC, incluye GitHub opcional, consulta las CLI instaladas y mantiene la recuperación de Windows |
 | APK Android | Compilado y firma v2/v3 verificada |
-| Instalación y ejecución en Samsung SM-S938B (0.1.0) | **4 comprobaciones aprobadas**, conexión USB al coordinador; APK 0.2.0 recompilado y firmado, sin repetir todavía la prueba física |
+| Instalación y ejecución en Samsung SM-S938B (0.1.0) | **4 comprobaciones aprobadas**, conexión USB al coordinador; paquetes posteriores recompilados y firmados, sin repetir todavía la prueba física |
 | Paquete Windows portable | Generado en `dist/Automata-Windows` |
 | Renderer nativo Electron (0.1.1) | **Aprobado**: EXE empaquetado, ventana visible, puente IPC, Node deshabilitado en la página y ciclo de demostración completo en modo de compatibilidad |
 | Ventana Chrome lanzada directamente | **No validada** aquí: el proceso GPU falla; la misma interfaz funciona en Chrome bajo Playwright |
@@ -55,6 +56,14 @@ La prueba de interfaz `smoke-auth.mjs` utiliza proveedores simulados identificad
 En la prueba nativa 0.2.0 con las CLI instaladas, Claude informó una sesión disponible. Codex devolvió `Could not find home directory` en el escritorio aislado de las herramientas, que se muestra como error de comprobación, sin inventar una conexión. Debe verificarse desde el escritorio normal de Windows del usuario. El flujo OAuth completo contra las cuentas reales no se ha ejecutado. Otra prueba ejecuta un subprocess Node real que representa una CLI, mantiene stdin abierto para el código de retorno y confirma su estado al terminar.
 
 Las ventanas capturadas por las pruebas nativas pertenecen al escritorio aislado de las herramientas. No se ha verificado que un lanzamiento desde las herramientas aparezca delante del usuario; el EXE debe abrirse desde su escritorio de Windows.
+
+## Proyectos locales y GitHub 0.3.0
+
+La regresión del adaptador invoca un subprocess CLI de prueba que reproduce el error de directorio no confiable si falta `--skip-git-repo-check`; planificación y chat ahora terminan con el sandbox de solo lectura y sin crear `.git`. No se ha ejecutado una inferencia real de Codex para esta corrección.
+
+Los tests de GitHub cubren URLs válidas e inyección, login opcional, conservación de carpetas ocupadas, coincidencia de `origin`, fallos sin credenciales en el mensaje, y proyectos Local sin autenticación de GitHub. Las pruebas de interfaz hacen una clonación Git real entre directorios de prueba a través de un adaptador GitHub simulado; comprueban crear desde un repo, rechazar sobrescritura, abrir una copia existente, rechazar remoto diferente, volver a Local sin inicializar Git, y ausencia de desbordamiento móvil.
+
+No se ha completado un nuevo login de GitHub ni una clonación de red mediante la aplicación en este entorno. La conexión y los permisos de la cuenta deben probarse desde el escritorio normal del usuario.
 
 ## Corrección Windows 0.1.1
 

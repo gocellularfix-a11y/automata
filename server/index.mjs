@@ -9,11 +9,12 @@ import { Coordinator } from "./coordinator.mjs";
 import { MODELS, MODES, effortsFor } from "./config.mjs";
 import { findAgent } from "./agents.mjs";
 import { AuthManager } from "./auth.mjs";
+import { GitHubProjects } from "./github.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
 const mime = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json" };
 const loopback = (address) => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address);
-export async function createServer({ port = 4780, lan = false, demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), auth = new AuthManager({ demo }), ...injections } = {}) {
+export async function createServer({ port = 4780, lan = false, demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), auth = new AuthManager({ demo }), github = new GitHubProjects({ auth }), ...injections } = {}) {
   const store = new Store(dataDir), release = store.acquire();
   let coordinator;
   try {
@@ -128,7 +129,14 @@ data: ${JSON.stringify(coordinator.snapshot())}
           if (!loopback(req.socket.remoteAddress)) return send(403, { error: "Abre la conexión de Android desde la PC." });
           return send(200, { token, lan, addresses: Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) });
         }
-        if (url.pathname === "/api/projects" && req.method === "POST") return send(201, coordinator.addProject(await body()));
+        if (url.pathname === "/api/projects" && req.method === "POST") {
+          const input = await body();
+          if (input.source === "github") {
+            if (demo || coordinator.busy) throw new Error("Importa el repositorio en una sesión real sin trabajo activo.");
+            return send(201, coordinator.addProject(await github.prepare(input)));
+          }
+          return send(201, coordinator.addProject(input));
+        }
         if (url.pathname === "/api/settings" && req.method === "PUT") return send(200, coordinator.updateSettings(await body()));
         if (url.pathname === "/api/start" && req.method === "POST") {
           const data = await body();
@@ -176,7 +184,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
   heartbeat.unref();
   return { server, coordinator, auth, origin, token, store, async close() {
     clearInterval(heartbeat);
-    await Promise.all([coordinator.close(), auth.close()]);
+    await Promise.all([coordinator.close(), auth.close(), github.close()]);
     for (const c of clients) c.end();
     server.closeAllConnections();
     await new Promise((r) => server.close(r));

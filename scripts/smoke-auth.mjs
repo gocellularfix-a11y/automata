@@ -8,15 +8,15 @@ import { createServer } from "../server/index.mjs";
 
 const output = path.resolve("artifacts", "accounts-" + Date.now());
 fs.mkdirSync(output, { recursive: true });
-const connected = { coder: false, auditor: false }, children = {};
+const connected = { coder: false, auditor: false, github: false }, children = {};
 const auth = new AuthManager({
   find: role => ({ command: role, args: [] }),
-  run: async role => role === "coder" ? { code: connected.coder ? 0 : 1, stdout: JSON.stringify({ loggedIn: connected.coder, authMethod: connected.coder ? "claude.ai" : "none" }), stderr: "" } : { code: connected.auditor ? 0 : 1, stdout: "", stderr: connected.auditor ? "Logged in using ChatGPT" : "Not logged in" },
+  run: async role => role === "github" ? { code: connected.github ? 0 : 1, stdout: "", stderr: connected.github ? "Logged in to github.com account test-user" : "You are not logged into any GitHub hosts. Run gh auth login." } : role === "coder" ? { code: connected.coder ? 0 : 1, stdout: JSON.stringify({ loggedIn: connected.coder, authMethod: connected.coder ? "claude.ai" : "none" }), stderr: "" } : { code: connected.auditor ? 0 : 1, stdout: "", stderr: connected.auditor ? "Logged in using ChatGPT" : "Not logged in" },
   spawnLogin: (role, args) => {
     const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
     children[role] = child;
     child.stdin.on("data", () => { connected[role] = true; child.emit("close", 0); });
-    setTimeout(() => child.stdout.write(role === "coder" ? "https://claude.ai/oauth/authorize?state=simulated-login\nPaste code here if prompted: " : args.includes("--device-auth") ? "https://auth.openai.com/codex/device\nABCD-EFGHI\n" : "https://auth.openai.com/oauth/authorize?state=simulated-login\n"), 20);
+    setTimeout(() => child.stdout.write(role === "github" ? "https://github.com/login/device\nABCD-GHJK\n" : role === "coder" ? "https://claude.ai/oauth/authorize?state=simulated-login\nPaste code here if prompted: " : args.includes("--device-auth") ? "https://auth.openai.com/codex/device\nABCD-EFGHI\n" : "https://auth.openai.com/oauth/authorize?state=simulated-login\n"), 20);
     return child;
   },
   stop: async child => child.emit("close", -1)
@@ -53,6 +53,14 @@ try {
   children.auditor.emit("close", 0);
   await page.waitForFunction(() => document.querySelector("#auditorAccountState").textContent === "Conectado");
   check("continuar se habilita al verificar ambas sesiones", await page.locator("#accountsContinue").isEnabled());
+  check("GitHub sin conectar no impide continuar con las AI", await page.locator("#githubAccountState").textContent() === "Sin conectar");
+  await page.click("[data-login=github]");
+  await page.waitForFunction(() => document.querySelector("#githubDeviceCode").textContent === "ABCD-GHJK");
+  check("login opcional de GitHub muestra su código oficial", await page.locator("#githubAuthLink").getAttribute("href") === "https://github.com/login/device");
+  connected.github = true;
+  children.github.emit("close", 0);
+  await page.waitForFunction(() => document.querySelector("#githubAccountState").textContent === "Conectado");
+  check("GitHub conectado no altera el contador de las dos AI", await page.locator("#accountCount").textContent() === "2/2");
   await page.click("#accountsContinue");
   check("el estado de las dos cuentas queda visible en el espacio", await page.locator("#accountCount").textContent() === "2/2");
   check("no se guardan códigos ni URLs OAuth en localStorage", !await page.evaluate(() => JSON.stringify(Object.values(localStorage)).match(/simulated-login|simulated-code|ABCD-EFGHI/)));

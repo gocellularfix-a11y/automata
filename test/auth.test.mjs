@@ -9,11 +9,12 @@ import { AuthManager, authUrl, interpretStatus } from "../server/auth.mjs";
 import { createServer } from "../server/index.mjs";
 
 function harness(t, options = {}) {
-  const loggedIn = { coder: false, auditor: false }, calls = [], children = [];
+  const loggedIn = { coder: false, auditor: false, github: false }, calls = [], children = [];
   const manager = new AuthManager({
     find: role => ({ command: role + ".exe", args: ["base"] }),
     run: async (command, args) => {
       calls.push({ command, args });
+      if (command === "github.exe") return { code: loggedIn.github ? 0 : 1, stdout: "", stderr: loggedIn.github ? "github.com\nLogged in to github.com account test-user\nActive account: true" : "You are not logged into any GitHub hosts. Run gh auth login." };
       return command === "coder.exe" ? { code: loggedIn.coder ? 0 : 1, stdout: JSON.stringify({ loggedIn: loggedIn.coder, authMethod: loggedIn.coder ? "claude.ai" : "none", accessToken: "never-return-this" }), stderr: "" } : { code: loggedIn.auditor ? 0 : 1, stdout: "", stderr: loggedIn.auditor ? "Logged in using ChatGPT" : "Not logged in" };
     },
     spawnLogin: (command, args, spawnOptions) => {
@@ -166,4 +167,21 @@ test("un subprocess real mantiene stdin abierto para el retorno y vuelve a compr
   await until(() => manager.snapshot().providers.coder.connected);
   assert.equal(fs.readFileSync(session, "utf8"), '{"loggedIn":true}');
   assert.deepEqual(fs.readdirSync(directory).sort(), ["official-cli-stub.mjs", "session.json"]);
+});
+
+test("GitHub es opcional para las AI y su login solo publica código y URL en la PC", async t => {
+  const { manager, loggedIn, children } = harness(t);
+  loggedIn.coder = loggedIn.auditor = true;
+  await manager.requireConnected();
+  assert.equal(manager.snapshot().providers.github.connected, false);
+  await assert.rejects(manager.requireConnected(["github"]), /Conecta GitHub/);
+  await manager.start("github");
+  assert.deepEqual(children[0].args.slice(0, 7), ["base", "auth", "login", "--hostname", "github.com", "--git-protocol", "https"]);
+  children[0].stderr.write("First copy your one-time code: ABCD-GHJK\nhttps://github.com/login/device\n");
+  assert.equal(manager.snapshot({ local: true }).providers.github.flow.deviceCode, "ABCD-GHJK");
+  assert.equal(manager.snapshot({ local: false }).providers.github.flow, undefined);
+  loggedIn.github = true;
+  children[0].emit("close", 0);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(manager.snapshot().providers.github.connected, true);
 });

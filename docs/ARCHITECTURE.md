@@ -1,4 +1,4 @@
-# Automata 0.2.0
+# Automata 0.3.0
 
 Una interfaz compartida para Windows y Android; un coordinador que trabaja en la PC.
 
@@ -26,6 +26,8 @@ Los comandos de verificación deben pertenecer a la ronda actual para aprobar. `
 
 Codex se invoca con `--sandbox read-only`. Claude usa `acceptEdits`; Automata permite herramientas de archivo y lectura de Git, sin saltarse los permisos de la CLI. Las verificaciones configuradas por la persona se ejecutan desde PowerShell en la carpeta del proyecto. No se evalúan comandos recibidos en el JSON del auditor.
 
+Los proyectos locales no requieren repositorio: todas las invocaciones de Codex exec (plan, review y chat) incluyen `--skip-git-repo-check`, conservando el sandbox de solo lectura. La evidencia Git es opcional; si está disponible, status y diff se limitan a la carpeta del proyecto con un pathspec. Los prompts piden revisar archivos directamente y no inicializar un repositorio por cuenta del agente.
+
 La PC escucha solo en loopback por defecto. `--lan` habilita la red local. Todos los endpoints API requieren un token aleatorio. El código para emparejar se muestra solo en la PC autenticada. El APK guarda la conexión en el almacenamiento privado de su WebView, no las credenciales de los proveedores.
 
 El modo LAN admite HTTP para una red local de confianza; para acceso por Internet se debe usar HTTPS mediante una conexión privada o un proxy autenticado. No se incluye un servicio de nube ni un túnel público.
@@ -47,6 +49,16 @@ La ventana de cuentas aparece al abrir un espacio real y se puede reabrir desde 
 El endpoint `/api/auth` requiere el token del coordinador. Las mutaciones de acceso y los enlaces/códigos pendientes están limitados a loopback y no se exponen al origen Android. Solo se ofrecen URLs HTTPS de hosts oficiales permitidos. Los datos temporales del login no se guardan en disco, eventos, historial ni localStorage. Las credenciales persistentes y su renovación pertenecen a las CLI; Automata no implementa ni suplanta su servidor OAuth. La comprobación local de credenciales no verifica la disponibilidad de modelos, cuotas ni la vigencia remota de la cuenta.
 
 Fuentes: [Autenticación de Codex](https://learn.chatgpt.com/docs/auth), [CLI de Claude Code](https://code.claude.com/docs/en/cli-reference) y [Autenticación de Claude Code](https://code.claude.com/docs/en/authentication).
+
+## Local y GitHub (0.3.0)
+
+`source` es `local` por defecto; los proyectos guardados antes de 0.3 siguen funcionando sin migrar sus carpetas. GitHub añade una URL canónica del repositorio, con validación estricta de HTTPS, host, owner y repo, sin credenciales ni parámetros.
+
+`server/github.mjs` prepara la importación antes de registrar el proyecto. Clonar exige carpeta existente vacía y cuenta disponible en GitHub CLI; ejecuta `gh repo clone` con argumentos separados, sin shell, sin prompts de terminal y con tiempo límite. Un fallo no registra el proyecto ni borra archivos parciales. Solo se permite una importación simultánea y cerrar Automata aborta su proceso. Usar una copia existente verifica raíz y `origin` sin cambiarlos ni solicitar credenciales de red.
+
+La cuenta GitHub es opcional en la ventana de cuentas: no cambia el contador ni el requisito de las dos AI. El login oficial por navegador/dispositivo y su estado se gestionan mediante GitHub CLI. La CLI conserva sus credenciales; Automata no solicita tokens ni registra su salida de login. Los enlaces y códigos de acceso permanecen limitados a la PC. No se incluyen creación de repositorios remotos, commit, push ni despliegue automático.
+
+Fuentes: [Codex fuera de Git](https://learn.chatgpt.com/docs/non-interactive-mode#git-repository-required), [login de GitHub CLI](https://cli.github.com/manual/gh_auth_login), [estado de GitHub CLI](https://cli.github.com/manual/gh_auth_status), [clonar un repositorio](https://cli.github.com/manual/gh_repo_clone).
 
 ## Inicio de Windows (0.1.1)
 

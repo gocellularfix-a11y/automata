@@ -1,12 +1,15 @@
 import { spawn } from "node:child_process";
 import { findAgent, runProcess, killTree } from "./agents.mjs";
+import { findGitHub } from "./github.mjs";
 
-const roles = ["coder", "auditor"];
-const names = { coder: "Claude Code", auditor: "ChatGPT / Codex" };
+const aiRoles = ["coder", "auditor"];
+const roles = [...aiRoles, "github"];
+const names = { coder: "Claude Code", auditor: "ChatGPT / Codex", github: "GitHub CLI" };
 const stripAnsi = value => String(value).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 const hosts = {
   coder: ["claude.ai", "console.anthropic.com", "platform.claude.com"],
-  auditor: ["auth.openai.com", "chatgpt.com", "platform.openai.com"]
+  auditor: ["auth.openai.com", "chatgpt.com", "platform.openai.com"],
+  github: ["github.com"]
 };
 
 export function authUrl(role, value) {
@@ -18,6 +21,11 @@ export function authUrl(role, value) {
 
 export function interpretStatus(role, result) {
   const text = stripAnsi(result.stdout + "\n" + result.stderr);
+  if (role === "github") {
+    const connected = result.code === 0 && /logged in to github\.com account/i.test(text);
+    const disconnected = /not logged|not logged into|gh auth login/i.test(text);
+    return { connected, status: connected ? "connected" : disconnected ? "disconnected" : "error", message: connected ? "Sesión de GitHub disponible en esta PC." : disconnected ? "Conecta GitHub para clonar tus repositorios." : "No se pudo verificar GitHub. Revisa GitHub CLI, tu conexión y vuelve a comprobar." };
+  }
   if (role === "coder") {
     let data;
     try { data = JSON.parse(result.stdout); } catch {
@@ -38,7 +46,7 @@ export function interpretStatus(role, result) {
 
 // OAuth URLs and device codes live only in memory; never write CLI login output to disk.
 export class AuthManager {
-  constructor({ demo = false, find = findAgent, run = runProcess, spawnLogin = spawn, stop = killTree, timeoutMs = 10 * 60 * 1000 } = {}) {
+  constructor({ demo = false, find = role => role === "github" ? findGitHub() : findAgent(role), run = runProcess, spawnLogin = spawn, stop = killTree, timeoutMs = 10 * 60 * 1000 } = {}) {
     Object.assign(this, { demo, find, run, spawnLogin, stop, timeoutMs });
     this.providers = Object.fromEntries(roles.map(role => [role, { installed: false, connected: false, status: "unknown", message: "Pendiente de comprobar." }]));
     this.jobs = new Map();
@@ -73,7 +81,7 @@ export class AuthManager {
         return;
       }
       try {
-        const args = role === "coder" ? ["auth", "status", "--json"] : ["login", "status"];
+        const args = role === "coder" ? ["auth", "status", "--json"] : role === "github" ? ["auth", "status", "--active", "--hostname", "github.com"] : ["login", "status"];
         const result = await this.run(cli.command, [...cli.args, ...args], { timeoutMs: 20000, signal: controller.signal });
         if (!this.closed && !this.jobs.has(role)) this.providers[role] = { installed: true, ...interpretStatus(role, result) };
       } catch {
@@ -91,7 +99,7 @@ export class AuthManager {
     await Promise.all(roles.map(role => this.probe(role, force)));
     return this.snapshot({ local });
   }
-  async requireConnected(required = roles) {
+  async requireConnected(required = aiRoles) {
     if (this.demo) return;
     await Promise.all(required.map(role => this.probe(role, true)));
     const missing = required.filter(role => this.jobs.has(role) || !this.providers[role].connected);
@@ -107,11 +115,11 @@ export class AuthManager {
     if (this.jobs.has(role)) return this.snapshot({ local: true });
     const cli = this.find(role);
     if (!cli) throw new Error(`Instala ${names[role]} en esta PC antes de conectar.`);
-    const args = role === "coder" ? ["auth", "login", "--claudeai"] : ["login", ...method === "device" ? ["--device-auth"] : []];
+    const args = role === "coder" ? ["auth", "login", "--claudeai"] : role === "github" ? ["auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--skip-ssh-key"] : ["login", ...method === "device" ? ["--device-auth"] : []];
     const child = this.spawnLogin(cli.command, [...cli.args, ...args], {
       shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", NO_COLOR: "1" }
     });
-    const job = { child, method, url: null, deviceCode: null, acceptsCode: false, buffer: "", timer: null };
+    const job = { child, method, url: role === "github" ? "https://github.com/login/device" : null, deviceCode: null, acceptsCode: false, buffer: "", timer: null };
     this.jobs.set(role, job);
     this.providers[role] = { installed: true, connected: false, status: "pending", message: "Esperando autorización." };
     const consume = chunk => {
@@ -120,7 +128,7 @@ export class AuthManager {
         const valid = authUrl(role, match[0].replace(/[),.;]+$/, ""));
         if (valid) job.url = valid;
       }
-      if (role === "auditor" && method === "device") {
+      if (role === "github" || role === "auditor" && method === "device") {
         const match = job.buffer.match(/\b[A-Z0-9]{4,5}-[A-Z0-9]{4,5}\b/);
         if (match) job.deviceCode = match[0];
       }

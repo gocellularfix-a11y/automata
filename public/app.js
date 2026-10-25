@@ -32,6 +32,7 @@ function showDialog(selector) {
 }
 document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => b.closest("dialog").close()));
 document.querySelectorAll("dialog").forEach((d) => d.addEventListener("click", (e) => {
+  if (d.dataset.busy === "true") return;
   if (e.target === d) {
     const r = d.getBoundingClientRect();
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
@@ -196,6 +197,7 @@ function newProject() {
     return;
   }
   $("#projectError").textContent = "";
+  syncProjectSource();
   showDialog("#projectDialog");
 }
 $("#newProjectTop").addEventListener("click", newProject);
@@ -203,21 +205,41 @@ $("#projectForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const button = e.submitter;
   button.disabled = true;
+  const githubClone = e.target.elements.source.value === "github" && e.target.elements.repositoryAction.value === "clone";
+  $("#projectDialog").dataset.busy = "true";
+  $("#projectDialog").querySelectorAll("[data-close]").forEach(close => close.disabled = true);
+  $("#projectSubmitLabel").textContent = githubClone ? "Clonando repositorio…" : "Creando proyecto…";
   try {
     const p = await api("projects", { method: "POST", body: Object.fromEntries(new FormData(e.target)) });
     selected = p.id;
     localStorage.setItem("automata.project", selected);
     $("#projectDialog").close();
     e.target.reset();
+    syncProjectSource();
     state = await api("state");
     render();
-    toast("Proyecto creado. Tu equipo está listo.");
+    toast(p.source === "github" ? "Repositorio conectado. Los cambios se trabajan en tu PC." : "Proyecto local creado. Tu equipo está listo.");
   } catch (err) {
     $("#projectError").textContent = err.message;
   } finally {
     button.disabled = false;
+    $("#projectDialog").dataset.busy = "false";
+    $("#projectDialog").querySelectorAll("[data-close]").forEach(close => close.disabled = false);
+    syncProjectSource();
   }
 });
+function syncProjectSource() {
+  const form = $("#projectForm"), github = form.elements.source.value === "github", clone = form.elements.repositoryAction.value === "clone";
+  $("#githubProjectFields").hidden = !github;
+  form.elements.repository.disabled = !github;
+  form.elements.repository.required = github;
+  form.elements.repositoryAction.disabled = !github;
+  $("#projectSubmitLabel").textContent = github && clone ? "Clonar y crear proyecto" : "Crear proyecto";
+  $("#projectDirectoryHint").textContent = github ? clone ? "Selecciona una carpeta existente y vacía para descargar el repositorio." : "Selecciona la raíz de tu copia local. Se comprobará que coincida con el repositorio indicado." : "Claude trabajará aquí. Puedes usar una carpeta local sin Git.";
+}
+$("#projectForm").elements.source.forEach(input => input.addEventListener("change", syncProjectSource));
+$("#projectForm").elements.repositoryAction.addEventListener("change", syncProjectSource);
+$("#projectDialog").addEventListener("cancel", event => { if (event.target.dataset.busy === "true") event.preventDefault(); });
 $("#browseButton").addEventListener("click", async () => {
   if (window.automata?.chooseDirectory) {
     const directory = await window.automata.chooseDirectory();
@@ -373,10 +395,10 @@ $("#connectionForm").addEventListener("submit", async (e) => {
 const accountStateNames = { connected: "Conectado", disconnected: "Sin conectar", missing: "Falta instalar", error: "Revisar conexión", pending: "Esperando acceso", unknown: "Comprobando", demo: "Demostración" };
 function renderAccounts() {
   const providers = accounts?.providers ?? {};
-  const count = Object.values(providers).filter(provider => provider.connected).length;
+  const count = ["coder", "auditor"].filter(role => providers[role]?.connected).length;
   $("#accountCount").textContent = state.demo ? "DEMO" : accounts ? `${count}/2` : "—";
   $("#accountsButton").classList.toggle("accounts-ready", count === 2);
-  for (const role of ["coder", "auditor"]) {
+  for (const role of ["coder", "auditor", "github"]) {
     const provider = providers[role] ?? { status: "unknown", message: "Comprobando la sesión en esta PC…" };
     const card = $("#" + role + "Account"), button = card.querySelector("[data-login]");
     card.dataset.status = provider.status;
@@ -394,6 +416,7 @@ function renderAccounts() {
   $("#claudeCodeForm").hidden = !providers.coder?.flow?.acceptsCode;
   $("#deviceCodeSection").hidden = !providers.auditor?.flow?.deviceCode;
   $("#deviceCode").textContent = providers.auditor?.flow?.deviceCode ?? "";
+  $("#githubDeviceCode").textContent = providers.github?.flow?.deviceCode ?? "";
   $("#deviceLoginButton").disabled = !accounts?.canLogin || !providers.auditor?.installed || providers.auditor?.status === "pending" || providers.auditor?.connected || state.busy;
   $("#accountsContinue").disabled = !state.demo && count !== 2;
   $("#accountContext").textContent = state.demo ? "Esta sesión de demostración no utiliza tus cuentas ni consume créditos. Abre Automata sin --demo para conectar a los proveedores." : accounts && !accounts.canLogin ? "Conecta tus cuentas desde la aplicación de Windows. Android utiliza las sesiones de esa PC." : "Si ya iniciaste sesión, puedes usarla aquí. Conectar una cuenta no garantiza acceso a todos los modelos.";
@@ -458,7 +481,8 @@ $("#accountsDialog").addEventListener("close", () => {
   clearTimeout(authTimer);
   $("#claudeCodeForm").reset();
   $("#deviceCode").textContent = "";
-  for (const role of ["coder", "auditor"]) {
+  $("#githubDeviceCode").textContent = "";
+  for (const role of ["coder", "auditor", "github"]) {
     $("#" + role + "AuthLink").removeAttribute("href");
     if (accounts?.providers[role]) delete accounts.providers[role].flow;
   }

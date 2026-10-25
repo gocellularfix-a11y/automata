@@ -132,7 +132,8 @@ export class CliAgents {
     if (role === "auditor") {
       const schema = phase === "chat" ? null : path.join(directory, "review-schema.json");
       if (schema) fs.writeFileSync(schema, JSON.stringify(REVIEW_SCHEMA));
-      args = ["exec", "--sandbox", "read-only", "--model", settings.auditorModel, "--json", "--output-last-message", outputFile, "--cd", project.directory];
+      // The user selects a local project folder; Git is optional. Keep the auditor read-only.
+      args = ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "--model", settings.auditorModel, "--json", "--output-last-message", outputFile, "--cd", project.directory];
       if (schema) args.push("--output-schema", schema);
       if (settings.auditorEffort !== "default") args.push("-c", `model_reasoning_effort="${settings.auditorEffort}"`);
       args.push("-");
@@ -180,7 +181,13 @@ export class CliAgents {
   }
 }
 export async function gitEvidence(directory) {
-  const commands = [["status", "--short"], ["diff", "--stat"], ["diff", "--no-ext-diff", "--unified=3"], ["diff", "--cached", "--no-ext-diff", "--stat"]];
+  try {
+    const repository = await runProcess("git", ["rev-parse", "--is-inside-work-tree"], { cwd: directory, timeoutMs: 2e4 });
+    if (repository.code !== 0 || repository.stdout.trim() !== "true") return "Proyecto local sin evidencia de Git disponible. Inspecciona los archivos y las verificaciones directamente. No se requiere crear ni inicializar un repositorio.";
+  } catch {
+    return "Git no está disponible. Inspecciona los archivos y las verificaciones directamente; trabajar en una carpeta local es válido.";
+  }
+  const commands = [["status", "--short", "--", "."], ["diff", "--stat", "--", "."], ["diff", "--no-ext-diff", "--unified=3", "--", "."], ["diff", "--cached", "--no-ext-diff", "--stat", "--", "."]];
   const output = [];
   for (const args of commands) {
     try {

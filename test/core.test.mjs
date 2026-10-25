@@ -62,7 +62,7 @@ test("se interpretan eventos reales de ambas CLI sin mostrar razonamiento intern
 });
 test("los adaptadores ejecutan CLI por stdin, conservan modelos y leen sus reportes estructurados", async (t) => {
   const dir = fixture(t), stub = path.join(dir, "cli.mjs");
-  fs.writeFileSync(stub, `import fs from 'node:fs';let prompt='';for await(const c of process.stdin)prompt+=c;const args=process.argv.slice(2);fs.writeFileSync('invocation.json',JSON.stringify({args,prompt}));if(args[0]==='exec'){fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify(${JSON.stringify(review())}));console.log(JSON.stringify({type:'thread.started',thread_id:'audit-session'}));console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_tokens:5}}));}else{console.log(JSON.stringify({type:'result',result:'Reporte del codificador',is_error:false,session_id:'coder-session',usage:{input_tokens:9,output_tokens:3}}));}`);
+  fs.writeFileSync(stub, `import fs from 'node:fs';let prompt='';for await(const c of process.stdin)prompt+=c;const args=process.argv.slice(2);fs.writeFileSync('invocation.json',JSON.stringify({args,prompt}));if(args[0]==='exec'){if(!args.includes('--skip-git-repo-check')){console.error('Not inside a trusted directory and --skip-git-repo-check was not specified.');process.exit(1);}fs.writeFileSync(args[args.indexOf('--output-last-message')+1],args.includes('--output-schema')?JSON.stringify(${JSON.stringify(review())}):'Consulta local verificada.');console.log(JSON.stringify({type:'thread.started',thread_id:'audit-session'}));console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:10,output_tokens:5}}));}else{console.log(JSON.stringify({type:'result',result:'Reporte del codificador',is_error:false,session_id:'coder-session',usage:{input_tokens:9,output_tokens:3}}));}`);
   const before = { coder: process.env.AUTOMATA_CLAUDE, auditor: process.env.AUTOMATA_CODEX };
   process.env.AUTOMATA_CLAUDE = stub;
   process.env.AUTOMATA_CODEX = stub;
@@ -79,6 +79,9 @@ test("los adaptadores ejecutan CLI por stdin, conservan modelos y leen sus repor
   assert.equal(invocation.args[invocation.args.indexOf("--sandbox") + 1], "read-only");
   assert.ok(invocation.args.includes("gpt-6-astra"));
   assert.match(invocation.prompt, /\$\(nada\)/);
+  const chat = await agents.run({ role: "auditor", phase: "chat", prompt: "No necesitamos repositorio.", project, settings, directory: dir, emit: () => {} });
+  assert.equal(chat.text, "Consulta local verificada.");
+  assert.equal(fs.existsSync(path.join(dir, ".git")), false);
   const c = await agents.run({ role: "coder", phase: "code", prompt: "Una tarea", project, settings, directory: dir, emit: () => {
   } });
   assert.equal(c.text, "Reporte del codificador");

@@ -6,7 +6,7 @@ Aplicación para coordinar proyectos: el director convierte un objetivo en tarea
 
 Una interfaz compartida para Windows y Android: dos paneles en escritorio, pestañas en móvil y controles en la parte inferior.
 
-## Incluido en 0.2
+## Incluido en 0.3
 
 - Proyectos con carpeta, objetivo, criterios de aceptación, restricciones y comandos de verificación.
 - Tareas pequeñas, medianas o largas.
@@ -18,6 +18,7 @@ Una interfaz compartida para Windows y Android: dos paneles en escritorio, pesta
 - Conexión Android a la PC mediante código de acceso.
 - Demostración aislada que no llama a proveedores ni consume créditos.
 - Ventana de cuentas al abrir: conecta Claude y ChatGPT/Codex mediante sus herramientas oficiales, detecta sesiones existentes y comprueba ambas antes de trabajar.
+- Proyectos **Local** sin Git obligatorio y **GitHub** para clonar o usar una copia local existente. Conexión opcional de GitHub desde Cuentas.
 
 ## Abrir en Windows
 
@@ -55,6 +56,16 @@ Los enlaces OAuth y códigos solo se mantienen en memoria mientras dure el acces
 
 La PC conserva los archivos, ejecuta los agentes y debe permanecer encendida. El acceso fuera de la red local requiere una conexión privada/HTTPS; Automata no publica tu PC en Internet.
 
+## Local o GitHub
+
+En **Nuevo proyecto**, elige:
+
+- **Local**: selecciona una carpeta existente y define el objetivo. No necesitas Git, GitHub ni un repositorio inicializado. La planificación, auditoría y consultas de Codex usan `--skip-git-repo-check` y mantienen `--sandbox read-only`. No se ejecuta `git init`.
+- **GitHub → Clonar en una carpeta vacía**: instala Git y GitHub CLI, conecta GitHub en **Cuentas** e introduce `usuario/repositorio` o una URL HTTPS de GitHub. Elige una carpeta existente y vacía. Automata usa `gh repo clone`; los archivos se trabajan en tu PC.
+- **GitHub → Usar una copia local existente**: selecciona la raíz de tu copia e indica el repositorio. Automata comprueba que `origin` coincida; no vuelve a clonar ni cambia el remoto. Esta opción no necesita un nuevo login de GitHub.
+
+La conexión opcional usa `gh auth login --hostname github.com --git-protocol https --web --skip-ssh-key` y la CLI guarda la sesión. No se crean repositorios remotos ni se hacen commits, push o publicaciones automáticamente. La cuenta de GitHub no es necesaria para trabajar en Local. Para continuar un trabajo que falló por el requisito de Git, cierra la versión anterior, abre el EXE actualizado y pulsa **Continuar**.
+
 ## Verificar y compilar
 
 ```powershell
@@ -62,6 +73,7 @@ npm test
 npm run smoke
 node scripts/smoke-desktop.mjs
 node scripts/smoke-auth.mjs
+node scripts/smoke-github.mjs
 node scripts/smoke-recovery.mjs --live
 npm run build:windows
 npm run build:android

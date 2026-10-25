@@ -36,6 +36,17 @@ export function validateSettings(value = {}) {
   }
   return Object.fromEntries(Object.keys(DEFAULT_SETTINGS).map((k) => [k, s[k]]));
 }
+export function githubRepository(value) {
+  const text = String(value ?? "").trim();
+  const shorthand = /^([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9_.-]{1,100})$/.exec(text);
+  let url;
+  try { url = new URL(shorthand ? `https://github.com/${text}` : text); } catch { throw new Error("Usa un repositorio GitHub como usuario/repo o https://github.com/usuario/repo."); }
+  const parts = /^\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9_.-]{1,100})\/?$/.exec(url.pathname);
+  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.port || url.username || url.password || url.search || url.hash || !parts) throw new Error("Usa una URL HTTPS de GitHub sin credenciales, parámetros ni rutas adicionales.");
+  const repository = parts[2].replace(/\.git$/, "");
+  if (!repository || /^\.+$/.test(repository)) throw new Error("Nombre de repositorio no válido.");
+  return `https://github.com/${parts[1]}/${repository}`;
+}
 export function validateProject(input, { checkDirectory = true } = {}) {
   const text = (k, max) => {
     const t = String(input[k] ?? "").trim();
@@ -50,7 +61,9 @@ export function validateProject(input, { checkDirectory = true } = {}) {
   const criteria = lines(input.criteria), checks = lines(input.checks);
   if (!criteria.length || criteria.length > 30 || criteria.some((c) => c.length > 2e3)) throw new Error("Define entre 1 y 30 criterios de aceptación.");
   if (checks.length > 12 || checks.some((c) => c.length > 2e3)) throw new Error("Usa hasta 12 comandos de verificación.");
-  return { name, directory: checkDirectory ? fs.realpathSync(directory) : directory, objective, criteria, checks, constraints: String(input.constraints ?? "").trim().slice(0, 12e3) };
+  const source = input.source ?? "local";
+  if (!["local", "github"].includes(source)) throw new Error("Elige Local o GitHub para el proyecto.");
+  return { name, directory: checkDirectory ? fs.realpathSync(directory) : directory, objective, criteria, checks, constraints: String(input.constraints ?? "").trim().slice(0, 12e3), source, repository: source === "github" ? githubRepository(input.repository) : null };
 }
 export const REVIEW_SCHEMA = {
   type: "object",
