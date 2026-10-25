@@ -35,7 +35,7 @@ if (!page || !browser) throw new Error('Native startup did not recover. Read ' +
 try {
   const info = await page.evaluate(async () => {
     const c = await window.automata.connection();
-    return { node: typeof window.require, compatibilityMode: c.compatibilityMode, title: document.title };
+    return { node: typeof window.require, compatibilityMode: c.compatibilityMode, title: document.title, version: (await window.automata.request('capabilities')).version };
   });
   if (info.node !== 'undefined') throw new Error('Node is exposed to the renderer.');
   const security = await page.evaluate(async () => {
@@ -57,11 +57,18 @@ try {
     await page.click('#accountsDialog [data-close]');
   }
   await page.screenshot({ path: path.join(output, 'windows.png'), timeout: 10000 });
+  let nativeChat;
   if (!live) {
     await page.click('#startButton');
     await page.waitForFunction(() => document.querySelector('#runState').textContent === 'Completado', null, { timeout: 25000 });
+    await page.fill('#chatText', 'Consulta de prueba del estado de respuesta.');
+    await page.click('#chatForm button[type=submit]');
+    await page.waitForFunction(() => document.querySelector('#toast').textContent.includes('está respondiendo'));
+    const notice = await page.locator('#toast').textContent();
+    await page.waitForFunction(() => document.querySelector('.chat-answer')?.textContent.includes('demostración'));
+    nativeChat = { notice, answered: true, demo: true };
   }
-  const result = { ok: true, automaticRecovery: info.compatibilityMode, info, security, live, accounts, output };
+  const result = { ok: true, automaticRecovery: info.compatibilityMode, info, security, live, accounts, nativeChat, output };
   fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result, null, 2));
 } finally {

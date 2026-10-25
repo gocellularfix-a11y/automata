@@ -19,6 +19,11 @@ export class Coordinator extends EventEmitter {
     this.runs = store.read("runs.json", []);
     this.events = store.read("events.json", []);
     this.messages = store.read("messages.json", []);
+    for (const message of this.messages) if (message.status === "processing") {
+      message.status = "interrupted";
+      message.error = "La consulta se interrumpió al cerrar Automata. Puedes enviarla de nuevo.";
+      delete message.activeRole;
+    }
     this.busy = false;
     this.controller = null;
     this.chatController = null;
@@ -265,6 +270,10 @@ ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige ev
     try {
       while (this.chatQueue.length) {
         const { message, project } = this.chatQueue.shift();
+        message.status = "processing";
+        message.startedAt = new Date().toISOString();
+        this.persist();
+        this.notify();
         if (message.kind === "instruction") {
           const run = this.active;
           if (!run || run.projectId !== project.id || ["complete", "stopped"].includes(run.status)) {
@@ -283,6 +292,9 @@ ${message.text}`;
           const roles = message.target === "both" ? ["coder", "auditor"] : [message.target];
           message.answers = [];
           for (const role of roles) {
+            message.activeRole = role;
+            this.persist();
+            this.notify();
             try {
               const dir = path.join(this.store.directory, "chats", message.id, role);
               fs.mkdirSync(dir, { recursive: true });
@@ -291,9 +303,13 @@ ${message.text}`;
             } catch (e) {
               message.answers.push({ role, text: e.message, error: true });
             }
+            delete message.activeRole;
+            this.persist();
+            this.notify();
           }
           message.status = message.answers.some((a) => a.error) ? "error" : "answered";
         }
+        message.finishedAt = new Date().toISOString();
         this.persist();
         this.notify();
       }

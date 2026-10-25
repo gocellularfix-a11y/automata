@@ -3,11 +3,30 @@ import path from "node:path";
 import os from "node:os";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createRequire } from "node:module";
 import { MODES, REVIEW_SCHEMA } from "./config.mjs";
+export function findCodexNative(packageRoot, { platform = process.platform, arch = process.arch } = {}) {
+  if (platform !== "win32" || !["x64", "arm64"].includes(arch)) return null;
+  const target = arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
+  const roots = [path.join(packageRoot, "vendor")];
+  try {
+    const resolve = createRequire(path.join(packageRoot, "package.json"));
+    roots.unshift(path.join(path.dirname(resolve.resolve(`@openai/codex-win32-${arch}/package.json`)), "vendor"));
+  } catch {}
+  for (const root of roots) for (const folder of ["bin", "codex"]) {
+    const binary = path.join(root, target, folder, "codex.exe");
+    if (fs.existsSync(binary)) return { command: binary, args: [], env: { CODEX_MANAGED_PACKAGE_ROOT: fs.realpathSync(packageRoot), CODEX_MANAGED_BY_NPM: "1" } };
+  }
+  return null;
+}
 export function findAgent(role) {
   const env = role === "coder" ? process.env.AUTOMATA_CLAUDE : process.env.AUTOMATA_CODEX;
   if (env && fs.existsSync(env)) return /\.[cm]?js$/.test(env) ? { command: process.execPath, args: [env] } : { command: env, args: [] };
   const npm = process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "node_modules") : null;
+  if (role === "auditor" && npm) {
+    const native = findCodexNative(path.join(npm, "@openai", "codex"));
+    if (native) return native;
+  }
   const candidates = role === "coder" ? [npm && path.join(npm, "@anthropic-ai", "claude-code", "bin", "claude.exe"), path.join(os.homedir(), ".local", "bin", process.platform === "win32" ? "claude.exe" : "claude")] : [npm && path.join(npm, "@openai", "codex", "bin", "codex.js")];
   for (const file of candidates.filter(Boolean)) if (fs.existsSync(file)) return file.endsWith(".js") ? { command: process.execPath, args: [file] } : { command: file, args: [] };
   if (process.platform !== "win32") return { command: role === "coder" ? "claude" : "codex", args: [] };
@@ -146,6 +165,7 @@ export class CliAgents {
       cwd: project.directory,
       input: prompt,
       signal,
+      env: executable.env,
       timeoutMs: settings.timeoutMinutes * 6e4,
       onLine: (line, stream) => {
         if (stream === "stderr") {

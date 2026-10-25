@@ -1,0 +1,53 @@
+import fs from "node:fs";
+import path from "node:path";
+import { chromium } from "playwright-core";
+import { createServer } from "../server/index.mjs";
+import { AuthManager } from "../server/auth.mjs";
+
+const output = path.resolve("artifacts", "chat-" + Date.now());
+fs.mkdirSync(output, { recursive: true });
+const auth = new AuthManager({ find: role => ({ command: role, args: [] }), run: async role => ({ code: 0, stdout: role === "coder" ? '{"loggedIn":true,"authMethod":"claude.ai"}' : "", stderr: role === "auditor" ? "Logged in using ChatGPT" : role === "github" ? "Logged in to github.com account test-user" : "" }) });
+const replies = [];
+const app = await createServer({ port: 0, dataDir: path.join(output, "data"), auth, agents: { run({ signal, role }) {
+  return new Promise((resolve, reject) => { replies.push({ resolve, reject, role }); signal.addEventListener("abort", () => reject(new Error("Consulta detenida")), { once: true }); });
+} } });
+app.coordinator.addProject({ name: "Consulta local", directory: output, objective: "Comprobar el estado del chat.", criteria: ["Las respuestas se muestran con su estado real."], checks: [] });
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "C:/Program Files/Google/Chrome/Application/chrome.exe", headless: true });
+const page = await browser.newPage({ viewport: { width: 1480, height: 1020 }, reducedMotion: "reduce" });
+const checks = [], errors = [];
+page.on("pageerror", error => errors.push(error.message));
+const check = (name, ok) => { checks.push({ name, ok: !!ok }); if (!ok) throw Error(name); };
+try {
+  await page.goto(app.origin + "/#token=" + app.token);
+  await page.waitForSelector("#accountsDialog[open]");
+  await page.click("#accountsDialog [data-close]");
+  await page.fill("#chatText", "Primera consulta al director");
+  await page.click("#chatForm button[type=submit]");
+  await page.waitForFunction(() => document.querySelector("#auditorStatus").textContent.includes("Respondiendo"));
+  check("el primer mensaje muestra respondiendo en vez de cola", (await page.locator("#toast").textContent()).includes("está respondiendo") && (await page.locator("#auditorFeed .pending-msg").textContent()).includes("está respondiendo"));
+  await page.fill("#chatText", "Segunda consulta al director");
+  await page.click("#chatForm button[type=submit]");
+  await page.waitForFunction(() => document.querySelector("#toast").textContent.includes("Mensaje en cola"));
+  check("solo el segundo mensaje espera y no se inicia otra llamada", replies.length === 1 && app.coordinator.messages[1].status === "queued");
+  await page.screenshot({ path: path.join(output, "01-answering-and-queue.png") });
+  replies[0].resolve({ text: "Respuesta a la primera consulta." });
+  await page.waitForFunction(() => [...document.querySelectorAll(".chat-answer")].some(el => el.textContent === "Respuesta a la primera consulta."));
+  check("la siguiente consulta pasa a responder al terminar la primera", replies.length === 2 && app.coordinator.messages[1].status === "processing");
+  replies[1].reject(new Error("Error de prueba: conexión no disponible."));
+  await page.waitForFunction(() => [...document.querySelectorAll(".chat-answer")].some(el => el.textContent.includes("Error de prueba")));
+  check("el error se muestra en el panel y libera el agente", !app.coordinator.busy && !await page.locator("#auditorFeed .pending-msg").count());
+  await page.selectOption("#chatTarget", "both");
+  await page.fill("#chatText", "Consulta a ambos");
+  await page.click("#chatForm button[type=submit]");
+  await page.waitForFunction(() => document.querySelector("#coderStatus").textContent.includes("Respondiendo"));
+  replies[2].resolve({ text: "Primera mirada de Claude." });
+  await page.waitForFunction(() => [...document.querySelectorAll("#coderFeed .chat-answer")].some(el => el.textContent === "Primera mirada de Claude.") && document.querySelector("#auditorStatus").textContent.includes("Respondiendo"));
+  check("Claude se ve antes de que termine Codex en consulta a ambos", replies[3].role === "auditor");
+  await page.click("#stopButton");
+  await page.waitForFunction(() => [...document.querySelectorAll("#auditorFeed .chat-answer")].some(el => el.textContent === "Consulta detenida"));
+  check("detener una consulta elimina el estado respondiendo", !(await page.locator("#auditorStatus").textContent()).includes("Respondiendo"));
+  await page.screenshot({ path: path.join(output, "02-responses-and-errors.png") });
+  check("sin errores de JavaScript", errors.length === 0);
+  fs.writeFileSync(path.join(output, "report.json"), JSON.stringify({ ok: true, simulatedProviders: true, checks, errors }, null, 2));
+  console.log(JSON.stringify({ ok: true, checks: checks.length, simulatedProviders: true, output }, null, 2));
+} finally { await browser.close(); await app.close(); }

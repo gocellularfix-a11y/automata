@@ -1,13 +1,16 @@
-# Validación de Automata 0.3.0
+# Validación de Automata 0.3.1
 
 Fecha: 2026-10-25. Primera implementación; no equivale a una certificación para trabajo desatendido.
 
 | Comprobación | Resultado |
 | --- | --- |
-| `node --test test/*.test.mjs` | **30 aprobadas, 0 fallidas** |
+| `node --test test/*.test.mjs` | **34 aprobadas, 0 fallidas** |
 | `node scripts/smoke.mjs` | **13 comprobaciones aprobadas** en Chrome de Windows |
 | `node scripts/smoke-auth.mjs` | **14 comprobaciones aprobadas**, login de AI/GitHub con procesos simulados y navegador real |
 | `node scripts/smoke-github.mjs` | **10 comprobaciones aprobadas**, GitHub simulado con clonación real de un repositorio Git local de prueba |
+| `node scripts/smoke-chat.mjs` | **7 comprobaciones aprobadas**, estados del chat con proveedores simulados y navegador real |
+| `scripts/smoke-console.ps1 -CompareWrapper` | **Reproducido y corregido**: 12 consolas visibles en 12 llamadas `--version` con el lanzador anterior; 0 en 12 llamadas con el ejecutable nativo |
+| `node scripts/smoke-recovery.mjs` (0.3.1) | **Aprobado**: EXE actualizado, recuperación Windows, ciclo de demo completo y consulta por IPC con aviso «Codex está respondiendo…» y respuesta recibida |
 | `node scripts/smoke-recovery.mjs --live` | **Aprobado**: EXE 0.3.0 abre la ventana de cuentas por IPC, incluye GitHub opcional, consulta las CLI instaladas y mantiene la recuperación de Windows |
 | APK Android | Compilado y firma v2/v3 verificada |
 | Instalación y ejecución en Samsung SM-S938B (0.1.0) | **4 comprobaciones aprobadas**, conexión USB al coordinador; paquetes posteriores recompilados y firmados, sin repetir todavía la prueba física |
@@ -64,6 +67,12 @@ La regresión del adaptador invoca un subprocess CLI de prueba que reproduce el 
 Los tests de GitHub cubren URLs válidas e inyección, login opcional, conservación de carpetas ocupadas, coincidencia de `origin`, fallos sin credenciales en el mensaje, y proyectos Local sin autenticación de GitHub. Las pruebas de interfaz hacen una clonación Git real entre directorios de prueba a través de un adaptador GitHub simulado; comprueban crear desde un repo, rechazar sobrescritura, abrir una copia existente, rechazar remoto diferente, volver a Local sin inicializar Git, y ausencia de desbordamiento móvil.
 
 No se ha completado un nuevo login de GitHub ni una clonación de red mediante la aplicación en este entorno. La conexión y los permisos de la cuenta deben probarse desde el escritorio normal del usuario.
+
+## Consola y chat 0.3.1
+
+La prueba Windows enumera únicamente ventanas visibles de clase `ConsoleWindowClass` en el escritorio de pruebas. No lee títulos ni contenido de otras aplicaciones. El ejecutable real Codex CLI 0.164.0 se consultó con `--version`, sin autenticación ni inferencia, usando el EXE GUI de Automata como proceso padre. La comparación reproduce la consola del lanzador npm y confirma su ausencia al ejecutar directamente el binario con la ventana oculta.
+
+Las regresiones de chat cubren primer mensaje inmediato, segundo en cola, paso de cola a respuesta, respuesta parcial al consultar a ambos, errores en el panel, detener consultas y recuperación de una consulta interrumpida. Las pruebas de UI usan agentes simulados; no equivalen a una respuesta de un modelo real.
 
 ## Corrección Windows 0.1.1
 

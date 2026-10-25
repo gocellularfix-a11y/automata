@@ -82,7 +82,9 @@ function entry(e) {
 }
 function chatEntry(m, role) {
   const a = m.answers?.find((a2) => a2.role === role);
-  return `<article class="activity-entry user"><div class="activity-meta">TÚ · ${m.kind === "instruction" ? "INSTRUCCIÓN" : "CONSULTA"}<time>${new Date(m.at).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })}</time></div><p>${esc(m.text)}</p>${a ? `<p class="chat-answer">${esc(a.text)}</p>` : m.answer ? `<p class="chat-answer">${esc(m.answer)}</p>` : m.error ? `<p class="chat-answer">${esc(m.error)}</p>` : `<p class="chat-answer pending-msg">En cola · se entrega al terminar la operación actual.</p>`}</article>`;
+  const name = role === "coder" ? "Claude" : "Codex";
+  const pending = m.status === "processing" ? m.activeRole === role ? `${name} está respondiendo…` : `Esperando el turno de ${name}…` : m.status === "interrupted" ? "Consulta interrumpida. Puedes enviarla de nuevo." : state.busy ? "En cola · el equipo termina una operación en curso." : "Consulta pendiente · se retoma al continuar el trabajo o enviar otra consulta.";
+  return `<article class="activity-entry user" data-message-id="${esc(m.id)}"><div class="activity-meta">TÚ · ${m.kind === "instruction" ? "INSTRUCCIÓN" : "CONSULTA"}<time>${new Date(m.at).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })}</time></div><p>${esc(m.text)}</p>${a ? `<p class="chat-answer${a.error ? " form-error" : ""}">${esc(a.text)}</p>` : m.answer ? `<p class="chat-answer">${esc(m.answer)}</p>` : m.error ? `<p class="chat-answer form-error">${esc(m.error)}</p>` : `<p class="chat-answer pending-msg">${esc(pending)}</p>`}</article>`;
 }
 function renderFeed(role) {
   const el = $("#" + role + "Feed"), atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 55;
@@ -107,8 +109,9 @@ function render() {
   $("#pauseButton").disabled = !active || r.status === "pausing";
   $("#stopButton").disabled = !state.busy && (!r || !["running", "pausing", "paused", "interrupted", "error", "blocked", "limit"].includes(r.status));
   for (const role of ["coder", "auditor"]) {
-    const working = active && (role === "coder" ? r.stage === "code" : ["plan", "review"].includes(r.stage));
-    $("#" + role + "Status").innerHTML = `<i></i>${working ? "Trabajando" : r?.status === "complete" ? "Completado" : "En espera"}`;
+    const replying = state.messages.some(message => message.projectId === selected && message.status === "processing" && message.activeRole === role);
+    const working = replying || active && (role === "coder" ? r.stage === "code" : ["plan", "review"].includes(r.stage));
+    $("#" + role + "Status").innerHTML = `<i></i>${replying ? "Respondiendo" : working ? "Trabajando" : r?.status === "complete" ? "Completado" : "En espera"}`;
     $("#" + role + "Status").classList.toggle("active", working);
     $("#" + role + "ModelLabel").textContent = modelName(role, (r && ["running", "pausing", "paused"].includes(r.status) ? r.settings : state.settings)[role + "Model"]);
   }
@@ -116,7 +119,8 @@ function render() {
   document.querySelectorAll(".workflow-line>span").forEach((el, i) => el.classList.toggle("current", i === (stages[r?.stage] ?? 0)));
   $("#roundCount").textContent = r ? `RONDA ${String(r.round).padStart(2, "0")} / ${r.settings.maxRounds}` : "RONDA —";
   $("#tokenCount").textContent = r?.tokens ? `TOKENS ${Intl.NumberFormat("es", { notation: "compact" }).format(r.tokens)}` : "TOKENS —";
-  $("#bottomStatus").textContent = state.demo ? "Demostración local · no llama a las AI ni consume créditos." : r?.error ?? (active ? "Tu equipo está trabajando. Puedes dejarle un mensaje." : r?.status === "complete" ? "Objetivo completado. Revisa la evidencia en el panel del auditor." : "Tu siguiente proyecto empieza aquí.");
+  const replying = state.messages.find(message => message.projectId === selected && message.status === "processing");
+  $("#bottomStatus").textContent = state.demo ? "Demostración local · no llama a las AI ni consume créditos." : replying ? `${replying.activeRole === "coder" ? "Claude" : "Codex"} está respondiendo a tu consulta…` : r?.error ?? (active ? "Tu equipo está trabajando. Puedes dejarle un mensaje." : r?.status === "complete" ? "Objetivo completado. Revisa la evidencia en el panel del auditor." : "Tu siguiente proyecto empieza aquí.");
   renderFeed("coder");
   renderFeed("auditor");
 }
@@ -177,6 +181,7 @@ async function listen() {
 async function connect() {
   try {
     [state, capabilities] = await Promise.all([api("state"), api("capabilities")]);
+    $(".version").textContent = connection?.compatibilityMode ? `WINDOWS / ${capabilities.version} · COMPATIBILIDAD` : `WORKSPACE / ${capabilities.version}`;
     syncSettings();
     render();
     connected(true, "Conectado a tu PC");
@@ -335,10 +340,10 @@ $("#chatForm").addEventListener("submit", async (e) => {
   try {
     if (!project()) return toast("Selecciona un proyecto para conversar.");
     if ($("#chatKind").value === "question" && !await ensureAccounts($("#chatTarget").value === "both" ? ["coder", "auditor"] : [$("#chatTarget").value])) return;
-    await api("chat", { method: "POST", body: { projectId: selected, target: $("#chatTarget").value, kind: $("#chatKind").value, text: $("#chatText").value } });
+    const message = await api("chat", { method: "POST", body: { projectId: selected, target: $("#chatTarget").value, kind: $("#chatKind").value, text: $("#chatText").value } });
     $("#chatText").value = "";
     $("#chatText").style.height = "auto";
-    toast(state.busy ? "Mensaje en cola. Se entregará en un punto seguro." : "Mensaje enviado.");
+    toast(message.status === "queued" ? "Mensaje en cola. El equipo termina una operación en curso." : message.status === "processing" ? `${message.activeRole === "coder" ? "Claude" : "Codex"} está respondiendo…` : message.status === "delivered" ? "Instrucción entregada al director." : message.status === "error" ? "No se pudo completar el mensaje. Revisa el detalle en el panel." : "Mensaje enviado.");
   } catch (err) {
     if (/en Cuentas antes de continuar/.test(err.message)) void openAccounts();
     toast(err.message);

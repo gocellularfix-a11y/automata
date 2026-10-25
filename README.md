@@ -74,6 +74,8 @@ npm run smoke
 node scripts/smoke-desktop.mjs
 node scripts/smoke-auth.mjs
 node scripts/smoke-github.mjs
+node scripts/smoke-chat.mjs
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-console.ps1 -CompareWrapper
 node scripts/smoke-recovery.mjs --live
 npm run build:windows
 npm run build:android
@@ -96,5 +98,7 @@ El escritorio guarda proyectos y reportes en su carpeta de datos de usuario. El 
 El auditor revisa en modo de solo lectura. El codificador conserva los permisos de Claude Code; Automata no los desactiva. Los comandos de verificación son los que defines al crear el proyecto. Commit, push y despliegue están fuera de las tareas automáticas.
 
 La aprobación necesita evidencia para todos los criterios y verificaciones aprobadas en la ronda actual. Sigue siendo una revisión de AI: conserva las comprobaciones apropiadas para tu proyecto.
+
+La versión 0.3.1 corrige la consola negra que podía aparecer al consultar a Codex en Windows: ejecuta directamente el binario instalado de Codex con su ventana oculta, sin pasar por el lanzador npm que abría otra consola. El chat distingue consulta en cola, respondiendo, respuesta, error e interrupción. El aviso de cola solo se muestra cuando el mensaje está esperando; al consultar a ambos agentes, cada respuesta aparece en cuanto termina su turno.
 
 Arquitectura y fuentes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Estado de validación: [docs/VALIDATION.md](docs/VALIDATION.md).

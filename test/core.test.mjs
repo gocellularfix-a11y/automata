@@ -6,7 +6,7 @@ import os from "node:os";
 import { validateReview, validateSettings, validateProject } from "../server/config.mjs";
 import { Store } from "../server/store.mjs";
 import { Coordinator } from "../server/coordinator.mjs";
-import { decodeEvent, runProcess, CliAgents, runChecks } from "../server/agents.mjs";
+import { decodeEvent, runProcess, CliAgents, runChecks, findCodexNative } from "../server/agents.mjs";
 import { createServer } from "../server/index.mjs";
 const temporaryDirectories = [];
 function fixture(t) {
@@ -233,4 +233,79 @@ test("las verificaciones conservan caracteres UTF-8 al ejecutarse desde PowerShe
   const results = await runChecks({ directory: dir, checks: ["node -e \"console.log('corazón')\""] }, dir, undefined, () => {});
   assert.equal(results[0].passed, true);
   assert.match(results[0].output, /corazón/);
+});
+
+test("el chat ocioso empieza a responder y solo el siguiente mensaje espera en cola", async t => {
+  const dir = fixture(t), replies = [];
+  const c = new Coordinator(new Store(path.join(dir, "data")), { agents: { run({ signal }) {
+    return new Promise((resolve, reject) => { replies.push(resolve); signal.addEventListener("abort", () => reject(new Error("Consulta detenida")), { once: true }); });
+  } } });
+  t.after(() => c.close());
+  const p = c.addProject(projectInput(dir));
+  const first = await c.sendChat({ projectId: p.id, target: "auditor", text: "¿Cómo va?" });
+  assert.equal(first.status, "processing");
+  assert.equal(first.activeRole, "auditor");
+  const second = await c.sendChat({ projectId: p.id, target: "coder", text: "Revisa el saludo." });
+  assert.equal(second.status, "queued");
+  assert.equal(replies.length, 1);
+  replies[0]({ text: "Primera respuesta" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(first.status, "answered");
+  assert.equal(second.status, "processing");
+  assert.equal(second.activeRole, "coder");
+  replies[1]({ text: "Segunda respuesta" });
+  await c.chatPending;
+  assert.equal(second.status, "answered");
+  assert.equal(c.busy, false);
+});
+
+test("consultar a ambos publica la primera respuesta sin esperar la segunda y detener limpia el estado", async t => {
+  const dir = fixture(t), replies = [];
+  const c = new Coordinator(new Store(path.join(dir, "data")), { agents: { run({ signal }) {
+    return new Promise((resolve, reject) => { replies.push(resolve); signal.addEventListener("abort", () => reject(new Error("Consulta detenida")), { once: true }); });
+  } } });
+  t.after(() => c.close());
+  const p = c.addProject(projectInput(dir));
+  const message = await c.sendChat({ projectId: p.id, target: "both", text: "¿Qué falta?" });
+  replies[0]({ text: "Claude: primer resultado" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(message.answers[0].text, "Claude: primer resultado");
+  assert.equal(message.status, "processing");
+  assert.equal(message.activeRole, "auditor");
+  c.control("stop");
+  await c.chatPending;
+  assert.equal(message.status, "error");
+  assert.equal(message.answers[1].error, true);
+  assert.equal(message.activeRole, undefined);
+  assert.equal(c.busy, false);
+});
+
+test("una consulta en proceso al cerrar se muestra interrumpida sin reenviarla automáticamente", t => {
+  const dir = fixture(t), store = new Store(dir);
+  store.write("messages.json", [{ id: "old-chat", projectId: "p", target: "auditor", kind: "question", text: "Estado", status: "processing", activeRole: "auditor" }]);
+  const c = new Coordinator(store);
+  assert.equal(c.messages[0].status, "interrupted");
+  assert.match(c.messages[0].error, /interrumpió/);
+  assert.equal(c.messages[0].activeRole, undefined);
+  assert.equal(c.chatQueue.length, 0);
+});
+
+test("Windows resuelve el ejecutable nativo de Codex instalado por npm sin un lanzador intermedio", t => {
+  const root = fixture(t), pkg = path.join(root, "node_modules", "@openai", "codex-win32-x64");
+  const native = path.join(pkg, "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe");
+  fs.mkdirSync(path.dirname(native), { recursive: true });
+  fs.writeFileSync(path.join(root, "package.json"), '{"name":"@openai/codex"}');
+  fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@openai/codex-win32-x64"}');
+  fs.writeFileSync(native, "fixture-not-executed");
+  const found = findCodexNative(root, { platform: "win32", arch: "x64" });
+  assert.equal(found.command, native);
+  assert.deepEqual(found.args, []);
+  assert.equal(found.env.CODEX_MANAGED_PACKAGE_ROOT, fs.realpathSync(root));
+  assert.equal(findCodexNative(root, { platform: "linux", arch: "x64" }), null);
+  fs.unlinkSync(native);
+  assert.equal(findCodexNative(root, { platform: "win32", arch: "x64" }), null);
+  const legacy = path.join(root, "vendor", "x86_64-pc-windows-msvc", "codex", "codex.exe");
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, "fixture-not-executed");
+  assert.equal(findCodexNative(root, { platform: "win32", arch: "x64" }).command, legacy);
 });
