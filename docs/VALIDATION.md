@@ -1,4 +1,4 @@
-# Validación de Automata 0.1
+# Validación de Automata 0.1.1
 
 Fecha: 2026-10-25. Primera implementación; no equivale a una certificación para trabajo desatendido.
 
@@ -9,7 +9,7 @@ Fecha: 2026-10-25. Primera implementación; no equivale a una certificación par
 | APK Android | Compilado y firma v2/v3 verificada |
 | Instalación y ejecución en Samsung SM-S938B | **4 comprobaciones aprobadas**, conexión USB al coordinador |
 | Paquete Windows portable | Generado en `dist/Automata-Windows` |
-| Renderer nativo Electron | **No validado** en este entorno: subprocesos GPU/renderer terminan con errores de acceso/carga |
+| Renderer nativo Electron (0.1.1) | **Aprobado**: EXE empaquetado, ventana visible, puente IPC, Node deshabilitado en la página y ciclo de demostración completo en modo de compatibilidad |
 | Ventana Chrome lanzada directamente | **No validada** aquí: el proceso GPU falla; la misma interfaz funciona en Chrome bajo Playwright |
 | Llamadas a Claude y Codex reales | **No ejecutadas** en esta sesión; no se consumieron créditos |
 | Cuenta/modelos disponibles | No verificados contra los proveedores |
@@ -42,6 +42,10 @@ La prueba encontró y corrigió un defecto real de empaquetado de AAPT2 en Windo
 
 ## Siguiente validación necesaria
 
-Abrir la aplicación de Windows desde un PowerShell normal, fuera de este entorno restringido, y completar una tarea pequeña con las dos CLI autenticadas. Revisar la salida real de permisos, modelos y uso antes de confiarle proyectos mayores. No se han utilizado archivos de Blueprint para simular una ejecución real.
+Completar una tarea pequeña con las dos CLI autenticadas. Revisar la salida real de permisos, modelos y uso antes de confiarle proyectos mayores. No se han utilizado archivos de Blueprint para simular una ejecución real.
+
+## Corrección Windows 0.1.1
+
+El paquete 0.1.0 no había pasado la prueba nativa; la interfaz de navegador no probaba el ejecutable. Se reprodujo el fallo y se identificó `launch-failed (49)`: Windows no podía crear el token restringido del renderer. Se implementó recuperación de compatibilidad para ese código, protocolo local para los recursos, diagnósticos persistentes y cierre fiable. La prueba nativa de 0.1.1 abre el EXE empaquetado en una ventana visible, comprueba que `window.require` no existe y completa el ciclo por IPC. Las capturas reales están en `artifacts/desktop-*/windows.png` y `artifacts/recovery-*/windows.png`.
 
 Los reportes JSON y capturas están en `artifacts/` (excluido de Git). Las credenciales y los códigos de conexión tampoco se publican.

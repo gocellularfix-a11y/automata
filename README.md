@@ -35,7 +35,9 @@ Para probar un ciclo con un proyecto aislado:
 
 También se puede abrir `dist/Automata-Windows/Automata.exe` después de generar el paquete portable. No muevas solo el EXE: conserva su carpeta completa.
 
-Si Electron no puede abrir su renderer en tu entorno, usa `Automata-Chrome.cmd` del paquete, o `.\Start-Automata.ps1 -Mode Browser`. Abre la misma interfaz en una ventana de aplicación de Chrome. Puedes agregar `-Demo` y `-Lan` al arranque PowerShell.
+Abre **Automata.exe**, sin abrir un navegador. La versión 0.1.1 corrige la pantalla blanca de Windows: carga recursos con un protocolo local propio y recupera el error de inicio de proceso 49 con un modo de compatibilidad. El lanzador Chrome anterior se retiró del paquete.
+
+El modo de compatibilidad mantiene el contexto aislado, Node deshabilitado en la página y la navegación limitada a los recursos locales; desactiva el sandbox de proceso de Chromium cuando Windows no permite crearlo. Se identifica en la cabecera y en Preferencias. `--strict-renderer` permite exigir el sandbox sin recuperación automática.
 
 Para trabajar con AI reales, instala y autentica Claude Code y Codex CLI con sus herramientas oficiales. Automata reutiliza esas sesiones; no pide claves en la interfaz. Elegir un modelo no garantiza acceso en tu cuenta. Una sesión de Codex en Automata tiene su propio contexto; no hereda otra conversación de ChatGPT.
 

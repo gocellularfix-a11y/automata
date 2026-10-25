@@ -14,8 +14,10 @@ await iconPage.setContent(`<style>html,body{margin:0;width:256px;height:256px;ba
 await iconPage.screenshot({ path: path.join(root, "public/icon.png"), omitBackground: true });
 await browser.close();
 const env = { ...process.env, AUTOMATA_USER_DATA: path.join(output, "user-data"), AUTOMATA_SMOKE: "1" };
+if (process.argv.includes("--headed")) env.AUTOMATA_SHOW = "1";
 delete env.ELECTRON_RUN_AS_NODE;
 const args = process.env.AUTOMATA_PACKAGED ? ["--demo", "--port", "0", "--disable-gpu"] : [root, "--demo", "--port", "0", "--disable-gpu"];
+if (process.argv.includes("--compatibility")) args.push("--compatibility");
 const app = await _electron.launch({ executablePath: process.env.AUTOMATA_PACKAGED ?? require("electron"), args, env, timeout: 3e4 });
 const errors = [];
 let page;
@@ -25,7 +27,7 @@ try {
   await page.waitForFunction(() => document.querySelector("#projectName").textContent === "Hola, Automata");
   const native = await page.evaluate(() => ({ bridge: !!window.automata, node: typeof window.require }));
   if (!native.bridge || native.node !== "undefined") throw new Error("El aislamiento del renderer no es correcto.");
-  await page.screenshot({ path: path.join(output, "windows.png") });
+  if (process.argv.includes("--headed")) await page.screenshot({ path: path.join(output, "windows.png"), timeout: 10000 });
   await page.click("#startButton");
   await page.waitForFunction(() => document.querySelector("#runState").textContent === "Completado", null, { timeout: 25e3 });
   if (errors.length) throw new Error(errors.join("\n"));

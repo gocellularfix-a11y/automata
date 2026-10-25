@@ -9,6 +9,7 @@ import { Coordinator } from "./coordinator.mjs";
 import { MODELS, MODES, effortsFor } from "./config.mjs";
 import { findAgent } from "./agents.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
 const mime = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json" };
 const loopback = (address) => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address);
 export async function createServer({ port = 4780, lan = false, demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), ...injections } = {}) {
@@ -107,7 +108,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
           return text ? JSON.parse(text) : {};
         };
         if (url.pathname === "/api/state" && req.method === "GET") return send(200, coordinator.snapshot());
-        if (url.pathname === "/api/capabilities" && req.method === "GET") return send(200, { demo, version: "0.1.0", models: MODELS, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
+        if (url.pathname === "/api/capabilities" && req.method === "GET") return send(200, { demo, version: VERSION, models: MODELS, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
         if (url.pathname === "/api/pairing" && req.method === "GET") {
           if (!loopback(req.socket.remoteAddress)) return send(403, { error: "Abre la conexión de Android desde la PC." });
           return send(200, { token, lan, addresses: Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) });

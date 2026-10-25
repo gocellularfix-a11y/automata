@@ -21,5 +21,6 @@ delete pkg.devDependencies;
 fs.writeFileSync(path.join(app, "package.json"), JSON.stringify(pkg, null, 2));
 fs.copyFileSync(path.join(root, "README.md"), path.join(target, "LEEME.md"));
 if (!exists) fs.renameSync(path.join(target, "electron.exe"), path.join(target, "Automata.exe"));
-fs.writeFileSync(path.join(target, "Automata-Chrome.cmd"), '@echo off\r\nsetlocal\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%~dp0Automata.exe" "%~dp0resources\\app\\scripts\\browser.mjs" %*\r\n');
+const legacyBrowserLauncher = path.join(target, "Automata-Chrome.cmd");
+if (fs.existsSync(legacyBrowserLauncher)) fs.unlinkSync(legacyBrowserLauncher);
 console.log("Aplicación portable: " + path.join(target, "Automata.exe"));

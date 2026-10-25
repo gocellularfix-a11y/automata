@@ -380,6 +380,11 @@ async function init() {
       }
     }
   }
+  if (connection?.compatibilityMode) {
+    $(".version").textContent = "WINDOWS / COMPATIBILIDAD";
+    $("#connection").title = "Compatibilidad de Windows: interfaz local con contexto aislado y sin acceso a Node. El aislamiento de proceso de Chromium no está activo.";
+    $("#settingsDialog .note").append(document.createTextNode(" Modo de compatibilidad de Windows activo: la página mantiene contexto aislado y Node deshabilitado; el sandbox de proceso de Chromium está desactivado. Solo se carga la interfaz local de Automata."));
+  }
   syncSettings();
   render();
   if (connection) await connect();
@@ -388,4 +393,8 @@ async function init() {
     $("#bottomStatus").textContent = "Conecta tu PC para empezar. Pulsa el indicador de conexión.";
   }
 }
-void init();
+void init().catch(error => {
+  connected(false, "Error de inicio");
+  render();
+  toast(error.message);
+});
