@@ -6,6 +6,7 @@ const stateNames = { running: "Trabajando", pausing: "Pausando", paused: "En pau
 const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", tool: "ACTIVIDAD", session: "SESIÓN", message: "MENSAJE", warning: "ATENCIÓN", error: "ERROR", check: "VERIFICACIÓN", success: "VERIFICADO", start: "INICIO", pause: "PAUSA", stop: "DETENIDO", complete: "COMPLETADO" };
 let state = { projects: [], settings: { mode: "small", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30 }, runs: [], events: [], messages: [], busy: false };
 let selected = localStorage.getItem("automata.project"), capabilities = null, connection = null, streamAbort = null, toastTimer, reconnectTimer, renderTimer;
+let accounts = null, authTimer, authLoading = null, accountsOpened = false;
 const project = () => state.projects.find((p) => p.id === selected);
 const run = () => state.runs.find((r) => r.projectId === selected);
 function toast(text) {
@@ -179,6 +180,10 @@ async function connect() {
     render();
     connected(true, "Conectado a tu PC");
     void listen();
+    if (!accountsOpened && !state.demo) {
+      accountsOpened = true;
+      if (!document.querySelector("dialog[open]")) void openAccounts();
+    } else if (accounts) void loadAccounts();
   } catch (e) {
     connected(false, "Sin conexión");
     render();
@@ -273,11 +278,13 @@ for (const role of ["coder", "auditor"]) {
 }
 $("#startButton").addEventListener("click", async () => {
   try {
+    if (!await ensureAccounts()) return;
     if (!project()) return newProject();
     const r = run();
     const resumable = r && ["paused", "interrupted", "error", "blocked", "limit", "stopped"].includes(r.status);
     await api(resumable ? "control" : "start", { method: "POST", body: resumable ? { action: "resume" } : { projectId: selected } });
   } catch (e) {
+    if (/en Cuentas antes de continuar/.test(e.message)) void openAccounts();
     toast(e.message);
   }
 });
@@ -305,11 +312,13 @@ $("#chatForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   try {
     if (!project()) return toast("Selecciona un proyecto para conversar.");
+    if ($("#chatKind").value === "question" && !await ensureAccounts($("#chatTarget").value === "both" ? ["coder", "auditor"] : [$("#chatTarget").value])) return;
     await api("chat", { method: "POST", body: { projectId: selected, target: $("#chatTarget").value, kind: $("#chatKind").value, text: $("#chatText").value } });
     $("#chatText").value = "";
     $("#chatText").style.height = "auto";
     toast(state.busy ? "Mensaje en cola. Se entregará en un punto seguro." : "Mensaje enviado.");
   } catch (err) {
+    if (/en Cuentas antes de continuar/.test(err.message)) void openAccounts();
     toast(err.message);
   }
 });
@@ -361,9 +370,103 @@ $("#connectionForm").addEventListener("submit", async (e) => {
     toast(err.message);
   }
 });
+const accountStateNames = { connected: "Conectado", disconnected: "Sin conectar", missing: "Falta instalar", error: "Revisar conexión", pending: "Esperando acceso", unknown: "Comprobando", demo: "Demostración" };
+function renderAccounts() {
+  const providers = accounts?.providers ?? {};
+  const count = Object.values(providers).filter(provider => provider.connected).length;
+  $("#accountCount").textContent = state.demo ? "DEMO" : accounts ? `${count}/2` : "—";
+  $("#accountsButton").classList.toggle("accounts-ready", count === 2);
+  for (const role of ["coder", "auditor"]) {
+    const provider = providers[role] ?? { status: "unknown", message: "Comprobando la sesión en esta PC…" };
+    const card = $("#" + role + "Account"), button = card.querySelector("[data-login]");
+    card.dataset.status = provider.status;
+    $("#" + role + "AccountState").textContent = accountStateNames[provider.status] ?? "Comprobando";
+    $("#" + role + "AccountMessage").textContent = provider.message;
+    button.hidden = provider.connected || provider.status === "pending" || provider.status === "demo";
+    button.disabled = !accounts?.canLogin || !provider.installed || state.busy;
+    const flow = provider.flow;
+    $("#" + role + "AccountFlow").hidden = !flow;
+    const link = $("#" + role + "AuthLink");
+    link.hidden = !flow?.url;
+    if (flow?.url) link.href = flow.url;
+    else link.removeAttribute("href");
+  }
+  $("#claudeCodeForm").hidden = !providers.coder?.flow?.acceptsCode;
+  $("#deviceCodeSection").hidden = !providers.auditor?.flow?.deviceCode;
+  $("#deviceCode").textContent = providers.auditor?.flow?.deviceCode ?? "";
+  $("#deviceLoginButton").disabled = !accounts?.canLogin || !providers.auditor?.installed || providers.auditor?.status === "pending" || providers.auditor?.connected || state.busy;
+  $("#accountsContinue").disabled = !state.demo && count !== 2;
+  $("#accountContext").textContent = state.demo ? "Esta sesión de demostración no utiliza tus cuentas ni consume créditos. Abre Automata sin --demo para conectar a los proveedores." : accounts && !accounts.canLogin ? "Conecta tus cuentas desde la aplicación de Windows. Android utiliza las sesiones de esa PC." : "Si ya iniciaste sesión, puedes usarla aquí. Conectar una cuenta no garantiza acceso a todos los modelos.";
+}
+function scheduleAuthRefresh() {
+  clearTimeout(authTimer);
+  if ($("#accountsDialog").open) authTimer = setTimeout(() => void loadAccounts(), 2000);
+}
+async function loadAccounts(force = false) {
+  if (authLoading) return authLoading;
+  authLoading = (async () => {
+    try {
+      accounts = await api("auth", force ? { method: "POST", body: { action: "refresh" } } : {});
+      renderAccounts();
+    } catch (error) {
+      $("#accountError").textContent = error.message;
+    } finally {
+      authLoading = null;
+      scheduleAuthRefresh();
+    }
+  })();
+  return authLoading;
+}
+async function openAccounts() {
+  $("#accountError").textContent = "";
+  renderAccounts();
+  showDialog("#accountsDialog");
+  await loadAccounts();
+}
+async function ensureAccounts(required = ["coder", "auditor"]) {
+  if (state.demo) return true;
+  await loadAccounts();
+  if (required.every(role => accounts?.providers[role]?.connected)) return true;
+  await openAccounts();
+  $("#accountError").textContent = "Conecta las cuentas necesarias antes de iniciar el trabajo.";
+  return false;
+}
+async function accountAction(body) {
+  $("#accountError").textContent = "";
+  clearTimeout(authTimer);
+  try {
+    await authLoading;
+    accounts = await api("auth", { method: "POST", body });
+    renderAccounts();
+  } catch (error) {
+    $("#accountError").textContent = error.message;
+  } finally { scheduleAuthRefresh(); }
+}
+$("#accountsButton").addEventListener("click", () => void openAccounts());
+$("#refreshAccounts").addEventListener("click", () => void loadAccounts(accounts?.canLogin === true));
+document.querySelectorAll("[data-login]").forEach(button => button.addEventListener("click", () => void accountAction({ action: "login", role: button.dataset.login, method: "browser" })));
+document.querySelectorAll("[data-auth-cancel]").forEach(button => button.addEventListener("click", () => void accountAction({ action: "cancel", role: button.dataset.authCancel })));
+$("#deviceLoginButton").addEventListener("click", () => void accountAction({ action: "login", role: "auditor", method: "device" }));
+$("#claudeCodeForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const input = event.target.elements.code;
+  const code = input.value;
+  input.value = "";
+  await accountAction({ action: "code", role: "coder", code });
+});
+$("#accountsDialog").addEventListener("close", () => {
+  clearTimeout(authTimer);
+  $("#claudeCodeForm").reset();
+  $("#deviceCode").textContent = "";
+  for (const role of ["coder", "auditor"]) {
+    $("#" + role + "AuthLink").removeAttribute("href");
+    if (accounts?.providers[role]) delete accounts.providers[role].flow;
+  }
+});
 window.addEventListener("beforeunload", () => {
   streamAbort?.abort();
   clearTimeout(reconnectTimer);
+  clearTimeout(authTimer);
 });
 async function init() {
   if (window.automata?.connection) connection = await window.automata.connection();

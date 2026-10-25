@@ -8,11 +8,12 @@ import { Store } from "./store.mjs";
 import { Coordinator } from "./coordinator.mjs";
 import { MODELS, MODES, effortsFor } from "./config.mjs";
 import { findAgent } from "./agents.mjs";
+import { AuthManager } from "./auth.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
 const mime = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json" };
 const loopback = (address) => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address);
-export async function createServer({ port = 4780, lan = false, demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), ...injections } = {}) {
+export async function createServer({ port = 4780, lan = false, demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), auth = new AuthManager({ demo }), ...injections } = {}) {
   const store = new Store(dataDir), release = store.acquire();
   let coordinator;
   try {
@@ -107,6 +108,20 @@ data: ${JSON.stringify(coordinator.snapshot())}
           }
           return text ? JSON.parse(text) : {};
         };
+        const localLogin = loopback(req.socket.remoteAddress) && requestOrigin !== "https://automata.local";
+        if (url.pathname === "/api/auth" && req.method === "GET") return send(200, await auth.status({ local: localLogin }));
+        if (url.pathname === "/api/auth" && req.method === "POST") {
+          if (!localLogin) return send(403, { error: "Conecta las cuentas desde Automata en tu PC. Android muestra su estado." });
+          const data = await body();
+          if (data.action === "refresh") return send(200, await auth.status({ force: true, local: true }));
+          if (data.action === "cancel") return send(200, await auth.cancel(data.role));
+          if (data.action === "code") return send(200, auth.submitCode(data.role, data.code));
+          if (data.action === "login") {
+            if (coordinator.busy || coordinator.active && ["running", "pausing"].includes(coordinator.active.status)) throw new Error("Pausa o detén el trabajo antes de cambiar la conexión de tus cuentas.");
+            return send(202, await auth.start(data.role, data.method));
+          }
+          throw new Error("Acción de acceso no válida.");
+        }
         if (url.pathname === "/api/state" && req.method === "GET") return send(200, coordinator.snapshot());
         if (url.pathname === "/api/capabilities" && req.method === "GET") return send(200, { demo, version: VERSION, models: MODELS, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
         if (url.pathname === "/api/pairing" && req.method === "GET") {
@@ -115,9 +130,21 @@ data: ${JSON.stringify(coordinator.snapshot())}
         }
         if (url.pathname === "/api/projects" && req.method === "POST") return send(201, coordinator.addProject(await body()));
         if (url.pathname === "/api/settings" && req.method === "PUT") return send(200, coordinator.updateSettings(await body()));
-        if (url.pathname === "/api/start" && req.method === "POST") return send(202, coordinator.start((await body()).projectId));
-        if (url.pathname === "/api/control" && req.method === "POST") return send(200, coordinator.control((await body()).action));
-        if (url.pathname === "/api/chat" && req.method === "POST") return send(202, await coordinator.sendChat(await body()));
+        if (url.pathname === "/api/start" && req.method === "POST") {
+          const data = await body();
+          await auth.requireConnected();
+          return send(202, coordinator.start(data.projectId));
+        }
+        if (url.pathname === "/api/control" && req.method === "POST") {
+          const data = await body();
+          if (data.action === "resume") await auth.requireConnected();
+          return send(200, coordinator.control(data.action));
+        }
+        if (url.pathname === "/api/chat" && req.method === "POST") {
+          const data = await body();
+          if ((data.kind ?? "question") === "question") await auth.requireConnected(data.target === "both" ? ["coder", "auditor"] : [data.target]);
+          return send(202, await coordinator.sendChat(data));
+        }
         return send(404, { error: "Ruta no encontrada." });
       }
       if (req.method !== "GET" && req.method !== "HEAD") return send(405, { error: "Método no permitido." });
@@ -147,9 +174,9 @@ data: ${JSON.stringify(coordinator.snapshot())}
     for (const c of clients) c.write(": heartbeat\n\n");
   }, 15e3);
   heartbeat.unref();
-  return { server, coordinator, origin, token, store, async close() {
+  return { server, coordinator, auth, origin, token, store, async close() {
     clearInterval(heartbeat);
-    await coordinator.close();
+    await Promise.all([coordinator.close(), auth.close()]);
     for (const c of clients) c.end();
     server.closeAllConnections();
     await new Promise((r) => server.close(r));

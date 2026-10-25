@@ -1797,6 +1797,200 @@ img {
 .agent-header p {
   color: #859279;
 }
+.account-count {
+  font: 9px Consolas, monospace;
+  color: var(--muted);
+  background: #e9ede3;
+  border-radius: 4px;
+  padding: 3px 5px;
+}
+.accounts-ready .account-count {
+  color: var(--green);
+  background: var(--green-light);
+}
+.accounts-modal {
+  width: min(820px, calc(100vw - 32px));
+  padding: 34px;
+}
+.accounts-modal .modal-heading h2 {
+  font-size: 37px;
+  letter-spacing: -1.5px;
+}
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.account-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 23px;
+  background: #fafaf6;
+  min-width: 0;
+}
+.account-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 27px;
+  gap: 10px;
+}
+.account-card .agent-avatar {
+  width: 43px;
+  height: 43px;
+  flex-shrink: 0;
+}
+.account-state {
+  font-size: 10px;
+  color: #7c8378;
+  background: #ecefe7;
+  border-radius: 20px;
+  padding: 6px 9px;
+}
+.account-card[data-status=connected] .account-state {
+  background: #e2efe4;
+  color: #367254;
+}
+.account-card[data-status=pending] .account-state {
+  background: #fcf0df;
+  color: #9b6f30;
+}
+.account-card h3 {
+  font-size: 25px;
+  font-weight: 500;
+  letter-spacing: -.7px;
+  margin: 9px 0;
+}
+.account-card h3 span {
+  color: #959b8e;
+  font-size: 18px;
+}
+.account-description {
+  font-size: 12px;
+  color: #808776;
+  line-height: 1.65;
+  margin: 0 0 25px;
+}
+.account-message {
+  font-size: 11px;
+  line-height: 1.7;
+  min-height: 39px;
+  color: #69785f;
+  margin: 0 0 17px;
+}
+.account-login {
+  width: 100%;
+  justify-content: space-between;
+  font-size: 12px;
+  text-align: left;
+}
+.claude-login {
+  background: #f4e7dd;
+  color: #975d43;
+}
+.codex-login {
+  background: #dce9df;
+  color: #376451;
+}
+.accounts-modal .account-help {
+  margin: 15px 0 0;
+}
+.account-help summary {
+  padding: 6px 0;
+  font-size: 10px;
+}
+.account-help p, .account-flow p {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #7c8771;
+}
+.account-help a {
+  display: block;
+  font-size: 10px;
+  color: var(--green);
+  line-height: 1.7;
+  margin-top: 10px;
+}
+.account-text-button {
+  color: var(--green);
+  font-size: 11px;
+  padding: 8px 0;
+  text-align: left;
+}
+.account-text-button:hover {
+  text-decoration: underline;
+}
+.account-flow .button {
+  width: 100%;
+  font-size: 11px;
+  text-decoration: none;
+}
+.account-flow form {
+  margin-top: 15px;
+}
+.account-flow label {
+  margin-bottom: 10px;
+}
+.device-code {
+  display: block;
+  font: 22px Consolas, monospace;
+  letter-spacing: 3px;
+  color: var(--green);
+  margin: 12px 0;
+  user-select: all;
+}
+.account-notice {
+  display: block;
+  color: #738169;
+  background: #edf2e8;
+  border-radius: 8px;
+  padding: 14px 17px;
+  font-size: 11px;
+  line-height: 1.8;
+  margin: 22px 0 10px;
+}
+.account-context {
+  color: #8a9280;
+  font-size: 10px;
+  line-height: 1.8;
+  margin: 0;
+}
+.account-actions #refreshAccounts {
+  margin-right: auto;
+}
+@media (max-width: 600px) {
+  .account-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .accounts-modal {
+    padding: 23px 19px;
+  }
+  .accounts-modal .modal-heading h2 {
+    font-size: 30px;
+  }
+  .account-card {
+    padding: 18px;
+  }
+  .account-card-top {
+    margin-bottom: 18px;
+  }
+  .account-description {
+    margin-bottom: 16px;
+  }
+  .account-actions {
+    flex-wrap: wrap;
+  }
+  .account-actions #refreshAccounts {
+    flex-basis: 100%;
+  }
+  .top-actions {
+    gap: 6px;
+  }
+  .top-actions .accounts-button span {
+    display: none;
+  }
+}
 @media (max-width: 600px) {
   .mobile-utilities {
     display: flex;

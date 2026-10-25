@@ -70,6 +70,9 @@ try {
   await page.setViewportSize({ width: 1480, height: 1020 });
   await page.goto(live.origin + "/#token=" + live.token);
   await page.waitForFunction(() => document.querySelector("#connection").textContent.includes("Conectado"));
+  await page.waitForSelector("#accountsDialog[open]");
+  check("ventana de cuentas al abrir el espacio real", await page.locator("#coderAccount").isVisible() && await page.locator("#auditorAccount").isVisible());
+  await page.click("#accountsDialog [data-close]");
   await page.click("#newProjectTop");
   await page.fill("#projectForm [name=name]", "Mi próximo proyecto");
   await page.fill("#projectForm [name=directory]", projectDir);

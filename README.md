@@ -6,7 +6,7 @@ Aplicación para coordinar proyectos: el director convierte un objetivo en tarea
 
 Una interfaz compartida para Windows y Android: dos paneles en escritorio, pestañas en móvil y controles en la parte inferior.
 
-## Incluido en 0.1
+## Incluido en 0.2
 
 - Proyectos con carpeta, objetivo, criterios de aceptación, restricciones y comandos de verificación.
 - Tareas pequeñas, medianas o largas.
@@ -17,6 +17,7 @@ Una interfaz compartida para Windows y Android: dos paneles en escritorio, pesta
 - Historial, reportes y recuperación de sesiones interrumpidas.
 - Conexión Android a la PC mediante código de acceso.
 - Demostración aislada que no llama a proveedores ni consume créditos.
+- Ventana de cuentas al abrir: conecta Claude y ChatGPT/Codex mediante sus herramientas oficiales, detecta sesiones existentes y comprueba ambas antes de trabajar.
 
 ## Abrir en Windows
 
@@ -39,7 +40,11 @@ Abre **Automata.exe**, sin abrir un navegador. La versión 0.1.1 corrige la pant
 
 El modo de compatibilidad mantiene el contexto aislado, Node deshabilitado en la página y la navegación limitada a los recursos locales; desactiva el sandbox de proceso de Chromium cuando Windows no permite crearlo. Se identifica en la cabecera y en Preferencias. `--strict-renderer` permite exigir el sandbox sin recuperación automática.
 
-Para trabajar con AI reales, instala y autentica Claude Code y Codex CLI con sus herramientas oficiales. Automata reutiliza esas sesiones; no pide claves en la interfaz. Elegir un modelo no garantiza acceso en tu cuenta. Una sesión de Codex en Automata tiene su propio contexto; no hereda otra conversación de ChatGPT.
+Para trabajar con AI reales, instala Claude Code y Codex CLI. Abre **Cuentas** en Automata: se comprobarán las sesiones existentes en la PC. Si falta alguna, pulsa **Conectar con Claude** o **Conectar con ChatGPT** y completa el acceso en el navegador oficial. Automata inicia `claude auth login --claudeai` y `codex login`; las propias herramientas guardan las credenciales. No escribas tu contraseña en Automata.
+
+Si Claude muestra un código de retorno, la ventana permite pegarlo cuando la CLI lo solicita. Codex también ofrece **Ayuda para conectar → Conectar con código de dispositivo** (`codex login --device-auth`); este método debe estar habilitado en la cuenta o workspace. Puedes cancelar un acceso pendiente. Al terminar, la conexión se confirma ejecutando el comando de estado de la herramienta, sin gastar una llamada a un modelo.
+
+Los enlaces OAuth y códigos solo se mantienen en memoria mientras dure el acceso, sin agregarlos a reportes ni al almacenamiento de proyectos. En Android se muestra el estado; las cuentas se conectan desde Windows. Automata comparte las sesiones que ya usan las CLI en esa PC. Elegir un modelo no garantiza acceso en tu cuenta. Una sesión de Codex en Automata tiene su propio contexto; no hereda otra conversación de ChatGPT.
 
 ## Android
 
@@ -56,6 +61,8 @@ La PC conserva los archivos, ejecuta los agentes y debe permanecer encendida. El
 npm test
 npm run smoke
 node scripts/smoke-desktop.mjs
+node scripts/smoke-auth.mjs
+node scripts/smoke-recovery.mjs --live
 npm run build:windows
 npm run build:android
 ```

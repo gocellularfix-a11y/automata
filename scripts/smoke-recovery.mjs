@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 
 const root = path.resolve(import.meta.dirname, '..');
+const live = process.argv.includes('--live');
 const output = path.join(root, 'artifacts', 'recovery-' + Date.now());
 const data = path.join(output, 'user-data');
 fs.mkdirSync(data, { recursive: true });
@@ -15,7 +16,7 @@ await new Promise(resolve => probe.close(resolve));
 const env = { ...process.env, AUTOMATA_USER_DATA: data };
 delete env.ELECTRON_RUN_AS_NODE;
 delete env.AUTOMATA_SMOKE;
-const child = spawn(path.join(root, 'dist/Automata-Windows/Automata.exe'), ['--demo', '--port', '0', '--remote-debugging-port=' + port], { env, windowsHide: true, stdio: 'ignore' });
+const child = spawn(path.join(root, 'dist/Automata-Windows/Automata.exe'), [...live ? [] : ['--demo'], '--port', '0', '--remote-debugging-port=' + port], { env, windowsHide: true, stdio: 'ignore' });
 child.on('error', error => console.error(error.message));
 let browser, page;
 const deadline = Date.now() + 40000;
@@ -26,7 +27,7 @@ while (Date.now() < deadline) {
     browser = await chromium.connectOverCDP('http://127.0.0.1:' + port, { timeout: 3000 });
     page = browser.contexts()[0].pages().find(p => p.url().startsWith('automata://app/'));
     if (!page) throw new Error('The app window has not loaded.');
-    await page.waitForFunction(() => document.querySelector('#projectName')?.textContent === 'Hola, Automata', null, { timeout: 5000 });
+    await page.waitForFunction(isLive => isLive ? document.querySelector('#accountsDialog')?.open : document.querySelector('#projectName')?.textContent === 'Hola, Automata', live, { timeout: 5000 });
     break;
   } catch { await browser?.close().catch(() => {}); browser = null; await new Promise(r => setTimeout(r, 300)); }
 }
@@ -44,10 +45,23 @@ try {
     return { escapedAssetStatus: escapedAsset.status, invalidIpcRejected };
   });
   if (security.escapedAssetStatus !== 404 || !security.invalidIpcRejected) throw new Error('Local UI boundary check failed.');
+  let accounts;
+  if (live) {
+    await page.waitForFunction(() => !['coder', 'auditor'].some(role => document.querySelector('#' + role + 'AccountState').textContent === 'Comprobando'), null, { timeout: 30000 });
+    accounts = await page.evaluate(() => Object.fromEntries(['coder', 'auditor'].map(role => [role, document.querySelector('#' + role + 'AccountState').textContent])));
+    await page.screenshot({ path: path.join(output, 'windows-login.png'), timeout: 10000 });
+    await page.click('#accountsDialog [data-close]');
+  } else {
+    await page.click('#accountsButton');
+    await page.waitForFunction(() => document.querySelector('#coderAccountState').textContent === 'Demostración');
+    await page.click('#accountsDialog [data-close]');
+  }
   await page.screenshot({ path: path.join(output, 'windows.png'), timeout: 10000 });
-  await page.click('#startButton');
-  await page.waitForFunction(() => document.querySelector('#runState').textContent === 'Completado', null, { timeout: 25000 });
-  const result = { ok: true, automaticRecovery: info.compatibilityMode, info, security, output };
+  if (!live) {
+    await page.click('#startButton');
+    await page.waitForFunction(() => document.querySelector('#runState').textContent === 'Completado', null, { timeout: 25000 });
+  }
+  const result = { ok: true, automaticRecovery: info.compatibilityMode, info, security, live, accounts, output };
   fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result, null, 2));
 } finally {
