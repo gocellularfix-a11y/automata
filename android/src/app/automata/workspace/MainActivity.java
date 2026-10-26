@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
                 String file = request.getUrl().getPath();
                 if (file == null || file.equals("/")) file = "/index.html";
                 if (file.contains("..") || !file.matches("/[a-zA-Z0-9._-]+")) return missing();
-                String type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : file.endsWith(".svg") ? "image/svg+xml" : file.endsWith(".png") ? "image/png" : "text/html";
+                String type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : file.endsWith(".svg") ? "image/svg+xml" : file.endsWith(".png") ? "image/png" : file.endsWith(".woff2") ? "font/woff2" : "text/html";
                 try {
                     Map<String,String> headers = new HashMap<>();
                     headers.put("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src http: https:; object-src 'none'; base-uri 'none'");

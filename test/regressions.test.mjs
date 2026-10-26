@@ -203,3 +203,20 @@ test("las verificaciones de PowerShell conservan variables y salida entre senten
   assert.equal(results[3].passed, false);
   assert.equal(results[4].passed, false);
 });
+
+test("las fuentes del tema se declaran con archivos reales, nombres simples para Android y tipo font/woff2", async (t) => {
+  const publicDir = path.join(import.meta.dirname, "..", "public");
+  const css = fs.readFileSync(path.join(publicDir, "styles.css"), "utf8");
+  const files = [...css.matchAll(/@font-face[^}]*?url\("([^"]+)"\)/g)].map((m) => m[1]);
+  assert.ok(files.length >= 5);
+  const app = await createServer({ port: 0, demo: true, dataDir: fixture(t) });
+  t.after(() => app.close());
+  for (const file of files) {
+    // MainActivity only serves single-segment names made of these characters.
+    assert.match(file, /^[a-zA-Z0-9._-]+\.woff2$/);
+    const res = await fetch(app.origin + "/" + file);
+    assert.equal(res.status, 200, file);
+    assert.equal(res.headers.get("content-type"), "font/woff2");
+    assert.equal(Buffer.from(await res.arrayBuffer()).subarray(0, 4).toString("latin1"), "wOF2", file);
+  }
+});

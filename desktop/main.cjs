@@ -47,7 +47,7 @@ else {
     log("coordinator listening");
     const publicRoot = path.resolve(__dirname, "../public");
     const index = "automata://app/index.html";
-    const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png" };
+    const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2" };
     protocol.handle("automata", request => {
       try {
         const url = new URL(request.url);
