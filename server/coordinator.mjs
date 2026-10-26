@@ -129,15 +129,19 @@ export class Coordinator extends EventEmitter {
       if (this.chatQueue.length) this.chatPending = this.drainChats();
     });
   }
+  pauseIfRequested() {
+    if (this.active.status !== "pausing") return false;
+    this.active.status = "paused";
+    this.event({ role: "system", kind: "pause", text: "Trabajo pausado en un punto seguro. Puedes continuar desde aquí." });
+    return true;
+  }
   async boundary() {
     if (this.controller.signal.aborted) throw Object.assign(new Error("Detenido"), { name: "AbortError" });
-    if (this.active.status === "pausing") {
-      this.active.status = "paused";
-      this.event({ role: "system", kind: "pause", text: "Trabajo pausado en un punto seguro. Puedes continuar desde aquí." });
-      return false;
-    }
+    if (this.pauseIfRequested()) return false;
     await this.drainChats(true);
-    return !this.controller.signal.aborted;
+    // A pause requested while queued chats were running must not start another operation.
+    if (this.controller.signal.aborted) return false;
+    return !this.pauseIfRequested();
   }
   async invoke(role, prompt, phase, dir) {
     const r = this.active;
@@ -255,10 +259,17 @@ ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige ev
       this.notify();
     }
   }
-  control(action) {
+  control(action, runId) {
     if (action === "stop" && this.chatController) {
       this.chatController.abort();
       return { status: "stopping" };
+    }
+    // The UI acts on the run it is showing, which is not necessarily the last one started
+    // (a stopped run of another project stays resumable).
+    if (runId !== undefined && runId !== this.active?.id && !this.busy) {
+      const target = this.runs.find((run) => run.id === runId);
+      if (!target) throw new Error("No hay un trabajo activo.");
+      this.active = target;
     }
     const r = this.active;
     if (!r) throw new Error("No hay un trabajo activo.");

@@ -102,11 +102,15 @@ data: ${JSON.stringify(coordinator.snapshot())}
           return;
         }
         const body = async () => {
-          let text = "";
+          // Decode once from bytes: a multi-byte character can straddle two chunks.
+          const chunks = [];
+          let size = 0;
           for await (const c of req) {
-            text += c;
-            if (text.length > 15e4) throw new Error("La solicitud es demasiado grande.");
+            size += c.length;
+            if (size > 15e4) throw new Error("La solicitud es demasiado grande.");
+            chunks.push(c);
           }
+          const text = Buffer.concat(chunks).toString("utf8");
           return text ? JSON.parse(text) : {};
         };
         const localLogin = loopback(req.socket.remoteAddress) && requestOrigin !== "https://automata.local";
@@ -146,7 +150,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
         if (url.pathname === "/api/control" && req.method === "POST") {
           const data = await body();
           if (data.action === "resume") await auth.requireConnected();
-          return send(200, coordinator.control(data.action));
+          return send(200, coordinator.control(data.action, typeof data.runId === "string" ? data.runId : void 0));
         }
         if (url.pathname === "/api/chat" && req.method === "POST") {
           const data = await body();

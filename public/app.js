@@ -321,7 +321,7 @@ $("#startButton").addEventListener("click", async () => {
     if (!project()) return newProject();
     const r = run();
     const resumable = r && ["paused", "interrupted", "error", "blocked", "limit", "stopped"].includes(r.status);
-    await api(resumable ? "control" : "start", { method: "POST", body: resumable ? { action: "resume" } : { projectId: selected } });
+    await api(resumable ? "control" : "start", { method: "POST", body: resumable ? { action: "resume", runId: r.id } : { projectId: selected } });
   } catch (e) {
     if (/en Cuentas antes de continuar/.test(e.message)) void openAccounts();
     toast(e.message);
@@ -329,7 +329,7 @@ $("#startButton").addEventListener("click", async () => {
 });
 for (const action of ["pause", "stop"]) $("#" + action + "Button").addEventListener("click", async () => {
   try {
-    await api("control", { method: "POST", body: { action } });
+    await api("control", { method: "POST", body: { action, runId: run()?.id } });
   } catch (e) {
     toast(e.message);
   }

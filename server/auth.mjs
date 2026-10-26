@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { findAgent, runProcess, killTree } from "./agents.mjs";
+import { findAgent, runProcess, killTree, nodeEnv } from "./agents.mjs";
 import { findGitHub } from "./github.mjs";
 
 const aiRoles = ["coder", "auditor"];
@@ -117,7 +117,7 @@ export class AuthManager {
     if (!cli) throw new Error(`Instala ${names[role]} en esta PC antes de conectar.`);
     const args = role === "coder" ? ["auth", "login", "--claudeai"] : role === "github" ? ["auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--skip-ssh-key"] : ["login", ...method === "device" ? ["--device-auth"] : []];
     const child = this.spawnLogin(cli.command, [...cli.args, ...args], {
-      shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", NO_COLOR: "1", ...cli.env }
+      shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...nodeEnv(cli.command), NO_COLOR: "1", ...cli.env }
     });
     const job = { child, method, url: role === "github" ? "https://github.com/login/device" : null, deviceCode: null, acceptsCode: false, buffer: "", timer: null };
     this.jobs.set(role, job);

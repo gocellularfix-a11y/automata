@@ -44,11 +44,14 @@ export async function killTree(child) {
     }
   }
 }
+// Only a child that re-runs this executable as Node needs ELECTRON_RUN_AS_NODE; leaking it to
+// checks and agents would make any Electron app they launch behave as plain Node.
+export const nodeEnv = (command) => command === process.execPath ? { ELECTRON_RUN_AS_NODE: "1" } : {};
 export function runProcess(command, args, { cwd, input = "", signal, timeoutMs = 18e5, onLine = () => {
 }, env = {} } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(Object.assign(new Error("Ejecución detenida."), { name: "AbortError" }));
-    const child = spawn(command, args, { cwd, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", ...env } });
+    const child = spawn(command, args, { cwd, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...nodeEnv(command), ...env } });
     let stdout = "", stderr = "", pending = "", failure = null, settled = false;
     const abort = () => {
       failure = Object.assign(new Error("Ejecución detenida."), { name: "AbortError" });
@@ -223,20 +226,44 @@ ${r.code === 0 ? redact(r.stdout).slice(0, 6e4) : "Git no disponible para este p
   }
   return output.join("\n\n");
 }
+// Windows PowerShell only exposes the exit code of the last native command, so `a; b` would hide a
+// failing `a`. The user's command runs from its own file and each top-level statement is evaluated
+// in this scope, stopping at the first nonzero exit code. Anything the parser cannot split
+// (parse errors, named blocks, restricted language mode) runs as a single unit, as before.
+const CHECK_RUNNER = `param([Parameter(Mandatory = $true)][string]$AutomataCommandFile)
+$ErrorActionPreference = 'Stop'
+$global:LASTEXITCODE = 0
+$AutomataSource = [System.IO.File]::ReadAllText($AutomataCommandFile, [System.Text.Encoding]::UTF8)
+$AutomataUnits = @($AutomataSource)
+try {
+    $AutomataTokens = $null; $AutomataErrors = $null
+    $AutomataAst = [System.Management.Automation.Language.Parser]::ParseInput($AutomataSource, [ref]$AutomataTokens, [ref]$AutomataErrors)
+    if ($AutomataErrors.Count -eq 0 -and $AutomataAst.EndBlock -and -not ($AutomataAst.ParamBlock -or $AutomataAst.BeginBlock -or $AutomataAst.ProcessBlock -or $AutomataAst.DynamicParamBlock) -and $AutomataAst.EndBlock.Statements.Count -gt 0) {
+        $AutomataUnits = @($AutomataAst.EndBlock.Statements | ForEach-Object { $_.Extent.Text })
+    }
+} catch { $AutomataUnits = @($AutomataSource) }
+foreach ($AutomataUnit in $AutomataUnits) {
+    Invoke-Expression $AutomataUnit
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+`;
 export async function runChecks(project, directory, signal, emit) {
   const results = [];
   for (const [i, command] of project.checks.entries()) {
     emit({ role: "system", kind: "check", text: `Verificando · ${command}` });
-    const filename = path.join(directory, `check-${i + 1}.${process.platform === "win32" ? "ps1" : "sh"}`);
-    const source = process.platform === "win32" ? `$ErrorActionPreference = 'Stop'
-$global:LASTEXITCODE = 0
-${command}
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-` : `set -e
-${command}
-`;
-    fs.writeFileSync(filename, (process.platform === "win32" ? "\uFEFF" : "") + source);
-    const r = await runProcess(process.platform === "win32" ? "powershell.exe" : "/bin/sh", process.platform === "win32" ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", filename] : [filename], { cwd: project.directory, signal, timeoutMs: 3e5 });
+    const windows = process.platform === "win32";
+    const filename = path.join(directory, `check-${i + 1}.${windows ? "ps1" : "sh"}`);
+    let args;
+    if (windows) {
+      const commandFile = path.join(directory, `check-${i + 1}.command.ps1`);
+      fs.writeFileSync(commandFile, "\uFEFF" + command + "\n");
+      fs.writeFileSync(filename, "\uFEFF" + CHECK_RUNNER);
+      args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", filename, commandFile];
+    } else {
+      fs.writeFileSync(filename, `set -e\n${command}\n`);
+      args = [filename];
+    }
+    const r = await runProcess(windows ? "powershell.exe" : "/bin/sh", args, { cwd: project.directory, signal, timeoutMs: 3e5 });
     const result = { command, passed: r.code === 0, code: r.code, output: redact(r.stdout.slice(-3e4)), stderr: r.stderr };
     fs.writeFileSync(path.join(directory, `check-${i + 1}.json`), JSON.stringify(result, null, 2));
     results.push(result);
