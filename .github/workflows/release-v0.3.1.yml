@@ -46,6 +46,14 @@ jobs:
           node-version: '24'
       - name: Install pinned app dependencies
         run: npm install --no-audit --no-fund
+      - name: Diagnose Windows Git path normalization
+        run: |
+          @'
+          import fs from 'node:fs';import path from 'node:path';import os from 'node:os';import {runProcess} from './server/agents.mjs';
+          const root=fs.mkdtempSync(path.join(os.tmpdir(),'automata-release-git-')),origin=path.join(root,'origin.git'),target=path.join(root,'clock');fs.mkdirSync(target);
+          await runProcess('git',['init','--bare',origin],{cwd:root});await runProcess('git',['clone',origin,target],{cwd:root});await runProcess('git',['remote','set-url','origin','https://github.com/example/clock.git'],{cwd:target});
+          const result=await runProcess('git',['rev-parse','--show-toplevel'],{cwd:fs.realpathSync(target)});console.log(JSON.stringify({target,expected:fs.realpathSync(target),result,actual:result.code===0?fs.realpathSync(result.stdout.trim()):null},null,2));
+          '@ | node --input-type=module
       - name: Verify version and core behavior
         run: |
           node -e "if(require('./package.json').version !== '0.3.1') process.exit(1)"
