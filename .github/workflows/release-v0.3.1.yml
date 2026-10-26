@@ -1,0 +1,103 @@
+name: Release Automata v0.3.1
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-v0.3.1.yml
+      - .github/release-assets/v0.3.1/**
+      - scripts/package-release.ps1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: automata-release-v0.3.1
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: v0.3.1
+  SOURCE_COMMIT: 441ab4bd910d84b59a7d65ca74d45521148611c6
+  APK_SHA256: 5b0c87b85bcaabe8a8d598a5271d33174c99e224abeb072bd0f8a5f3e1e68ca2
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: app
+    steps:
+      - name: Check out release configuration
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: release-config
+          persist-credentials: false
+      - name: Check out verified app source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+          path: app
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Install pinned app dependencies
+        run: npm install --no-audit --no-fund
+      - name: Verify version and core behavior
+        run: |
+          node -e "if(require('./package.json').version !== '0.3.1') process.exit(1)"
+          node --test test/*.test.mjs
+      - name: Build Windows app
+        run: node scripts/build-windows.mjs
+      - name: Package clean Windows bundle and exact signed APK
+        run: |
+          & "$env:GITHUB_WORKSPACE/release-config/scripts/package-release.ps1" -ProjectRoot "$env:GITHUB_WORKSPACE/app" -ApkPath "$env:GITHUB_WORKSPACE/release-config/.github/release-assets/v0.3.1/Automata-0.3.1-Android.apk" -OutputDirectory "$env:GITHUB_WORKSPACE/release-out" -SourceCommit $env:SOURCE_COMMIT -ExpectedApkSha256 $env:APK_SHA256 -ReleaseNotes "$env:GITHUB_WORKSPACE/release-config/.github/release-assets/v0.3.1/notes.md"
+      - name: Transfer release files to publishing job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: automata-v0.3.1
+          path: release-out/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: automata-v0.3.1
+          path: release-out
+      - name: Publish preview only after uploaded files pass checksum verification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd release-out
+          sha256sum --check SHA256SUMS.txt
+          zip=Automata-0.3.1-Windows-x64.zip
+          apk=Automata-0.3.1-Android.apk
+          if gh release view "$RELEASE_TAG" --json isDraft > existing-release.json 2>/dev/null; then
+            if ! python3 -c 'import json,sys; sys.exit(0 if json.load(open("existing-release.json"))["isDraft"] else 1)'; then
+              echo "Release already published; verifying existing assets without replacing them."
+            else
+              gh release upload "$RELEASE_TAG" "$zip" "$apk" release-manifest.json SHA256SUMS.txt --clobber
+            fi
+          else
+            gh release create "$RELEASE_TAG" "$zip" "$apk" release-manifest.json SHA256SUMS.txt --target "$SOURCE_COMMIT" --title "Automata v0.3.1 - Windows and Android preview" --notes-file RELEASE-NOTES.md --prerelease --draft
+          fi
+          mkdir verify
+          gh release download "$RELEASE_TAG" --dir verify
+          cmp SHA256SUMS.txt verify/SHA256SUMS.txt
+          (cd verify && sha256sum --check SHA256SUMS.txt)
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease
+          gh release view "$RELEASE_TAG" --json url
