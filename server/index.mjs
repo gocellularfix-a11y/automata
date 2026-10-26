@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { Store } from "./store.mjs";
 import { Coordinator } from "./coordinator.mjs";
-import { MODELS, MODES, effortsFor } from "./config.mjs";
+import { MODELS, MODES, TEAM_LIMITS, GIT_MODES, projectsRootOf, effortsFor } from "./config.mjs";
 import { findAgent } from "./agents.mjs";
 import { AuthManager } from "./auth.mjs";
 import { GitHubProjects } from "./github.mjs";
@@ -128,16 +128,21 @@ data: ${JSON.stringify(coordinator.snapshot())}
           throw new Error("Acción de acceso no válida.");
         }
         if (url.pathname === "/api/state" && req.method === "GET") return send(200, coordinator.snapshot());
-        if (url.pathname === "/api/capabilities" && req.method === "GET") return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, languages: ["es", "en"] }, models: MODELS, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
+        if (url.pathname === "/api/capabilities" && req.method === "GET") return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"] }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: MODELS, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
         if (url.pathname === "/api/pairing" && req.method === "GET") {
           if (!loopback(req.socket.remoteAddress)) return send(403, { error: "Abre la conexión de Android desde la PC." });
           return send(200, { token, lan, addresses: Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) });
         }
         if (url.pathname === "/api/projects" && req.method === "POST") {
           const input = await body();
+          const root = projectsRootOf(coordinator.settings);
+          if (input.source === "new") {
+            if (demo) throw new Error("Abre Automata sin --demo para crear repositorios.");
+            return send(201, coordinator.addProject(await github.createNew(input, { root })));
+          }
           if (input.source === "github") {
             if (demo || coordinator.busy) throw new Error("Importa el repositorio en una sesión real sin trabajo activo.");
-            return send(201, coordinator.addProject(await github.prepare(input)));
+            return send(201, coordinator.addProject(await github.prepare(input, { root })));
           }
           return send(201, coordinator.addProject(input));
         }
@@ -151,6 +156,10 @@ data: ${JSON.stringify(coordinator.snapshot())}
           const data = await body();
           if (data.action === "resume") await auth.requireConnected();
           return send(200, coordinator.control(data.action, typeof data.runId === "string" ? data.runId : void 0));
+        }
+        if (url.pathname === "/api/git" && req.method === "POST") {
+          const data = await body();
+          return send(200, await coordinator.resolveGit(String(data.runId ?? ""), String(data.gitId ?? ""), data.decision));
         }
         if (url.pathname === "/api/chat" && req.method === "POST") {
           const data = await body();

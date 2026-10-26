@@ -2,18 +2,35 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { DEFAULT_SETTINGS, validateProject, validateSettings, validateReview } from "./config.mjs";
+import { DEFAULT_SETTINGS, validateProject, validateSettings, validateReview, teamOf, agentLabel, combineReviews } from "./config.mjs";
 import { CliAgents, DemoAgents, gitEvidence, runChecks } from "./agents.mjs";
+import { GitOps, normalizeGit, hasGitActions } from "./git.mjs";
 import { directorPrompt, coderPrompt, chatPrompt } from "./prompts.mjs";
 const LIVE = /* @__PURE__ */ new Set(["running", "pausing"]);
+// When checks fail the executor fixes them straight away; the director only steps in after this many tries.
+const MAX_AUTO_FIXES = 3;
+const tail = (text, max) => {
+  const value = String(text ?? "");
+  return value.length > max ? "…" + value.slice(-max) : value;
+};
+const fixPrompt = (task, failing) => `Las verificaciones automáticas fallaron. Corrige el código para que pasen, sin cambiar los criterios ni debilitar o borrar las pruebas, y vuelve a ejecutarlas.
+
+TAREA ORIGINAL:
+${task}
+
+VERIFICACIONES FALLIDAS:
+${failing.map((check) => `$ ${check.command ?? "(sin comando)"} → código ${check.code ?? "?"}\n${tail(check.output, 2500)}${check.stderr ? "\n" + tail(check.stderr, 800) : ""}`).join("\n\n")}`;
+const gitView = ({ kind, message, branch, into, push }) => ({ kind, message, branch, into, push });
 export class Coordinator extends EventEmitter {
-  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence } = {}) {
+  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git } = {}) {
     super();
     this.store = store;
     this.demo = demo;
     this.agents = agents ?? (demo ? new DemoAgents() : new CliAgents());
     this.checks = checks;
     this.evidence = evidence;
+    this.git = git ?? new GitOps();
+    this.gitBusy = false;
     this.projects = store.read("projects.json", []);
     this.settings = validateSettings(store.read("settings.json", DEFAULT_SETTINGS));
     this.runs = store.read("runs.json", []);
@@ -43,10 +60,12 @@ export class Coordinator extends EventEmitter {
     this.persist();
   }
   persist() {
+    clearTimeout(this.eventsTimer);
+    this.eventsTimer = null;
     for (const [name, data] of Object.entries({ projects: this.projects, settings: this.settings, runs: this.runs, events: this.events.slice(-700), messages: this.messages.slice(-200) })) this.store.write(`${name}.json`, data);
   }
   snapshot() {
-    return { projects: this.projects, settings: this.settings, runs: this.runs.map(({ baseline, coderReport, nextPrompt, ...r }) => r), activeId: this.active?.id ?? null, events: this.events.slice(-250), messages: this.messages.slice(-100), demo: this.demo, busy: this.busy };
+    return { projects: this.projects, settings: this.settings, runs: this.runs.map(({ baseline, coderReport, nextPrompt, sessions, ...r }) => r), activeId: this.active?.id ?? null, events: this.events.slice(-250), messages: this.messages.slice(-100), demo: this.demo, busy: this.busy };
   }
   notify() {
     this.emit("state", this.snapshot());
@@ -56,7 +75,14 @@ export class Coordinator extends EventEmitter {
     if (item.text) item.text = item.text.slice(0, 18e3);
     this.events.push(item);
     this.events = this.events.slice(-700);
-    this.store.write("events.json", this.events);
+    // Agents emit many small events; rewriting the whole file for each one stalls everything else.
+    if (!this.eventsTimer) {
+      this.eventsTimer = setTimeout(() => {
+        this.eventsTimer = null;
+        this.store.write("events.json", this.events.slice(-700));
+      }, 250);
+      this.eventsTimer.unref?.();
+    }
     this.emit("event", item);
     return item;
   }
@@ -92,7 +118,7 @@ export class Coordinator extends EventEmitter {
     const p = this.projects.find((p2) => p2.id === projectId);
     if (!p) throw new Error("Selecciona un proyecto.");
     validateProject(p);
-    const run = { id: randomUUID(), projectId: p.id, project: { ...p }, settings: { ...this.settings }, status: "running", stage: "plan", round: 0, createdAt: (/* @__PURE__ */ new Date()).toISOString(), updatedAt: (/* @__PURE__ */ new Date()).toISOString(), baseline: "", coderReport: "", nextPrompt: "", review: null, checks: [], tokens: 0, costUsd: 0 };
+    const run = { id: randomUUID(), projectId: p.id, project: { ...p }, settings: JSON.parse(JSON.stringify(this.settings)), status: "running", stage: "plan", round: 0, createdAt: (/* @__PURE__ */ new Date()).toISOString(), updatedAt: (/* @__PURE__ */ new Date()).toISOString(), baseline: "", coderReport: "", nextPrompt: "", review: null, checks: [], tokens: 0, costUsd: 0, sessions: {}, gitQueue: [] };
     this.runs.unshift(run);
     this.active = run;
     this.event({ role: "system", kind: "start", text: `${this.demo ? "Demostración · " : ""}Iniciando ${p.name}. El director preparará la primera tarea.` });
@@ -143,8 +169,15 @@ export class Coordinator extends EventEmitter {
     if (this.controller.signal.aborted) return false;
     return !this.pauseIfRequested();
   }
-  async invoke(role, prompt, phase, dir) {
+  // prompts is a string or { full, short }: the short form is used when the agent's session is resumed.
+  async invoke(role, prompts, phase, dir, index = 0) {
     const r = this.active;
+    const team = teamOf(r.settings, role), member = team[index] ?? team[0];
+    const sessionKey = `${role}:${index}`;
+    const resume = r.settings.reuseSessions !== false ? r.sessions?.[sessionKey] ?? null : null;
+    const full = typeof prompts === "string" ? prompts : prompts.full;
+    const short = typeof prompts === "string" ? prompts : prompts.short ?? prompts.full;
+    const agent = { ...member, index, count: team.length, label: agentLabel(role, team, index), resume };
     let watcher, projectChanged = false;
     if (role === "auditor" && phase === "review" && r.settings.accessMode !== "limited") {
       const storeRoot = path.resolve(this.store.directory).toLowerCase();
@@ -164,12 +197,12 @@ export class Coordinator extends EventEmitter {
     }
     let result;
     try {
-      result = await this.agents.run({ role, prompt, phase, directory: dir, project: r.project, settings: { ...r.settings }, signal: this.controller.signal, emit: (e) => {
+      result = await this.agents.run({ role, prompt: resume ? short : full, fallbackPrompt: full, phase, directory: dir, project: r.project, settings: { ...r.settings }, agent, signal: this.controller.signal, emit: (e) => {
       if (e.model) {
         r.actualModels ??= {};
         r.actualModels[role] = e.model;
       }
-      this.event(e);
+      this.event(team.length > 1 ? { ...e, agent: agent.label } : e);
       } });
       if (watcher) await new Promise(resolve => setTimeout(resolve, 50));
     } finally { watcher?.close(); }
@@ -179,8 +212,110 @@ export class Coordinator extends EventEmitter {
       r.tokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
     }
     if (Number.isFinite(result.cost)) r.costUsd += result.cost;
-    if (result.sessionId) r[`${role}SessionId`] = result.sessionId;
+    if (result.sessionId) {
+      (r.sessions ??= {})[sessionKey] = result.sessionId;
+      r[`${role}SessionId`] = result.sessionId;
+    }
     return result;
+  }
+  gitNeedsApproval(mode, kind) {
+    return mode === "ask-all" || mode === "ask-push" && (kind === "push" || kind === "merge");
+  }
+  queueGit(r, action) {
+    r.gitQueue ??= [];
+    const same = (item) => item.status === "pending" && item.kind === action.kind && item.branch === action.branch && item.message === action.message && item.into === action.into;
+    if (r.gitQueue.some(same)) return null;
+    const item = { id: randomUUID(), ...action, status: "pending", at: (/* @__PURE__ */ new Date()).toISOString(), round: r.round };
+    r.gitQueue.push(item);
+    return item;
+  }
+  // The director decides; these run as the executor's hands and show up in its terminal.
+  async runGit(r, item) {
+    const dir = r.project.directory, tag = { runId: r.id, projectId: r.projectId }, signal = this.controller?.signal;
+    const onStep = (step) => {
+      const toolId = randomUUID();
+      this.event({ role: "coder", kind: "tool", toolId, tool: { name: "Bash", command: step.command, git: true }, text: step.command, ...tag });
+      this.event({ role: "coder", kind: "toolresult", toolId, text: step.output, error: step.code !== 0, ...tag });
+    };
+    let result;
+    try {
+      if (item.kind === "branch") result = await this.git.branch(dir, item.branch, { onStep, signal });
+      else if (item.kind === "commit") result = await this.git.commit(dir, item.message, { onStep, signal });
+      else if (item.kind === "push") result = await this.git.push(dir, { onStep, signal });
+      else {
+        result = await this.git.merge(dir, item.into, { onStep, signal });
+        if (result.ok && !result.noop && item.push) {
+          const pushed = await this.git.push(dir, { onStep, signal });
+          result = pushed.ok ? { ...result, summary: `${result.summary} y push` } : { ...pushed, error: `El merge se hizo, pero el push falló: ${pushed.error}` };
+        }
+      }
+    } catch (error) {
+      item.status = "failed";
+      item.error = error.name === "AbortError" ? "Interrumpido." : error.message;
+      throw error;
+    }
+    item.status = result.ok ? "done" : "failed";
+    item.summary = result.summary;
+    item.error = result.error;
+    item.doneAt = (/* @__PURE__ */ new Date()).toISOString();
+    if (result.blocked?.length) this.event({ role: "system", kind: "warning", text: `Archivos sensibles excluidos del commit: ${result.blocked.join(", ")}`, ...tag });
+    this.event({ role: "system", kind: result.ok ? "success" : "warning", text: result.ok ? result.summary : result.error, ...tag });
+    this.persist();
+    this.notify();
+    return result.ok;
+  }
+  async applyGit(review) {
+    const r = this.active, mode = r.settings.gitMode ?? "ask-push", decision = normalizeGit(review.git);
+    review.git = decision;
+    if (this.demo || mode === "off" || !hasGitActions(decision)) return;
+    const info = await this.git.inspect(r.project.directory);
+    if (!info.repo) {
+      this.event({ role: "system", kind: "warning", text: "El director propuso acciones de Git, pero esta carpeta no es un repositorio." });
+      return;
+    }
+    const actions = [];
+    if (decision.branch) actions.push({ kind: "branch", branch: decision.branch });
+    if (decision.commit) actions.push({ kind: "commit", message: decision.message });
+    if (decision.push) actions.push({ kind: "push" });
+    if (decision.mergeInto) actions.push({ kind: "merge", into: decision.mergeInto, push: decision.push });
+    for (const action of actions) {
+      const item = this.queueGit(r, action);
+      if (!item) continue;
+      if (this.gitNeedsApproval(mode, item.kind)) {
+        this.event({ role: "auditor", kind: "approval", text: "Aprobación pendiente", gitId: item.id, git: gitView(item) });
+        continue;
+      }
+      if (!await this.runGit(r, item)) break;
+    }
+    this.persist();
+    this.notify();
+  }
+  async resolveGit(runId, gitId, decision) {
+    const r = this.runs.find((run) => run.id === runId);
+    const item = r?.gitQueue?.find((entry) => entry.id === gitId);
+    if (!item) throw new Error("No se encontró esa operación de Git.");
+    if (item.status !== "pending") throw new Error("Esa operación ya se resolvió.");
+    if (!["approve", "reject"].includes(decision)) throw new Error("Decisión no válida.");
+    if (decision === "reject") {
+      item.status = "rejected";
+      item.doneAt = (/* @__PURE__ */ new Date()).toISOString();
+      this.event({ role: "system", kind: "warning", text: "Operación de Git rechazada.", runId: r.id, projectId: r.projectId });
+      this.persist();
+      this.notify();
+      return item;
+    }
+    if (this.gitBusy) throw new Error("Hay otra operación de Git en curso.");
+    // Pushing is safe while the executor works; committing, switching and merging are not.
+    if (item.kind !== "push" && this.busy) throw new Error("Espera a que termine la operación actual.");
+    this.gitBusy = true;
+    try {
+      await this.runGit(r, item);
+    } finally {
+      this.gitBusy = false;
+      this.persist();
+      this.notify();
+    }
+    return item;
   }
   async loop() {
     const r = this.active, p = r.project, s = r.settings, root = this.store.runDir(r.id);
@@ -190,20 +325,53 @@ export class Coordinator extends EventEmitter {
       fs.mkdirSync(dir, { recursive: true });
       if (r.stage === "plan" || r.stage === "review") {
         const phase = r.stage;
+        const failing = r.checks.filter((c) => !c.passed);
+        if (phase === "review" && s.fastFix !== false && !r.forceDirector && failing.length && (r.autoFixes ?? 0) < MAX_AUTO_FIXES) {
+          // Red checks do not need the director's judgement: send the failures straight back to the executor.
+          r.autoFixes = (r.autoFixes ?? 0) + 1;
+          r.baseTask ??= r.nextPrompt;
+          r.nextPrompt = fixPrompt(r.baseTask, failing);
+          r.stage = "code";
+          this.event({ role: "system", kind: "phase", text: `Verificaciones fallidas: el ejecutor corrige directamente (${r.autoFixes}/${MAX_AUTO_FIXES}).` });
+          r.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+          this.persist();
+          this.notify();
+          continue;
+        }
+        if (phase === "review") {
+          r.autoFixes = 0;
+          r.forceDirector = false;
+        }
         this.event({ role: "auditor", kind: "phase", text: phase === "plan" ? "Voy a inspeccionar el proyecto y preparar una tarea verificable." : "Estoy contrastando el reporte con el código y las verificaciones." });
         const evidence = await this.evidence(p.directory);
-        const prompt = directorPrompt(p, s, { phase, report: r.coderReport, evidence: `CAMBIOS PREVIOS:
-${r.baseline}
-
-ESTADO ACTUAL:
+        const gitInfo = this.demo || s.gitMode === "off" ? null : await this.git.inspect(p.directory);
+        const state = `ESTADO ACTUAL:
 ${evidence}
 
 VERIFICACIONES:
 ${JSON.stringify(r.checks)}
-${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige evidencia explícita."}`, history: r.review?.summary });
-        const result = await this.invoke("auditor", prompt, phase, dir);
-        const review = validateReview(result.review, p, phase);
-        if (result.projectChanged) {
+${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige evidencia explícita."}`;
+        const evidenceFull = `CAMBIOS PREVIOS:
+${r.baseline}
+
+${state}`;
+        // The first director plans. Reviewers take turns after that: each one only runs if the previous
+        // approved, because a single "continue" or "blocked" already decides the round.
+        const team = teamOf(s, "auditor"), reviewers = phase === "plan" ? 1 : team.length;
+        const reviews = [];
+        let projectChanged = false;
+        for (let i = 0; i < reviewers; i++) {
+          const reviewDir = i === 0 ? dir : path.join(dir, `reviewer-${i + 1}`);
+          fs.mkdirSync(reviewDir, { recursive: true });
+          const options = { phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo } };
+          const prompts = { full: directorPrompt(p, s, { ...options, evidence: evidenceFull }), short: directorPrompt(p, s, { ...options, evidence: state, short: true }) };
+          const result = await this.invoke("auditor", prompts, phase, reviewDir, i);
+          reviews.push(validateReview(result.review, p, phase));
+          projectChanged ||= !!result.projectChanged;
+          if (reviews[i].decision !== "complete" || projectChanged) break;
+        }
+        const review = reviewers > 1 ? combineReviews(reviews, reviews.map((_, i) => agentLabel("auditor", team, i))) : reviews[0];
+        if (projectChanged) {
           r.checks = [];
           r.checksRound = null;
           if (review.decision === "complete") {
@@ -215,9 +383,11 @@ ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige ev
         }
         if (review.decision === "complete" && r.checks.some((c) => !c.passed)) throw new Error("El auditor intentó aprobar con verificaciones fallidas. Revisa la evidencia antes de continuar.");
         if (review.decision === "complete" && p.checks.length && (r.checksRound !== r.round || r.checks.length !== p.checks.length)) throw new Error("Faltan verificaciones de la ronda actual.");
+        review.git = normalizeGit(review.git);
         fs.writeFileSync(path.join(dir, "review.json"), JSON.stringify(review, null, 2));
         r.review = review;
         this.event({ role: "auditor", kind: "review", text: review.summary, review });
+        if (review.decision !== "blocked") await this.applyGit(review);
         if (review.decision === "complete") {
           r.status = "complete";
           r.stage = "complete";
@@ -231,6 +401,7 @@ ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige ev
           break;
         }
         r.nextPrompt = review.nextPrompt;
+        r.baseTask = review.nextPrompt;
         r.stage = "code";
       } else if (r.stage === "code") {
         if (r.round >= s.maxRounds) {
@@ -243,8 +414,12 @@ ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige ev
         r.checksRound = null;
         const work = path.join(root, `round-${String(r.round).padStart(2, "0")}`);
         fs.mkdirSync(work, { recursive: true });
-        this.event({ role: "coder", kind: "phase", text: `Ronda ${r.round} · ${r.nextPrompt}` });
-        const result = await this.invoke("coder", coderPrompt(p, s, r.nextPrompt, r.baseline), "code", work);
+        // Coders take turns by round: round 1 uses the first, round 2 the second, and so on.
+        const coders = teamOf(s, "coder"), turn = (r.round - 1) % coders.length;
+        const teamInfo = coders.length > 1 ? { index: turn, count: coders.length } : null;
+        this.event({ role: "coder", kind: "phase", text: `Ronda ${r.round} · ${r.nextPrompt}`, ...coders.length > 1 ? { agent: agentLabel("coder", coders, turn) } : {} });
+        const prompts = { full: coderPrompt(p, s, r.nextPrompt, r.baseline, teamInfo), short: coderPrompt(p, s, r.nextPrompt, r.baseline, teamInfo, true) };
+        const result = await this.invoke("coder", prompts, "code", work, turn);
         r.coderReport = result.text;
         fs.writeFileSync(path.join(work, "coder-report.md"), r.coderReport);
         this.event({ role: "coder", kind: "report", text: r.coderReport });
@@ -338,11 +513,15 @@ ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige ev
 INSTRUCCIÓN NUEVA DEL USUARIO (dirige la siguiente tarea sin cambiar los criterios):
 ${message.text}`;
             if (run.stage !== "checks") run.stage = "review";
+            // The user is talking to the director: do not let the quick fix loop bypass them.
+            run.forceDirector = true;
             message.status = "delivered";
             message.answer = "Instrucción entregada al director. Se revisará antes de la siguiente tarea.";
           }
         } else {
-          const roles = message.target === "both" ? ["coder", "auditor"] : [message.target];
+          // A task for the director is a hand-off: the director (read-only) decides what to change, then the executor writes it.
+          const handoff = message.kind === "task" && message.target === "auditor";
+          const roles = message.target === "both" ? ["coder", "auditor"] : handoff ? ["auditor", "coder"] : [message.target];
           message.answers = [];
           for (const role of roles) {
             message.activeRole = role;
@@ -360,6 +539,7 @@ ${message.text}`;
             delete message.activeRole;
             this.persist();
             this.notify();
+            if (handoff && message.answers.at(-1)?.error) break;
           }
           message.status = message.answers.some((a) => a.error) ? "error" : "answered";
           if (withinRun && message.kind === "task" && this.active?.projectId === project.id) {

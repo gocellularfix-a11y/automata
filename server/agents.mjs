@@ -117,93 +117,170 @@ export function runProcess(command, args, { cwd, input = "", signal, timeoutMs =
     child.stdin.end(input);
   });
 }
-export function decodeEvent(role, raw) {
+const clip = (value, max) => {
+  const text = String(value ?? "");
+  return text.length > max ? text.slice(0, max) + "…" : text;
+};
+const clipLines = (value, maxLines, maxChars = 4000) => {
+  const lines = String(value ?? "").split(/\r?\n/);
+  const kept = lines.slice(0, maxLines).join("\n");
+  return clip(kept, maxChars) + (lines.length > maxLines ? `\n… (${lines.length - maxLines} líneas más)` : "");
+};
+// A compact unified-diff-like view: removed lines with "-", added lines with "+".
+function makeDiff(edits) {
+  const out = [];
+  for (const { old_string: before, new_string: after } of edits) {
+    for (const line of String(before ?? "").split(/\r?\n/).slice(0, 20)) out.push("- " + line);
+    for (const line of String(after ?? "").split(/\r?\n/).slice(0, 20)) out.push("+ " + line);
+  }
+  return clip(out.join("\n"), 4000);
+}
+// Describes a Claude tool call so the UI can render it like a terminal session.
+export function toolInfo(name, input = {}) {
+  const base = { name: String(name) };
+  switch (name) {
+    case "Bash": return { ...base, command: clip(input.command, 2000), description: clip(input.description, 200) };
+    case "Edit": return { ...base, path: input.file_path, diff: makeDiff([input]) };
+    case "MultiEdit": return { ...base, path: input.file_path, diff: makeDiff(Array.isArray(input.edits) ? input.edits : []) };
+    case "Write": return { ...base, path: input.file_path, content: clipLines(input.content, 40), lines: String(input.content ?? "").split(/\r?\n/).length };
+    case "Read": return { ...base, path: input.file_path };
+    case "Glob": case "Grep": return { ...base, pattern: clip(input.pattern, 300), path: input.path };
+    case "TodoWrite": return { ...base, todos: (Array.isArray(input.todos) ? input.todos : []).slice(0, 12).map((todo) => ({ content: clip(todo.content, 140), status: todo.status })) };
+    default: return { ...base, input: clip(JSON.stringify(input), 300) };
+  }
+}
+const toolLabel = (tool) => `${tool.name} · ${tool.command ?? tool.path ?? tool.pattern ?? tool.input ?? ""}`.trim();
+const redactTool = (tool) => Object.fromEntries(Object.entries(tool).map(([key, value]) => [key, typeof value === "string" ? redact(value) : value]));
+const resultText = (content) => Array.isArray(content) ? content.map((part) => part?.text ?? "").join("\n") : String(content ?? "");
+// One raw CLI line can carry several things (text plus tool calls), so decoding returns a list.
+export function decodeEvents(role, raw) {
   let e;
   try {
     e = JSON.parse(raw);
   } catch {
-    return null;
+    return [];
   }
   if (role === "coder") {
-    if (e.type === "result") return { kind: "result", text: e.result ?? "", error: !!e.is_error, sessionId: e.session_id, usage: e.usage, cost: e.total_cost_usd };
+    if (e.type === "result") return [{ kind: "result", text: e.result ?? "", error: !!e.is_error, sessionId: e.session_id, usage: e.usage, cost: e.total_cost_usd }];
     if (e.type === "assistant") {
-      const blocks = e.message?.content ?? [];
-      const text = blocks.filter((c) => c.type === "text").map((c) => c.text).join("\n");
-      const tools = blocks.filter((c) => c.type === "tool_use").map((c) => `${c.name}${c.input?.file_path ? " · " + c.input.file_path : ""}`);
-      return { kind: tools.length ? "tool" : "message", text: [text, ...tools].filter(Boolean).join("\n") };
+      const out = [];
+      for (const block of e.message?.content ?? []) {
+        if (block.type === "text" && block.text?.trim()) out.push({ kind: "message", text: block.text });
+        else if (block.type === "tool_use") {
+          const tool = redactTool(toolInfo(block.name, block.input));
+          out.push({ kind: "tool", toolId: block.id, tool, text: toolLabel(tool) });
+        }
+      }
+      return out;
     }
-    if (e.type === "system" && e.subtype === "init") return { kind: "session", text: "Sesión de Claude iniciada", sessionId: e.session_id, model: e.model };
-    if (e.type === "system" && e.subtype === "permission_denied") return { kind: "warning", text: "Claude encontró una herramienta sin permiso. El reporte debe indicar el bloqueo." };
+    if (e.type === "user") {
+      return (Array.isArray(e.message?.content) ? e.message.content : []).filter((block) => block.type === "tool_result").map((block) => ({ kind: "toolresult", toolId: block.tool_use_id, text: clip(resultText(block.content), 3000), error: block.is_error === true }));
+    }
+    if (e.type === "system" && e.subtype === "init") return [{ kind: "session", text: "Sesión de Claude iniciada", sessionId: e.session_id, model: e.model }];
+    if (e.type === "system" && e.subtype === "permission_denied") return [{ kind: "warning", text: "Claude encontró una herramienta sin permiso. El reporte debe indicar el bloqueo." }];
   } else {
-    if (e.type === "thread.started") return { kind: "session", text: "Sesión de Codex iniciada", sessionId: e.thread_id };
-    if (e.type === "turn.completed") return { kind: "usage", usage: e.usage };
-    if (e.type === "error" || e.type === "turn.failed") return { kind: "warning", text: e.message ?? e.error?.message ?? "El auditor reportó un error." };
-    if (e.type === "item.completed" && e.item?.type === "agent_message") return { kind: "message", text: e.item.text };
-    if (e.type === "item.started" && e.item?.type === "command_execution") return { kind: "tool", text: "Inspeccionando el repositorio", detail: e.item.command };
+    if (e.type === "thread.started") return [{ kind: "session", text: "Sesión de Codex iniciada", sessionId: e.thread_id }];
+    if (e.type === "turn.completed") return [{ kind: "usage", usage: e.usage }];
+    if (e.type === "error" || e.type === "turn.failed") return [{ kind: "warning", text: e.message ?? e.error?.message ?? "El auditor reportó un error." }];
+    if (e.type === "item.completed" && e.item?.type === "agent_message") return [{ kind: "message", text: e.item.text }];
+    if (e.type === "item.started" && e.item?.type === "command_execution") {
+      const tool = { name: "Bash", command: redact(clip(e.item.command, 2000)) };
+      return [{ kind: "tool", toolId: e.item.id, tool, text: toolLabel(tool) }];
+    }
+    if (e.type === "item.completed" && e.item?.type === "command_execution") return [{ kind: "toolresult", toolId: e.item.id, text: clip(e.item.aggregated_output, 3000), error: e.item.exit_code != null && e.item.exit_code !== 0 }];
   }
-  return null;
+  return [];
 }
+// Single-event view kept for callers that only need the first thing a line says.
+export function decodeEvent(role, raw) {
+  return decodeEvents(role, raw)[0] ?? null;
+}
+const PROGRESS = /* @__PURE__ */ new Set(["tool", "toolresult", "message"]);
 export class CliAgents {
-  async run({ role, prompt, project, settings, phase, directory, signal, emit }) {
+  async run(params) {
+    const { prompt, fallbackPrompt, agent, emit } = params;
+    if (!agent?.resume) return this.attempt({ ...params, sessionId: null });
+    try {
+      return await this.attempt({ ...params, sessionId: agent.resume });
+    } catch (error) {
+      // A session that cannot be resumed is a speed optimisation failing, not a task failing:
+      // start over with the full prompt, unless the resumed run already did work.
+      if (error.name === "AbortError" || error.progressed || /límite de tiempo/.test(error.message)) throw error;
+      emit?.({ role: params.role, kind: "warning", text: "No se pudo retomar la sesión anterior; se inicia una nueva." });
+      return this.attempt({ ...params, prompt: fallbackPrompt ?? prompt, sessionId: null });
+    }
+  }
+  async attempt({ role, prompt, project, settings, phase, directory, signal, emit, agent, sessionId }) {
+    // A team member brings its own model and reasoning level; callers without one use the role's primary.
+    const model = agent?.model ?? settings[role === "auditor" ? "auditorModel" : "coderModel"];
+    const effort = agent?.effort ?? settings[role === "auditor" ? "auditorEffort" : "coderEffort"];
     const executable = findAgent(role);
     if (!executable) throw new Error(`${role === "coder" ? "Claude Code" : "Codex CLI"} no está instalado. Instálalo o configura AUTOMATA_CLAUDE / AUTOMATA_CODEX.`);
     fs.writeFileSync(path.join(directory, `${phase}-prompt.txt`), prompt, { mode: 384 });
-    let result = null, lastMessage = "", sessionId = null, usage = null;
+    let result = null, lastMessage = "", newSessionId = null, usage = null, progressed = false;
     const outputFile = path.join(directory, `${phase}-response.json`);
     const conversation = ["chat", "task"].includes(phase);
-    const fullAccess = settings.accessMode !== "limited" && phase !== "chat";
     let args;
     if (role === "auditor") {
+      // The director never changes the project: it inspects and decides, the executor writes.
       const schema = conversation ? null : path.join(directory, "review-schema.json");
       if (schema) fs.writeFileSync(schema, JSON.stringify(REVIEW_SCHEMA));
-      // Full access is selected by the user; explicit consultations stay read-only.
-      args = ["exec", "--skip-git-repo-check", ...(fullAccess ? ["--dangerously-bypass-approvals-and-sandbox"] : ["--sandbox", "read-only"]), "--model", settings.auditorModel, "--json", "--output-last-message", outputFile, "--cd", project.directory];
-      if (schema) args.push("--output-schema", schema);
-      if (settings.auditorEffort !== "default") args.push("-c", `model_reasoning_effort="${settings.auditorEffort}"`);
-      args.push("-");
+      const effortArgs = effort !== "default" ? ["-c", `model_reasoning_effort="${effort}"`] : [];
+      args = sessionId
+        ? ["exec", "resume", "--skip-git-repo-check", "-c", 'sandbox_mode="read-only"', "--model", model, "--json", "--output-last-message", outputFile, ...schema ? ["--output-schema", schema] : [], ...effortArgs, sessionId, "-"]
+        : ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "--model", model, "--json", "--output-last-message", outputFile, "--cd", project.directory, ...schema ? ["--output-schema", schema] : [], ...effortArgs, "-"];
     } else {
-      args = ["-p", "--model", settings.coderModel, "--output-format", "stream-json", "--verbose", "--max-turns", String(MODES[settings.mode].turns), "--permission-mode", fullAccess ? "bypassPermissions" : phase === "chat" ? "plan" : "acceptEdits"];
+      const fullAccess = settings.accessMode !== "limited" && phase !== "chat";
+      args = ["-p", ...sessionId ? ["--resume", sessionId] : [], "--model", model, "--output-format", "stream-json", "--verbose", "--max-turns", String(MODES[settings.mode].turns), "--permission-mode", fullAccess ? "bypassPermissions" : phase === "chat" ? "plan" : "acceptEdits"];
       if (!fullAccess) args.push("--allowedTools", phase === "chat" ? "Read,Glob,Grep" : "Read,Glob,Grep,Edit,Write,Bash(git status *),Bash(git diff *),Bash(git log *)");
-      if (settings.coderEffort !== "default") args.push("--effort", settings.coderEffort);
+      if (effort !== "default") args.push("--effort", effort);
     }
     const rawFile = path.join(directory, `${phase}-${role}.jsonl`);
-    const executed = await runProcess(executable.command, [...executable.args, ...args], {
-      cwd: project.directory,
-      input: prompt,
-      signal,
-      env: executable.env,
-      timeoutMs: settings.timeoutMinutes * 6e4,
-      onLine: (line, stream) => {
-        if (stream === "stderr") {
-          fs.appendFileSync(rawFile, JSON.stringify({ stderr: redact(line) }) + "\n");
-          return;
+    let executed;
+    try {
+      executed = await runProcess(executable.command, [...executable.args, ...args], {
+        cwd: project.directory,
+        input: prompt,
+        signal,
+        env: executable.env,
+        timeoutMs: settings.timeoutMinutes * 6e4,
+        onLine: (line, stream) => {
+          if (stream === "stderr") {
+            fs.appendFileSync(rawFile, JSON.stringify({ stderr: redact(line) }) + "\n");
+            return;
+          }
+          fs.appendFileSync(rawFile, redact(line) + "\n");
+          for (const e of decodeEvents(role, line)) {
+            if (PROGRESS.has(e.kind)) progressed = true;
+            if (e.kind === "result") result = e;
+            if (e.sessionId) newSessionId = e.sessionId;
+            if (e.usage) usage = e.usage;
+            if (e.kind === "message") lastMessage = e.text;
+            if (e.kind !== "result" && (e.text || e.kind === "toolresult")) emit({ role, ...e, text: redact(e.text ?? "") });
+          }
         }
-        fs.appendFileSync(rawFile, redact(line) + "\n");
-        const e = decodeEvent(role, line);
-        if (!e) return;
-        if (e.kind === "result") result = e;
-        if (e.sessionId) sessionId = e.sessionId;
-        if (e.usage) usage = e.usage;
-        if (e.kind === "message") lastMessage = e.text;
-        if (e.text && e.kind !== "result") emit({ role, ...e, text: redact(e.text) });
-      }
-    });
-    if (executed.code !== 0 || result?.error) throw new Error(redact(result?.text || executed.stderr || `El agente terminó con código ${executed.code}.`).slice(-8e3));
+      });
+    } catch (error) {
+      error.progressed = progressed;
+      throw error;
+    }
+    if (executed.code !== 0 || result?.error) throw Object.assign(new Error(redact(result?.text || executed.stderr || `El agente terminó con código ${executed.code}.`).slice(-8e3)), { progressed });
+    const sessionOut = newSessionId ?? sessionId ?? null;
     if (role === "coder") {
-      if (!result?.text?.trim()) throw new Error("Claude terminó sin reporte final.");
+      if (!result?.text?.trim()) throw Object.assign(new Error("Claude terminó sin reporte final."), { progressed });
       fs.writeFileSync(outputFile, JSON.stringify(result));
-      return { text: redact(result.text), sessionId, usage, cost: result.cost ?? null };
+      return { text: redact(result.text), sessionId: sessionOut, resumed: !!sessionId, usage, cost: result.cost ?? null };
     }
     const text = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, "utf8").trim() : lastMessage;
-    if (!text) throw new Error("Codex terminó sin respuesta.");
-    if (conversation) return { text: redact(text), sessionId, usage };
+    if (!text) throw Object.assign(new Error("Codex terminó sin respuesta."), { progressed });
+    if (conversation) return { text: redact(text), sessionId: sessionOut, resumed: !!sessionId, usage };
     let review;
     try {
       review = JSON.parse(text);
     } catch {
-      throw new Error("Codex no entregó el JSON de auditoría esperado.");
+      throw Object.assign(new Error("Codex no entregó el JSON de auditoría esperado."), { progressed });
     }
-    return { text: review.summary, review, sessionId, usage };
+    return { text: review.summary, review, sessionId: sessionOut, resumed: !!sessionId, usage };
   }
 }
 export async function gitEvidence(directory) {

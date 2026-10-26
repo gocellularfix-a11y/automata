@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 export const MODES = {
   small: { label: "Pequeño", description: "Un cambio concreto por ronda. Audita antes de avanzar.", turns: 20 },
   medium: { label: "Mediano", description: "Una funcionalidad acotada por ronda, con sus verificaciones.", turns: 45 },
@@ -18,7 +19,21 @@ export const MODELS = {
     { id: "gpt-6-astra", label: "Astra", detail: "Análisis profundo" }
   ]
 };
-export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30 };
+// Agent 1 of each role lives in coderModel/coderEffort and auditorModel/auditorEffort; extra agents follow it.
+export const TEAM_LIMITS = { coder: 3, auditor: 2 };
+const TEAM_KEYS = { coder: "extraCoders", auditor: "extraAuditors" };
+const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:[\]-]{0,99}$/;
+export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true };
+// ask-push: commits run on their own, push and merge wait for the user. ask-all: everything waits. auto: nothing waits. off: the director does not decide Git.
+export const GIT_MODES = ["ask-push", "ask-all", "auto", "off"];
+export const defaultProjectsRoot = () => path.join(os.homedir(), "Automata Projects");
+export const projectsRootOf = (settings) => settings?.projectsRoot || defaultProjectsRoot();
+export const teamOf = (settings, role) => [{ model: settings[role + "Model"], effort: settings[role + "Effort"] }, ...settings[TEAM_KEYS[role]] ?? []];
+export const modelLabel = (role, id) => MODELS[role].find((m) => m.id === id)?.label ?? id;
+export function agentLabel(role, team, index) {
+  const agent = team[index] ?? team[0];
+  return `${role === "coder" ? "Claude" : "Codex"} ${index + 1} · ${modelLabel(role, agent.model)}`;
+}
 export function effortsFor(model, role) {
   if (role === "coder") return ["default", "low", "medium", "high", "xhigh", "max"];
   return ["default", "low", "medium", "high", "xhigh", "max", .../luna/.test(model) ? [] : ["ultra"]];
@@ -29,9 +44,25 @@ export function validateSettings(value = {}) {
   if (!MODES[s.mode]) throw new Error("Elige un tamaño de trabajo válido.");
   if (!["full", "limited"].includes(s.accessMode)) throw new Error("Elige acceso completo o limitado.");
   for (const role of ["coder", "auditor"]) {
-    if (typeof s[`${role}Model`] !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:[\]-]{0,99}$/.test(s[`${role}Model`])) throw new Error("Identificador de modelo no válido.");
+    if (typeof s[`${role}Model`] !== "string" || !MODEL_ID.test(s[`${role}Model`])) throw new Error("Identificador de modelo no válido.");
     if (!effortsFor(s[`${role}Model`], role).includes(s[`${role}Effort`])) throw new Error("Ese nivel de razonamiento no es compatible.");
+    const extras = s[TEAM_KEYS[role]] ?? [];
+    if (!Array.isArray(extras) || extras.length > TEAM_LIMITS[role] - 1) throw new Error(role === "coder" ? "Usa de 1 a 3 codificadores." : "Usa de 1 a 2 revisores.");
+    s[TEAM_KEYS[role]] = extras.map((agent) => {
+      const model = agent?.model, effort = agent?.effort ?? "default";
+      if (typeof model !== "string" || !MODEL_ID.test(model)) throw new Error("Identificador de modelo no válido.");
+      if (!effortsFor(model, role).includes(effort)) throw new Error("Ese nivel de razonamiento no es compatible.");
+      return { model, effort };
+    });
   }
+  if (!GIT_MODES.includes(s.gitMode)) throw new Error("Elige cuánto decide el director sobre Git.");
+  if (typeof s.projectsRoot !== "string" || s.projectsRoot.length > 1000) throw new Error("La carpeta de proyectos debe ser una ruta absoluta que no sea la raíz del disco.");
+  if (s.projectsRoot.trim()) {
+    const root = path.resolve(s.projectsRoot.trim());
+    if (!path.isAbsolute(s.projectsRoot.trim()) || root === path.parse(root).root) throw new Error("La carpeta de proyectos debe ser una ruta absoluta que no sea la raíz del disco.");
+    s.projectsRoot = root;
+  } else s.projectsRoot = "";
+  for (const k of ["reuseSessions", "fastFix"]) if (typeof s[k] !== "boolean") throw new Error(`${k}: usa verdadero o falso.`);
   for (const [k, min, max] of [["maxRounds", 1, 50], ["timeoutMinutes", 1, 120]]) {
     s[k] = Number(s[k]);
     if (!Number.isInteger(s[k]) || s[k] < min || s[k] > max) throw new Error(`${k}: usa un número entre ${min} y ${max}.`);
@@ -70,15 +101,39 @@ export function validateProject(input, { checkDirectory = true } = {}) {
 export const REVIEW_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["decision", "summary", "nextPrompt", "findings", "criteria"],
+  required: ["decision", "summary", "nextPrompt", "findings", "criteria", "git"],
   properties: {
     decision: { type: "string", enum: ["continue", "complete", "blocked"] },
     summary: { type: "string" },
     nextPrompt: { type: "string" },
     findings: { type: "array", items: { type: "object", additionalProperties: false, required: ["severity", "file", "description", "evidence"], properties: { severity: { type: "string", enum: ["critical", "major", "minor", "info"] }, file: { type: "string" }, description: { type: "string" }, evidence: { type: "string" } } } },
-    criteria: { type: "array", items: { type: "object", additionalProperties: false, required: ["criterion", "met", "evidence"], properties: { criterion: { type: "string" }, met: { type: "boolean" }, evidence: { type: "string" } } } }
+    criteria: { type: "array", items: { type: "object", additionalProperties: false, required: ["criterion", "met", "evidence"], properties: { criterion: { type: "string" }, met: { type: "boolean" }, evidence: { type: "string" } } } },
+    // What the director decides about Git. The executor (not the director) carries it out; empty values mean "do nothing".
+    git: { type: "object", additionalProperties: false, required: ["commit", "message", "push", "branch", "merge_into"], properties: { commit: { type: "boolean" }, message: { type: "string" }, push: { type: "boolean" }, branch: { type: "string" }, merge_into: { type: "string" } } }
   }
 };
+// Reviewers run in order and only the last one may be something other than "complete".
+// Approval needs every reviewer; anything else is decided by the reviewer that did not approve.
+export function combineReviews(reviews, labels) {
+  const last = reviews.length - 1, tag = (review, i) => `${labels[i]}: ${review.summary}`;
+  if (reviews[last].decision !== "complete") return { ...reviews[last], summary: tag(reviews[last], last) };
+  // Approval: the primary director (first) decides Git, because the others only confirm.
+  return {
+    decision: "complete",
+    summary: reviews.map(tag).join("\n"),
+    nextPrompt: "",
+    git: reviews[0].git,
+    findings: reviews.flatMap((review, i) => review.findings.map((f) => ({ ...f, description: `[${labels[i]}] ${f.description}` }))),
+    criteria: reviews[0].criteria.map((c) => ({
+      criterion: c.criterion,
+      met: reviews.every((review) => review.criteria.some((x) => x.criterion === c.criterion && x.met)),
+      evidence: reviews.map((review, i) => {
+        const x = review.criteria.find((y) => y.criterion === c.criterion);
+        return x?.evidence?.trim() ? `${labels[i]}: ${x.evidence}` : "";
+      }).filter(Boolean).join("\n")
+    }))
+  };
+}
 export function validateReview(r, project, phase = "review") {
   if (!r || !["continue", "complete", "blocked"].includes(r.decision) || typeof r.summary !== "string" || typeof r.nextPrompt !== "string" || !Array.isArray(r.findings) || !Array.isArray(r.criteria)) throw new Error("El auditor no entregó una decisión válida.");
   if (r.findings.some((f) => !["critical", "major", "minor", "info"].includes(f.severity) || ["file", "description", "evidence"].some((k) => typeof f[k] !== "string"))) throw new Error("Los hallazgos del auditor no son válidos.");

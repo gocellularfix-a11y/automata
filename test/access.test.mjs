@@ -19,39 +19,54 @@ function fixture(t) {
 const project = directory => ({ name: "Reloj", directory, objective: "Crear un reloj digital.", criteria: ["Funciona."], checks: [] });
 const review = complete => ({ decision: complete ? "complete" : "continue", summary: "Resultado comprobado.", nextPrompt: complete ? "" : "Construye el reloj.", findings: [], criteria: [{ criterion: "Funciona.", met: complete, evidence: complete ? "Prueba aprobada." : "Pendiente." }] });
 
-test("el acceso completo es explícito y las consultas de lectura conservan su alcance", t => {
+test("el acceso completo es explícito, el ejecutor recibe permiso de trabajo y el director solo lee", t => {
   const p = project(fixture(t));
   assert.equal(validateSettings().accessMode, "full");
   assert.throws(() => validateSettings({ accessMode: "admin-magic" }), /acceso/);
-  const task = chatPrompt(p, "auditor", "Crea la carpeta y el repositorio de GitHub.", "", validateSettings(), { kind: "task" });
+  const task = chatPrompt(p, "coder", "Crea la carpeta y el repositorio de GitHub.", "", validateSettings(), { kind: "task" });
   assert.match(task, /TAREA DE IMPLEMENTACIÓN AUTORIZADA/);
   assert.match(task, /crear carpetas y archivos/);
   assert.match(task, /GitHub CLI/);
   assert.match(task, /créalo privado/);
   assert.doesNotMatch(task, /CONSULTA DE SOLO LECTURA|No inicialices repositorios/);
+  const director = chatPrompt(p, "auditor", "Crea la carpeta y el repositorio de GitHub.", "", validateSettings(), { kind: "task" });
+  assert.match(director, /TAREA PARA EL EJECUTOR/);
+  assert.match(director, /Eres de solo lectura/);
+  assert.match(director, /Claude, que escribirá el código/);
+  assert.doesNotMatch(director, /TAREA DE IMPLEMENTACIÓN AUTORIZADA|ACCESO COMPLETO autorizado/);
   const question = chatPrompt(p, "coder", "¿Qué cambió?", "", validateSettings(), { kind: "question" });
   assert.match(question, /CONSULTA DE SOLO LECTURA/);
   assert.doesNotMatch(question, /ACCESO COMPLETO autorizado/);
+  const handoff = chatPrompt(p, "coder", "Crea el reloj.", "", validateSettings(), { kind: "task", previousAnswers: [{ role: "auditor", text: "1. Crea reloj.js" }] });
+  assert.match(handoff, /INSTRUCCIONES DEL DIRECTOR/);
+  assert.match(handoff, /1. Crea reloj.js/);
 });
 
-test("ambas CLI reciben permisos de trabajo y escriben archivos; Solo consultar no puede escribir", async t => {
+test("el ejecutor escribe con permiso de trabajo; el director es de solo lectura incluso con acceso completo", async t => {
   const dir = fixture(t), stub = path.join(dir, "cli.mjs");
-  fs.writeFileSync(stub, `import fs from 'node:fs';let prompt='';for await(const c of process.stdin)prompt+=c;const args=process.argv.slice(2),codex=args[0]==='exec',role=codex?'auditor':'coder',mode=codex?args.includes('--dangerously-bypass-approvals-and-sandbox')?'full':'read':args[args.indexOf('--permission-mode')+1];fs.writeFileSync('args.json',JSON.stringify(args));const read=prompt.includes('CONSULTA DE SOLO LECTURA');if(!read){if(mode!=='full'&&mode!=='bypassPermissions')process.exit(2);fs.writeFileSync(role+'.txt','archivo creado');}else if(mode!=='read'&&mode!=='plan')process.exit(3);const text=read?'Consulta sin cambios.':'Archivo creado.';if(codex)fs.writeFileSync(args[args.indexOf('--output-last-message')+1],text);else console.log(JSON.stringify({type:'result',result:text,is_error:false}));`);
+  fs.writeFileSync(stub, `import fs from 'node:fs';let prompt='';for await(const c of process.stdin)prompt+=c;const args=process.argv.slice(2),codex=args[0]==='exec';fs.writeFileSync('args.json',JSON.stringify(args));if(codex){if(args.includes('--dangerously-bypass-approvals-and-sandbox')||args[args.indexOf('--sandbox')+1]!=='read-only')process.exit(2);fs.writeFileSync(args[args.indexOf('--output-last-message')+1],'Instrucciones listas.');}else{const mode=args[args.indexOf('--permission-mode')+1],read=prompt.includes('CONSULTA DE SOLO LECTURA');if(!read){if(mode!=='bypassPermissions')process.exit(2);fs.writeFileSync('coder.txt','archivo creado');}else if(mode!=='plan')process.exit(3);console.log(JSON.stringify({type:'result',result:read?'Consulta sin cambios.':'Archivo creado.',is_error:false}));}`);
   const previous = { AUTOMATA_CLAUDE: process.env.AUTOMATA_CLAUDE, AUTOMATA_CODEX: process.env.AUTOMATA_CODEX };
   process.env.AUTOMATA_CLAUDE = process.env.AUTOMATA_CODEX = stub;
   t.after(() => { for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value; });
   const agents = new CliAgents(), settings = validateSettings(), p = project(dir);
-  for (const role of ["coder", "auditor"]) {
-    const answer = await agents.run({ role, phase: "task", project: p, settings, directory: dir, prompt: chatPrompt(p, role, "Crea el archivo.", "", settings, { kind: "task" }), emit: () => {} });
-    assert.equal(answer.text, "Archivo creado.");
-    assert.equal(fs.readFileSync(path.join(dir, role + ".txt"), "utf8"), "archivo creado");
-    const args = JSON.parse(fs.readFileSync(path.join(dir, "args.json")));
-    assert.equal(args.includes("--output-schema"), false);
-    if (role === "coder") assert.equal(args.includes("--allowedTools"), false);
-    fs.unlinkSync(path.join(dir, role + ".txt"));
-    await agents.run({ role, phase: "chat", project: p, settings, directory: dir, prompt: chatPrompt(p, role, "¿Cómo va?", "", settings, { kind: "question" }), emit: () => {} });
-    assert.equal(fs.existsSync(path.join(dir, role + ".txt")), false);
+  assert.equal(settings.accessMode, "full");
+  const coder = await agents.run({ role: "coder", phase: "task", project: p, settings, directory: dir, prompt: chatPrompt(p, "coder", "Crea el archivo.", "", settings, { kind: "task" }), emit: () => {} });
+  assert.equal(coder.text, "Archivo creado.");
+  assert.equal(fs.readFileSync(path.join(dir, "coder.txt"), "utf8"), "archivo creado");
+  let args = JSON.parse(fs.readFileSync(path.join(dir, "args.json")));
+  assert.equal(args.includes("--output-schema"), false);
+  assert.equal(args.includes("--allowedTools"), false);
+  fs.unlinkSync(path.join(dir, "coder.txt"));
+  await agents.run({ role: "coder", phase: "chat", project: p, settings, directory: dir, prompt: chatPrompt(p, "coder", "¿Cómo va?", "", settings, { kind: "question" }), emit: () => {} });
+  assert.equal(fs.existsSync(path.join(dir, "coder.txt")), false);
+  for (const [phase, kind] of [["task", "task"], ["chat", "question"]]) {
+    const director = await agents.run({ role: "auditor", phase, project: p, settings, directory: dir, prompt: chatPrompt(p, "auditor", "Crea el archivo.", "", settings, { kind }), emit: () => {} });
+    assert.equal(director.text, "Instrucciones listas.");
+    args = JSON.parse(fs.readFileSync(path.join(dir, "args.json")));
+    assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
+    assert.equal(args.some((a) => a.includes("dangerously")), false);
   }
+  assert.equal(fs.existsSync(path.join(dir, "auditor.txt")), false);
 });
 
 test("las tareas directas no exigen iniciar el ciclo y ambos agentes reciben el resultado anterior", async t => {

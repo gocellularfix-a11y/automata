@@ -11,6 +11,7 @@ Una interfaz compartida para Windows y Android: dos paneles en escritorio, pesta
 - Proyectos con carpeta, objetivo, criterios de aceptación, restricciones y comandos de verificación.
 - Tareas pequeñas, medianas o largas.
 - Selección independiente de modelos y razonamiento; identificadores personalizados.
+- **Equipo de agentes** (botón «Equipo»): de 1 a 3 codificadores de Claude que se turnan por ronda y de 1 a 2 directores/auditores de Codex. El primero planifica y revisa; si aprueba, el siguiente confirma, y todos deben coincidir para completar. Cada agente tiene su propio modelo y nivel de razonamiento; el cambio aplica al siguiente trabajo.
 - Ciclo automático director → codificador → verificaciones → auditoría.
 - Pausa en un punto seguro, cancelación, continuación y límite de rondas/tiempo.
 - Consultas a Claude, Codex o ambos; instrucciones al director entre operaciones.
@@ -19,7 +20,12 @@ Una interfaz compartida para Windows y Android: dos paneles en escritorio, pesta
 - Demostración aislada que no llama a proveedores ni consume créditos.
 - Ventana de cuentas al abrir: conecta Claude y ChatGPT/Codex mediante sus herramientas oficiales, detecta sesiones existentes y comprueba ambas antes de trabajar.
 - Proyectos **Local** sin Git obligatorio y **GitHub** para clonar o usar una copia local existente. Conexión opcional de GitHub desde Cuentas.
-- Acceso completo para ambos agentes y tareas directas desde el chat con **Trabajar**. **Solo consultar** conserva la lectura explícita.
+- Acceso completo para el ejecutor y tareas directas desde el chat con **Trabajar**. **Solo consultar** conserva la lectura explícita.
+- **El director (Codex) es de solo lectura**: inspecciona y decide qué cambios hacer; el ejecutor (Claude) escribe todo el código. Una tarea dirigida al director se le entrega después al ejecutor.
+- **El director decide cuándo hacer commit, push y merge** (campo `git` de cada revisión). Por defecto los commits son automáticos y el push y el merge esperan tu aprobación en la tarjeta «El director propone»; en Configuración puedes pasar a todo automático, todo con aprobación o desactivarlo. Nunca fuerza ni borra ramas y deja fuera los archivos con secretos.
+- **Un repositorio por proyecto**: configura tu **carpeta de proyectos**; **Repositorio nuevo** crea su propia carpeta con Git (y, si quieres, un repositorio privado en GitHub) y los clones se guardan cada uno en su subcarpeta.
+- **Terminal del ejecutor**: comandos, diffs y código con su salida en vivo, como en una terminal.
+- **Flujo más ágil**: Claude y Codex retoman su sesión entre rondas y, si fallan las verificaciones, el ejecutor corrige directamente sin esperar al director (ambos ajustables).
 - **English / Español** desde **Configuración / Settings**: interfaz, avisos y próximas respuestas de los agentes. Los mensajes originales y reportes anteriores se conservan.
 - Configuración reúne idioma, permisos, modelos y razonamiento de ambas AI, ritmo, rondas, tiempo máximo, cuentas y conexión al teléfono.
 
