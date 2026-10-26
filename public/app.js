@@ -4,7 +4,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const icon = (name) => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const effortNames = { default: "Predeterminado", low: "Bajo", medium: "Medio", high: "Alto", xhigh: "Extra alto", max: "Máximo", ultra: "Ultra" };
 const stateNames = { running: "Trabajando", pausing: "Pausando", paused: "En pausa", stopped: "Detenido", complete: "Completado", blocked: "Necesita tu atención", error: "Error de ejecución", interrupted: "Sesión interrumpida", limit: "Límite de rondas" };
-const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", tool: "ACTIVIDAD", session: "SESIÓN", message: "MENSAJE", warning: "ATENCIÓN", error: "ERROR", check: "VERIFICACIÓN", success: "VERIFICADO", start: "INICIO", pause: "PAUSA", stop: "DETENIDO", complete: "COMPLETADO" };
+const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", tool: "ACTIVIDAD", session: "SESIÓN", message: "MENSAJE", warning: "ATENCIÓN", error: "ERROR", check: "VERIFICACIÓN", success: "VERIFICADO", start: "INICIO", pause: "PAUSA", stop: "DETENIDO", complete: "COMPLETADO", approval: "APROBACIÓN" };
 let state = { projects: [], settings: { language: i18n.language, mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30 }, runs: [], events: [], messages: [], busy: false };
 let selected = localStorage.getItem("automata.project"), capabilities = null, connection = null, streamAbort = null, toastTimer, reconnectTimer, renderTimer;
 let accounts = null, authTimer, authLoading = null, accountsOpened = false;
@@ -43,6 +43,9 @@ document.querySelectorAll("dialog").forEach((d) => d.addEventListener("click", (
 function modelName(role, id) {
   return capabilities?.models?.[role]?.find((m) => m.id === id)?.label ?? ({ sonnet: "Sonnet", haiku: "Haiku", opus: "Opus", fable: "Fable", "gpt-6.1-sol": "Sol", "gpt-6-luna": "Luna", "gpt-6-astra": "Astra" }[id] ?? id);
 }
+const teamKeys = { coder: "extraCoders", auditor: "extraAuditors" };
+const teamSize = (settings, role) => 1 + (settings?.[teamKeys[role]]?.length ?? 0);
+const teamSuffix = (settings, role) => teamSize(settings, role) > 1 ? " ×" + teamSize(settings, role) : "";
 function populateEffort(role, model, value, select = $("#" + role + "Effort")) {
   const values = role === "coder" ? ["default", "low", "medium", "high", "xhigh", "max"] : ["default", "low", "medium", "high", "xhigh", "max", .../luna/.test(model) ? [] : ["ultra"]];
   select.innerHTML = values.map((v) => `<option value="${v}">${t(effortNames[v])}</option>`).join("");
@@ -57,7 +60,8 @@ function syncSettings() {
     if (![...el.options].some((o) => o.value === model)) el.add(new Option(model, model), el.options[el.options.length - 1]);
     el.value = model;
     populateEffort(role, model, state.settings[role + "Effort"]);
-    $("#" + role + "ModelLabel").textContent = modelName(role, model);
+    $("#" + role + "ModelLabel").textContent = modelName(role, model) + teamSuffix(state.settings, role);
+    $("#" + role + "TeamCount").textContent = String(teamSize(state.settings, role));
   }
   document.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === state.settings.mode));
   i18n.translateDom();
@@ -67,7 +71,7 @@ async function saveSettings(changes) {
     state.settings = await api("settings", { method: "PUT", body: { ...state.settings, ...changes } });
     syncSettings();
     render();
-    toast(Object.hasOwn(changes, "accessMode") ? `Acceso ${changes.accessMode === "full" ? "completo" : "limitado"} para ambos agentes. Se aplica a la siguiente operación.` : run() && ["running", "paused", "pausing"].includes(run().status) ? "Preferencias guardadas para el siguiente trabajo." : "Preferencias guardadas.");
+    toast(Object.hasOwn(changes, "accessMode") ? `Acceso ${changes.accessMode === "full" ? "completo" : "limitado"} para ambos agentes. Se aplica a la siguiente operación.` : Object.hasOwn(changes, "extraCoders") ? "Equipo guardado para el siguiente trabajo." : run() && ["running", "paused", "pausing"].includes(run().status) ? "Preferencias guardadas para el siguiente trabajo." : "Preferencias guardadas.");
     return true;
   } catch (e) {
     toast(e.message);
@@ -84,10 +88,80 @@ function emptyAuditor() {
   const p = project();
   return `<div class="empty-intro"><span class="tiny-line"></span>LA PERSPECTIVA COMPLETA</div><h3 class="welcome-title">Un buen siguiente paso.<br>Una <em>segunda mirada.</em></h3><p class="welcome-description" ${p ? 'data-user-content' : ''}>${p ? esc(p.objective) : "Define lo que quieres conseguir. El director convierte tu objetivo en tareas y revisa cada entrega con criterio propio."}</p>${p ? `<div class="criteria-list">${p.criteria.map((c) => `<div class="criterion">${icon("shield")}<span>${esc(c)}</span></div>`).join("")}</div>` : `<div class="first-step"><span class="step-number">01</span><div><strong>Define el destino</strong><p>Un objetivo, una carpeta y criterios claros.</p></div></div><div class="first-step"><span class="step-number">02</span><div><strong>Deja que tu equipo avance</strong><p>El director planifica. El codificador construye.</p></div></div><div class="first-step"><span class="step-number">03</span><div><strong>Cierra con evidencia</strong><p>Las pruebas y la auditoría deciden el resultado.</p></div></div>`}<div class="auditor-note">${icon("shield")}${t("Auditoría independiente · " + (state.settings.accessMode === "limited" ? "acceso limitado" : "acceso completo"))}</div>`;
 }
-function entry(e) {
+// ───────── Terminal view: the executor's commands, diffs and code, as a session ─────────
+const openDetails = new Set();
+function termOutput(key, text, error) {
+  const value = String(text ?? "").replace(/\s+$/, "");
+  if (!value) return "";
+  const lines = value.split(/\r?\n/), shown = lines.slice(0, 10), rest = lines.slice(10), cls = `term-out${error ? " err" : ""}`;
+  return `<pre class="${cls}">${esc(shown.join("\n"))}</pre>` + (rest.length ? `<details class="term-more" data-key="${esc(key)}"${openDetails.has(key) ? " open" : ""}><summary>${rest.length} ${t("líneas más")}</summary><pre class="${cls}">${esc(rest.join("\n"))}</pre></details>` : "");
+}
+const diffHtml = (diff) => String(diff ?? "").split("\n").map((line) => `<span class="${line.startsWith("+") ? "d-add" : line.startsWith("-") ? "d-del" : "d-ctx"}">${esc(line) || " "}</span>`).join("");
+const codeHtml = (content) => String(content ?? "").replace(/\n$/, "").split("\n").map((line) => `<span class="cl">${esc(line) || " "}</span>`).join("");
+const toolKinds = { Bash: "TERMINAL", Edit: "CÓDIGO", MultiEdit: "CÓDIGO", Write: "CÓDIGO" };
+const entryTime = (e) => new Date(e.at).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" });
+function termEntry(e, result) {
+  const tool = e.tool, error = result?.error === true;
+  const status = result ? `<span class="term-status ${error ? "err" : "ok"}">${error ? "✕" : "✓"}</span>` : state.busy ? '<span class="term-status run"></span>' : "";
+  let head, body = "";
+  if (tool.name === "Bash") {
+    const git = tool.git === true && /^git\s/.test(tool.command ?? "");
+    head = `<span class="term-prompt">${git ? "git" : "$"}</span><code class="term-cmd">${esc(git ? tool.command.replace(/^git\s+/, "") : tool.command ?? "")}</code>`;
+    body = termOutput(e.id, result?.text, error);
+  } else if (tool.name === "Edit" || tool.name === "MultiEdit") {
+    head = `<span class="term-tool">${esc(tool.name)}</span><code class="term-path">${esc(tool.path ?? "")}</code>`;
+    body = `<pre class="term-diff">${diffHtml(tool.diff)}</pre>` + (error ? termOutput(e.id, result.text, true) : "");
+  } else if (tool.name === "Write") {
+    head = `<span class="term-tool">Write</span><code class="term-path">${esc(tool.path ?? "")}</code><span class="term-meta">${tool.lines ?? ""} ${t("líneas")}</span>`;
+    body = `<pre class="term-code">${codeHtml(tool.content)}</pre>` + (error ? termOutput(e.id, result.text, true) : "");
+  } else if (tool.name === "TodoWrite") {
+    head = `<span class="term-tool">Todo</span>`;
+    body = `<div class="term-todos">${(tool.todos ?? []).map((todo) => `<div class="term-todo ${esc(todo.status ?? "")}"><span>${todo.status === "completed" ? "☑" : todo.status === "in_progress" ? "▶" : "☐"}</span>${esc(todo.content)}</div>`).join("")}</div>`;
+  } else head = `<span class="term-tool">${esc(tool.name)}</span><code class="term-path">${esc(tool.path ?? tool.pattern ?? tool.input ?? "")}</code>`;
+  return `<article class="activity-entry tool term" data-term="${esc(tool.name)}"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t(toolKinds[tool.name] ?? "ACTIVIDAD")}</span>${e.agent ? `<span class="entry-agent">${esc(e.agent)}</span>` : ""}<time>${entryTime(e)}</time></div><div class="term-block"><div class="term-head">${head}${status}</div>${body}</div></article>`;
+}
+// ───────── Git: what the director decided, awaiting the user's OK ─────────
+const gitKinds = { commit: "COMMIT", push: "PUSH", merge: "MERGE", branch: "RAMA" };
+function gitText(g) {
+  if (g.kind === "commit") return `${t("Commit:")} «${g.message}»`;
+  if (g.kind === "push") return t("Push de la rama actual a origin");
+  if (g.kind === "merge") return `${t("Merge de la rama actual en")} «${g.into}»${g.push ? " " + t("y push") : ""}`;
+  return `${t("Cambiar a la rama")} «${g.branch}»`;
+}
+function approvalEntry(e) {
+  return `<article class="activity-entry approval"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t("APROBACIÓN")}</span><time>${entryTime(e)}</time></div><p data-user-content>${esc(gitText(e.git))}</p></article>`;
+}
+const pendingGit = () => state.runs.filter((r) => r.projectId === selected).flatMap((r) => (r.gitQueue ?? []).filter((item) => item.status === "pending").map((item) => ({ ...item, runId: r.id })));
+function renderGitBar() {
+  const items = pendingGit(), bar = $("#gitBar");
+  bar.hidden = !items.length;
+  if (!items.length) {
+    $("#gitItems").innerHTML = "";
+    return;
+  }
+  $("#gitItems").innerHTML = items.map((item) => `<div class="git-item" data-run="${esc(item.runId)}" data-git="${esc(item.id)}"><span class="git-kind">${esc(t(gitKinds[item.kind] ?? "GIT"))}</span><span class="git-text" data-user-content title="${esc(gitText(item))}">${esc(gitText(item))}</span><span class="git-actions"><button type="button" class="button small primary" data-decision="approve">${t("Aprobar")}</button><button type="button" class="button small quiet" data-decision="reject">${t("Rechazar")}</button></span></div>`).join("");
+}
+$("#gitItems").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-decision]");
+  if (!button) return;
+  const row = button.closest(".git-item"), buttons = row.querySelectorAll("button");
+  buttons.forEach((b) => b.disabled = true);
+  try {
+    await api("git", { method: "POST", body: { runId: row.dataset.run, gitId: row.dataset.git, decision: button.dataset.decision } });
+    state = await api("state");
+    render();
+    toast(button.dataset.decision === "approve" ? "Operación de Git ejecutada." : "Operación de Git rechazada.");
+  } catch (error) {
+    toast(error.message);
+    buttons.forEach((b) => b.disabled = false);
+  }
+});
+function entry(e, result) {
+  if (e.kind === "tool" && e.tool) return termEntry(e, result);
+  if (e.kind === "approval" && e.git) return approvalEntry(e);
   const time = new Date(e.at).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" });
   const review = e.review;
-  return `<article class="activity-entry ${esc(e.kind)}"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t(kindNames[e.kind] ?? "ACTIVIDAD")}</span><time>${time}</time></div>${e.kind === "report" ? `<pre>${esc(e.text)}</pre>` : `<p>${esc(["phase", "start", "pause", "stop", "check", "success", "warning", "complete"].includes(e.kind) ? t(e.text) : e.text)}</p>`}${review ? `${review.findings.map((f) => `<div class="finding"><strong>${esc(f.severity.toUpperCase())} · ${esc(f.file)}</strong>${esc(f.description)}<br>${esc(f.evidence)}</div>`).join("")}<div class="criteria-list">${review.criteria.map((c) => `<div class="criterion ${c.met ? "met" : ""}">${icon(c.met ? "check" : "shield")}<span>${esc(c.criterion)}<br><small>${esc(c.evidence)}</small></span></div>`).join("")}</div>` : ""}</article>`;
+  return `<article class="activity-entry ${esc(e.kind)}"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t(kindNames[e.kind] ?? "ACTIVIDAD")}</span>${e.agent ? `<span class="entry-agent">${esc(e.agent)}</span>` : ""}<time>${time}</time></div>${e.kind === "report" ? `<pre>${esc(e.text)}</pre>` : `<p>${esc(["phase", "start", "pause", "stop", "check", "success", "warning", "complete"].includes(e.kind) ? t(e.text) : e.text)}</p>`}${review ? `${review.findings.map((f) => `<div class="finding"><strong>${esc(f.severity.toUpperCase())} · ${esc(f.file)}</strong>${esc(f.description)}<br>${esc(f.evidence)}</div>`).join("")}<div class="criteria-list">${review.criteria.map((c) => `<div class="criterion ${c.met ? "met" : ""}">${icon(c.met ? "check" : "shield")}<span>${esc(c.criterion)}<br><small>${esc(c.evidence)}</small></span></div>`).join("")}</div>` : ""}</article>`;
 }
 function chatEntry(m, role) {
   const a = m.answers?.find((a2) => a2.role === role);
@@ -95,11 +169,34 @@ function chatEntry(m, role) {
   const pending = m.status === "processing" ? m.activeRole === role ? `${name} está ${m.kind === "task" ? "trabajando en tu petición" : "respondiendo"}…` : `Esperando el turno de ${name}…` : m.status === "interrupted" ? "Consulta interrumpida. Puedes enviarla de nuevo." : state.busy ? "En cola · el equipo termina una operación en curso." : "Consulta pendiente · se retoma al continuar el trabajo o enviar otra consulta.";
   return `<article class="activity-entry user" data-message-id="${esc(m.id)}"><div class="activity-meta">${t("TÚ · " + (m.kind === "instruction" ? "INSTRUCCIÓN" : m.kind === "task" ? "TRABAJO" : "CONSULTA"))}<time>${new Date(m.at).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })}</time></div><p>${esc(m.text)}</p>${a ? `<p class="chat-answer${a.error ? " form-error" : ""}">${esc(a.text)}</p>` : m.answer ? `<p class="chat-answer">${esc(m.answer)}</p>` : m.error ? `<p class="chat-answer form-error">${esc(m.error)}</p>` : `<p class="chat-answer pending-msg">${esc(t(pending))}</p>`}</article>`;
 }
+const deferredFeeds = new Set();
+const selectionIn = (el) => {
+  const selection = getSelection();
+  return !!selection && !selection.isCollapsed && !!selection.anchorNode && el.contains(selection.anchorNode);
+};
+// Rebuilding a feed under the user's selection would drop it; they are probably copying output.
+document.addEventListener("selectionchange", () => {
+  if (deferredFeeds.size && !["coder", "auditor"].some((role) => selectionIn($("#" + role + "Feed")))) {
+    deferredFeeds.clear();
+    scheduleRender();
+  }
+});
+for (const role of ["coder", "auditor"]) $("#" + role + "Feed").addEventListener("toggle", (event) => {
+  const key = event.target.dataset?.key;
+  if (key) event.target.open ? openDetails.add(key) : openDetails.delete(key);
+}, true);
 function renderFeed(role) {
-  const el = $("#" + role + "Feed"), atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 55;
+  const el = $("#" + role + "Feed");
+  if (selectionIn(el)) {
+    deferredFeeds.add(role);
+    return;
+  }
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 55;
   const events = state.events.filter((e) => e.projectId === selected && (e.role === role || e.role === "system"));
-  const messages = state.messages.filter((m) => m.projectId === selected && (m.target === role || m.target === "both" || m.kind === "instruction" && role === "auditor"));
-  const items = [...events.map((e) => ({ at: e.at, html: entry(e) })), ...messages.map((m) => ({ at: m.at, html: chatEntry(m, role) }))].sort((a, b) => a.at.localeCompare(b.at));
+  const results = new Map(events.filter((e) => e.kind === "toolresult").map((e) => [e.toolId, e]));
+  // A task for the director is handed to the executor afterwards, so both panels show it.
+  const messages = state.messages.filter((m) => m.projectId === selected && (m.target === role || m.target === "both" || m.kind === "instruction" && role === "auditor" || m.kind === "task" && m.target === "auditor" && role === "coder"));
+  const items = [...events.filter((e) => e.kind !== "toolresult").map((e) => ({ at: e.at, html: entry(e, results.get(e.toolId)) })), ...messages.map((m) => ({ at: m.at, html: chatEntry(m, role) }))].sort((a, b) => a.at.localeCompare(b.at));
   el.innerHTML = items.length ? items.slice(-100).map((i) => i.html).join("") : role === "coder" ? emptyCoder() : emptyAuditor();
   if (atBottom && items.length) el.scrollTop = el.scrollHeight;
 }
@@ -123,7 +220,10 @@ function render() {
     const working = replying || active && (role === "coder" ? r.stage === "code" : ["plan", "review"].includes(r.stage));
     $("#" + role + "Status").innerHTML = `<i></i>${replying ? replying.kind === "task" ? "Trabajando" : "Respondiendo" : working ? "Trabajando" : r?.status === "complete" ? "Completado" : "En espera"}`;
     $("#" + role + "Status").classList.toggle("active", working);
-    $("#" + role + "ModelLabel").textContent = modelName(role, (r && ["running", "pausing", "paused"].includes(r.status) ? r.settings : state.settings)[role + "Model"]);
+    {
+      const source = r && ["running", "pausing", "paused"].includes(r.status) ? r.settings : state.settings;
+      $("#" + role + "ModelLabel").textContent = modelName(role, source[role + "Model"]) + teamSuffix(source, role);
+    }
   }
   const stages = { plan: 1, code: 2, checks: 3, review: 4, complete: 4 };
   document.querySelectorAll(".workflow-line>span").forEach((el, i) => el.classList.toggle("current", i === (stages[r?.stage] ?? 0)));
@@ -133,6 +233,7 @@ function render() {
   $("#bottomStatus").textContent = state.demo ? "Demostración local · no llama a las AI ni consume créditos." : replying ? `${replying.activeRole === "coder" ? "Claude" : "Codex"} está ${replying.kind === "task" ? "trabajando en tu petición" : "respondiendo a tu consulta"}…` : r?.error ?? (active ? "Tu equipo está trabajando. Puedes dejarle un mensaje." : r?.status === "complete" ? "Objetivo completado. Revisa la evidencia en el panel del auditor." : "Tu siguiente proyecto empieza aquí.");
   renderFeed("coder");
   renderFeed("auditor");
+  renderGitBar();
   i18n.translateDom();
 }
 function scheduleRender() {
@@ -221,10 +322,10 @@ $("#projectForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const button = e.submitter;
   button.disabled = true;
-  const githubClone = e.target.elements.source.value === "github" && e.target.elements.repositoryAction.value === "clone";
+  const source = e.target.elements.source.value, githubClone = source === "github" && e.target.elements.repositoryAction.value === "clone";
   $("#projectDialog").dataset.busy = "true";
   $("#projectDialog").querySelectorAll("[data-close]").forEach(close => close.disabled = true);
-  $("#projectSubmitLabel").textContent = githubClone ? "Clonando repositorio…" : "Creando proyecto…";
+  $("#projectSubmitLabel").textContent = source === "new" ? "Creando repositorio…" : githubClone ? "Clonando repositorio…" : "Creando proyecto…";
   try {
     const p = await api("projects", { method: "POST", body: Object.fromEntries(new FormData(e.target)) });
     selected = p.id;
@@ -234,7 +335,7 @@ $("#projectForm").addEventListener("submit", async (e) => {
     syncProjectSource();
     state = await api("state");
     render();
-    toast(p.source === "github" ? "Repositorio conectado. Los cambios se trabajan en tu PC." : "Proyecto local creado. Tu equipo está listo.");
+    toast(source === "new" ? "Repositorio creado en tu carpeta de proyectos." : p.source === "github" ? "Repositorio conectado. Los cambios se trabajan en tu PC." : "Proyecto local creado. Tu equipo está listo.");
   } catch (err) {
     $("#projectError").textContent = err.message;
   } finally {
@@ -244,15 +345,26 @@ $("#projectForm").addEventListener("submit", async (e) => {
     syncProjectSource();
   }
 });
+const slugOf = (value) => String(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/g, "") || "proyecto";
 function syncProjectSource() {
-  const form = $("#projectForm"), github = form.elements.source.value === "github", clone = form.elements.repositoryAction.value === "clone";
+  const form = $("#projectForm"), source = form.elements.source.value, github = source === "github", fresh = source === "new", clone = form.elements.repositoryAction.value === "clone";
   $("#githubProjectFields").hidden = !github;
+  $("#newRepoFields").hidden = !fresh;
   form.elements.repository.disabled = !github;
   form.elements.repository.required = github;
   form.elements.repositoryAction.disabled = !github;
-  $("#projectSubmitLabel").textContent = t(github && clone ? "Clonar y crear proyecto" : "Crear proyecto");
-  $("#projectDirectoryHint").textContent = github ? clone ? "Selecciona una carpeta existente y vacía para descargar el repositorio." : "Selecciona la raíz de tu copia local. Se comprobará que coincida con el repositorio indicado." : "Claude trabajará aquí. Puedes usar una carpeta local sin Git.";
+  form.elements.createRemote.disabled = !fresh;
+  $("#projectDirectoryField").hidden = fresh;
+  form.elements.directory.disabled = fresh;
+  form.elements.directory.required = !fresh && !(github && clone);
+  $("#projectSubmitLabel").textContent = t(fresh ? "Crear repositorio" : github && clone ? "Clonar y crear proyecto" : "Crear proyecto");
+  $("#projectDirectoryHint").textContent = github ? clone ? "Opcional: elige una carpeta vacía; si la dejas en blanco se guarda en tu carpeta de proyectos." : "Selecciona la raíz de tu copia local. Se comprobará que coincida con el repositorio indicado." : "Claude trabajará aquí. Puedes usar una carpeta local sin Git.";
+  if (fresh) {
+    const root = capabilities?.projectsRoot ?? "", separator = root.includes("\\") ? "\\" : "/";
+    $("#newRepoPath").textContent = `${t("Se creará en")} ${root}${root.endsWith(separator) ? "" : separator}${slugOf(form.elements.name.value)}`;
+  }
 }
+$("#projectForm").elements.name.addEventListener("input", () => { if ($("#projectForm").elements.source.value === "new") syncProjectSource(); });
 $("#projectForm").elements.source.forEach(input => input.addEventListener("change", syncProjectSource));
 $("#projectForm").elements.repositoryAction.addEventListener("change", syncProjectSource);
 $("#projectDialog").addEventListener("cancel", event => { if (event.target.dataset.busy === "true") event.preventDefault(); });
@@ -334,11 +446,79 @@ for (const action of ["pause", "stop"]) $("#" + action + "Button").addEventListe
     toast(e.message);
   }
 });
+const teamRoles = {
+  coder: { rows: "#teamCoderRows", add: "#addCoder", counter: "#teamCoderCount", list: "settingsCoderModels" },
+  auditor: { rows: "#teamAuditorRows", add: "#addAuditor", counter: "#teamAuditorCount", list: "settingsAuditorModels" }
+};
+let teamDraft = null;
+const teamLimit = (role) => (role === "coder" ? capabilities?.team?.coders : capabilities?.team?.auditors) ?? (role === "coder" ? 3 : 2);
+const teamFromSettings = (settings, role) => [{ model: settings[role + "Model"], effort: settings[role + "Effort"] }, ...(settings[teamKeys[role]] ?? []).map((agent) => ({ model: agent.model, effort: agent.effort ?? "default" }))];
+function renderTeam() {
+  for (const [role, cfg] of Object.entries(teamRoles)) {
+    const rows = teamDraft[role], limit = teamLimit(role);
+    $(cfg.rows).innerHTML = rows.map((agent, i) => `<div class="team-row" data-role="${role}" data-index="${i}"><span class="team-index">${i + 1}</span><label class="team-model"><span class="control-label">MODELO</span><input name="model" list="${cfg.list}" value="${esc(agent.model)}" required maxlength="100" autocomplete="off"></label><label class="team-effort"><span class="control-label">RAZONAMIENTO</span><select name="effort"></select></label>${i === 0 ? '<span class="team-end team-badge">Principal</span>' : '<button type="button" class="icon-button team-end" data-remove aria-label="Quitar"><svg><use href="#i-close"/></svg></button>'}</div>`).join("");
+    $(cfg.rows).querySelectorAll(".team-row").forEach((row, i) => {
+      const select = row.querySelector("select");
+      populateEffort(role, rows[i].model, rows[i].effort, select);
+      rows[i].effort = select.value;
+    });
+    $(cfg.counter).textContent = `${rows.length} / ${limit}`;
+    $(cfg.add).disabled = rows.length >= limit;
+  }
+  i18n.translateDom($("#teamDialog"));
+}
+function openTeam() {
+  if (capabilities && !capabilities.features?.team) return toast("La PC necesita una versión más reciente de Automata para usar equipos de agentes.");
+  teamDraft = { coder: teamFromSettings(state.settings, "coder"), auditor: teamFromSettings(state.settings, "auditor") };
+  $("#teamError").textContent = "";
+  renderTeam();
+  showDialog("#teamDialog");
+}
+$("#teamDialog").addEventListener("input", (event) => {
+  const row = event.target.closest(".team-row");
+  if (!row || event.target.name !== "model") return;
+  const role = row.dataset.role, agent = teamDraft[role][Number(row.dataset.index)], select = row.querySelector("select");
+  agent.model = event.target.value;
+  populateEffort(role, agent.model, agent.effort, select);
+  agent.effort = select.value;
+});
+$("#teamDialog").addEventListener("change", (event) => {
+  const row = event.target.closest(".team-row");
+  if (row && event.target.name === "effort") teamDraft[row.dataset.role][Number(row.dataset.index)].effort = event.target.value;
+});
+$("#teamDialog").addEventListener("click", (event) => {
+  const remove = event.target.closest("[data-remove]");
+  if (!remove) return;
+  const row = remove.closest(".team-row");
+  teamDraft[row.dataset.role].splice(Number(row.dataset.index), 1);
+  renderTeam();
+});
+for (const [role, cfg] of Object.entries(teamRoles)) $(cfg.add).addEventListener("click", () => {
+  const rows = teamDraft[role];
+  if (rows.length >= teamLimit(role)) return;
+  const last = rows[rows.length - 1];
+  rows.push({ model: last.model, effort: last.effort });
+  renderTeam();
+  $(cfg.rows).querySelector(".team-row:last-child input")?.focus();
+});
+$("#teamForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const [coders, auditors] = [teamDraft.coder, teamDraft.auditor].map((rows) => rows.map(({ model, effort }) => ({ model: model.trim(), effort })));
+  const saved = await saveSettings({ coderModel: coders[0].model, coderEffort: coders[0].effort, extraCoders: coders.slice(1), auditorModel: auditors[0].model, auditorEffort: auditors[0].effort, extraAuditors: auditors.slice(1) });
+  if (saved) $("#teamDialog").close();
+  else $("#teamError").textContent = $("#toast").textContent;
+});
+$("#teamButton").addEventListener("click", openTeam);
+document.querySelectorAll("[data-team]").forEach((button) => button.addEventListener("click", openTeam));
+$("#settingsTeam").addEventListener("click", () => { $("#settingsDialog").close(); openTeam(); });
 $("#settingsButton").addEventListener("click", () => {
   const f = $("#settingsForm");
   $("#settingsError").textContent = "";
   for (const [key, value] of Object.entries(state.settings)) if (f.elements.namedItem(key)) f.elements.namedItem(key).value = value;
   for (const role of ["coder", "auditor"]) populateEffort(role, state.settings[role + "Model"], state.settings[role + "Effort"], f.elements.namedItem(role + "Effort"));
+  f.elements.reuseSessions.checked = state.settings.reuseSessions !== false;
+  f.elements.fastFix.checked = state.settings.fastFix !== false;
+  f.elements.projectsRoot.placeholder = capabilities?.projectsRoot ?? "";
   for (const element of f.elements) if (element.name !== "language" && element.type !== "submit" && element.tagName !== "BUTTON") element.disabled = !connection?.token;
   showDialog("#settingsDialog");
 });
@@ -346,11 +526,19 @@ for (const role of ["coder", "auditor"]) $("#settingsForm").elements.namedItem(r
   const select = $("#settingsForm").elements.namedItem(role + "Effort");
   populateEffort(role, event.target.value, select.value, select);
 });
+$("#browseRoot").addEventListener("click", async () => {
+  if (window.automata?.chooseDirectory) {
+    const directory = await window.automata.chooseDirectory();
+    if (directory) $("#settingsForm").elements.projectsRoot.value = directory;
+  } else toast("Escribe la ruta de la carpeta en la PC que ejecuta Automata.");
+});
 $("#settingsAccounts").addEventListener("click", () => { $("#settingsDialog").close(); void openAccounts(); });
 $("#settingsPhone").addEventListener("click", () => { $("#settingsDialog").close(); void connectionDialog(); });
 $("#settingsForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const changes = Object.fromEntries(new FormData(e.target));
+  changes.reuseSessions = e.target.elements.reuseSessions.checked;
+  changes.fastFix = e.target.elements.fastFix.checked;
   if (!connection?.token) {
     state.settings.language = changes.language;
     syncSettings(); render();
@@ -367,7 +555,7 @@ $("#chatForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   try {
     if (!project()) return toast("Selecciona un proyecto para conversar.");
-    if (["question", "task"].includes($("#chatKind").value) && !await ensureAccounts($("#chatTarget").value === "both" ? ["coder", "auditor"] : [$("#chatTarget").value])) return;
+    if (["question", "task"].includes($("#chatKind").value) && !await ensureAccounts($("#chatTarget").value === "both" || $("#chatTarget").value === "auditor" && $("#chatKind").value === "task" ? ["coder", "auditor"] : [$("#chatTarget").value])) return;
     const message = await api("chat", { method: "POST", body: { projectId: selected, target: $("#chatTarget").value, kind: $("#chatKind").value, text: $("#chatText").value } });
     $("#chatText").value = "";
     $("#chatText").style.height = "auto";

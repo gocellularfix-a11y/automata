@@ -53,7 +53,79 @@
     "Elige tu modelo": "Choose your model", "El identificador que admite tu CLI": "The model identifier supported by your CLI", "Usar modelo": "Use model", "Se usará exactamente este identificador. Si tu cuenta no tiene acceso, Automata mostrará el error del proveedor.": "This exact identifier will be used. If your account lacks access, Automata will show the provider error.", "Escribe la ruta de la carpeta en la PC que ejecuta Automata.": "Enter the folder path on the PC running Automata.",
     "La demostración usa un proyecto aislado. Reinicia sin --demo para agregar el tuyo.": "The demo uses an isolated project. Restart without --demo to add your own.", "Esta sesión de demostración no utiliza tus cuentas ni consume créditos. Abre Automata sin --demo para conectar a los proveedores.": "This demo does not use your accounts or credits. Open Automata without --demo to connect providers.",
     "Para conectar Android, inicia Automata en tu PC con la opción --lan. El acceso remoto no está habilitado en esta sesión.": "To connect Android, start Automata on your PC with --lan. Remote access is not enabled in this session.", "En Android, escribe una de estas direcciones y el código de abajo. Mantén la PC encendida.": "On Android, enter one of these addresses and the code below. Keep the PC running.",
-    "La PC necesita una versión más reciente de Automata para usar Trabajar y los permisos completos.": "Your PC needs a newer Automata version to use Work and full permissions."
+    "La PC necesita una versión más reciente de Automata para usar Trabajar y los permisos completos.": "Your PC needs a newer Automata version to use Work and full permissions.",
+    "Equipo de agentes": "Agent team",
+    "EQUIPO DE AGENTES": "AGENT TEAM",
+    "Arma tu equipo.": "Build your team.",
+    "Elige cuántos agentes trabajan, su modelo y su nivel de razonamiento.": "Choose how many agents work, plus their model and reasoning level.",
+    "Codificadores · Claude": "Coders · Claude",
+    "Se turnan: la ronda 1 usa al primero, la 2 al segundo, y así sucesivamente.": "They take turns: round 1 uses the first, round 2 the second, and so on.",
+    "Directores y auditores · Codex": "Directors and auditors · Codex",
+    "El primero planifica y revisa. Si aprueba, el siguiente confirma; todos deben coincidir para completar.": "The first one plans and reviews. If it approves, the next one confirms; all must agree to complete.",
+    "Añadir codificador": "Add coder",
+    "Añadir revisor": "Add reviewer",
+    "Guardar equipo": "Save team",
+    "Los cambios se aplican al siguiente trabajo. Cada agente adicional consume su propio uso de modelo.": "Changes apply to the next run. Each extra agent uses its own model quota.",
+    "MODELO": "MODEL",
+    "Principal": "Primary",
+    "Quitar": "Remove",
+    "Equipo guardado para el siguiente trabajo.": "Team saved for the next run.",
+    "Usa de 1 a 3 codificadores.": "Use 1 to 3 coders.",
+    "Usa de 1 a 2 revisores.": "Use 1 to 2 reviewers.",
+    "La PC necesita una versión más reciente de Automata para usar equipos de agentes.": "Your PC needs a newer Automata version to use agent teams.",
+    "El director propone": "The director proposes",
+    "Tú decides si se ejecuta.": "You decide whether it runs.",
+    "Aprobar": "Approve",
+    "Rechazar": "Reject",
+    "COMMIT": "COMMIT",
+    "PUSH": "PUSH",
+    "MERGE": "MERGE",
+    "RAMA": "BRANCH",
+    "GIT": "GIT",
+    "Commit:": "Commit:",
+    "Push de la rama actual a origin": "Push the current branch to origin",
+    "Merge de la rama actual en": "Merge the current branch into",
+    "y push": "and push",
+    "Cambiar a la rama": "Switch to branch",
+    "APROBACIÓN": "APPROVAL",
+    "TERMINAL": "TERMINAL",
+    "CÓDIGO": "CODE",
+    "líneas más": "more lines",
+    "líneas": "lines",
+    "Operación de Git ejecutada.": "Git operation executed.",
+    "Operación de Git rechazada.": "Git operation rejected.",
+    "Git y proyectos": "Git and projects",
+    "Decisiones de Git del director": "Director's Git decisions",
+    "Commit automático; push y merge con mi aprobación": "Automatic commits; push and merge need my approval",
+    "Todo con mi aprobación": "Everything needs my approval",
+    "Todo automático": "Everything automatic",
+    "El director no decide Git": "The director does not decide Git",
+    "El director decide cuándo; Automata lo ejecuta por el ejecutor y nunca fuerza ni borra ramas.": "The director decides when; Automata runs it for the executor and never forces or deletes branches.",
+    "Carpeta de proyectos": "Projects folder",
+    "Cada repositorio nuevo o clonado se guarda aquí, en su propia carpeta.": "Every new or cloned repository is saved here, in its own folder.",
+    "Sesiones persistentes": "Persistent sessions",
+    "Claude y Codex continúan su sesión entre rondas, sin releer todo el proyecto.": "Claude and Codex continue their session between rounds without rereading the whole project.",
+    "Corrección directa": "Direct fixes",
+    "Si fallan las verificaciones, el ejecutor corrige sin esperar al director (hasta 3 veces).": "If checks fail, the executor fixes them without waiting for the director (up to 3 times).",
+    "Repositorio nuevo": "New repository",
+    "Carpeta y Git propios en tu carpeta de proyectos.": "Its own folder and Git inside your projects folder.",
+    "Crear también un repositorio privado en GitHub": "Also create a private GitHub repository",
+    "Requiere conectar GitHub en Cuentas.": "Requires connecting GitHub in Accounts.",
+    "Se creará en": "Will be created in",
+    "Crear repositorio": "Create repository",
+    "Creando repositorio…": "Creating repository…",
+    "Repositorio creado en tu carpeta de proyectos.": "Repository created in your projects folder.",
+    "Opcional: elige una carpeta vacía; si la dejas en blanco se guarda en tu carpeta de proyectos.": "Optional: pick an empty folder; if left blank it is saved in your projects folder.",
+    "Elige cuánto decide el director sobre Git.": "Choose how much the director decides about Git.",
+    "La carpeta de proyectos debe ser una ruta absoluta que no sea la raíz del disco.": "The projects folder must be an absolute path other than the drive root.",
+    "Abre Automata sin --demo para crear repositorios.": "Open Automata without --demo to create repositories.",
+    "Define una carpeta de proyectos en Configuración.": "Set a projects folder in Settings.",
+    "No se encontró esa operación de Git.": "That Git operation was not found.",
+    "Esa operación ya se resolvió.": "That operation was already resolved.",
+    "Hay otra operación de Git en curso.": "Another Git operation is in progress.",
+    "El director propuso acciones de Git, pero esta carpeta no es un repositorio.": "The director proposed Git actions, but this folder is not a repository.",
+    "No se pudo retomar la sesión anterior; se inicia una nueva.": "The previous session could not be resumed; starting a new one.",
+    "Sin cambios para confirmar.": "No changes to commit."
   };
   const reverse = Object.fromEntries(Object.entries(english).map(([es, en]) => [en, es]));
   let language = localStorage.getItem("automata.language") === "en" ? "en" : "es";
@@ -80,6 +152,11 @@
       .replace(/^Permisos para la siguiente operación: acceso limitado\.$/, "Permissions for the next operation: limited access.")
       .replace(/^Iniciando (.+)\. El director preparará la primera tarea\.$/, "Starting $1. The director will prepare the first task.")
       .replace(/^Verificando · /, "Checking · ").replace(/^Aprobado · /, "Passed · ").replace(/^Falló · /, "Failed · ")
+      .replace(/^Verificaciones fallidas: el ejecutor corrige directamente \((\d+)\/(\d+)\)\.$/, "Checks failed: the executor is fixing them directly ($1/$2).")
+      .replace(/^Archivos sensibles excluidos del commit: (.+)$/, "Sensitive files left out of the commit: $1")
+      .replace(/^Commit ([0-9a-f]+)$/, "Commit $1").replace(/^Push de (.+)$/, "Push of $1")
+      .replace(/^Merge de (.+) en (.+) y push$/, "Merge of $1 into $2 and push").replace(/^Merge de (.+) en (.+)$/, "Merge of $1 into $2")
+      .replace(/^Rama nueva (.+)$/, "New branch $1").replace(/^Rama (.+)$/, "Branch $1").replace(/^Ya estás en (.+)\.$/, "Already on $1.")
       .replace(/COMPATIBILIDAD/g, "COMPATIBILITY");
   }
   function setLanguage(value) {
@@ -88,7 +165,7 @@
     document.documentElement.lang = language;
     document.title = t("Automata — Tu equipo, en sincronía");
   }
-  const excluded = "[data-user-content],#projectName,#projectPath,#listTitle,.activity-entry pre,.activity-entry p:not(.pending-msg),.activity-entry .finding,.criterion span,.project-item strong,.project-item p,.run-item strong,.run-item p,.pairing-code";
+  const excluded = ".term-block,[data-user-content],#projectName,#projectPath,#listTitle,.activity-entry pre,.activity-entry p:not(.pending-msg),.activity-entry .finding,.criterion span,.project-item strong,.project-item p,.run-item strong,.run-item p,.pairing-code";
   function translateDom(root = document.body) {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node;

@@ -563,7 +563,7 @@ select option { background: #15171b; color: var(--ink); }
 .github-account .account-login { width: auto; }
 .github-account .account-flow, .github-account .account-help { grid-column: 1 / -1; margin: 0; }
 .github-account .account-flow .button { width: auto; }
-.project-source-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0; border: 0; margin: 0 0 20px; }
+.project-source-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0; border: 0; margin: 0 0 20px; }
 .project-source-picker legend { font-size: 12.5px; color: var(--ink-2); font-weight: 500; margin-bottom: 10px; padding: 0; }
 .modal .source-choice { display: flex; align-items: center; gap: 11px; border: 1px solid var(--line-strong); border-radius: 13px; padding: 14px 13px; margin: 0; cursor: pointer; background: var(--surface-2); transition: border-color .2s, background .2s; }
 .modal .source-choice:hover { border-color: #ffffff3d; }
@@ -580,6 +580,87 @@ select option { background: #15171b; color: var(--ink); }
 .settings-grid small { line-height: 1.5; }
 .settings-section { font: 500 10.5px var(--mono); text-transform: uppercase; letter-spacing: .14em; color: var(--gold-deep); border-top: 1px solid var(--line); padding-top: 22px; margin: 24px 0 16px; }
 .settings-links { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* ───────────────────────── Agent team ───────────────────────── */
+.team-chip { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px 0 11px; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--surface-2); color: var(--ink-2); font-size: 12.5px; font-weight: 500; transition: border-color .2s, background .2s, color .2s; }
+.team-chip:hover { border-color: var(--agent-line); background: var(--surface-3); color: var(--ink); }
+.team-chip svg { width: 15px; height: 15px; color: var(--agent); }
+.team-count { font: 500 10.5px var(--mono); color: var(--agent); background: var(--agent-soft); border: 1px solid var(--agent-line); border-radius: 6px; padding: 1px 6px; }
+.entry-agent { color: var(--agent, var(--muted)); border: 1px solid var(--line-strong); border-radius: 999px; padding: 1px 8px; letter-spacing: .04em; white-space: nowrap; }
+.team-modal { width: min(740px, calc(100vw - 32px)); }
+.team-section { --agent: var(--claude); --agent-soft: var(--claude-soft); --agent-line: var(--claude-line); border: 1px solid var(--line); border-radius: 18px; padding: 18px; margin-bottom: 16px; background: radial-gradient(90% 40% at 50% -8%, var(--agent-soft), transparent 70%), var(--surface-1); }
+.auditor-team { --agent: var(--codex); --agent-soft: var(--codex-soft); --agent-line: var(--codex-line); }
+.team-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.team-head h3 { font: 400 25px/1.1 var(--serif); letter-spacing: -.005em; margin: 0; }
+.team-head p { font-size: 12.5px; color: var(--muted); margin: 5px 0 0; line-height: 1.55; max-width: 460px; }
+.team-counter { margin-left: auto; align-self: flex-start; font: 500 11px var(--mono); letter-spacing: .08em; color: var(--agent); border: 1px solid var(--agent-line); background: var(--agent-soft); border-radius: 999px; padding: 5px 11px; white-space: nowrap; }
+.team-rows { display: grid; gap: 10px; margin-bottom: 12px; }
+.team-row { display: grid; grid-template-columns: 30px minmax(0, 1.5fr) minmax(0, 1fr) 66px; gap: 10px; align-items: end; }
+.modal .team-row label { margin: 0; }
+.team-row .control-label { margin-bottom: 0; }
+.team-index { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font: 500 11px var(--mono); color: var(--agent); background: var(--agent-soft); border: 1px solid var(--agent-line); margin-bottom: 8px; }
+.team-badge { font: 500 9.5px var(--mono); letter-spacing: .08em; color: var(--dim); text-transform: uppercase; text-align: center; margin-bottom: 18px; white-space: nowrap; }
+.team-row .icon-button.team-end { justify-self: center; }
+.team-row .icon-button { margin-bottom: 4px; }
+.modal .team-row input, .modal .team-row select { margin-top: 6px; }
+.modal .team-row select { display: block; width: 100%; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-2) var(--chevron) no-repeat right 14px center; padding: 12px 34px 12px 14px; min-height: 46px; font-size: 13.5px; color: var(--ink); }
+.modal .team-row select:focus { outline: none; border-color: #e8d5a680; box-shadow: 0 0 0 4px #e8d5a61a; }
+.team-add svg { width: 13px; height: 13px; }
+.team-add:disabled { opacity: .45; }
+
+/* ───────────────────────── Terminal view ───────────────────────── */
+.activity-entry.term { --dot: var(--agent, var(--ink-2)); padding-bottom: 14px; }
+.term-block { border: 1px solid var(--line); border-radius: 12px; background: #07080b; overflow: hidden; font: 400 12px/1.6 var(--mono); }
+.term-block > :not(.term-head) { border-top: 1px solid var(--line); }
+.term-head { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 8px 12px; color: var(--ink-2); background: #0b0c10; }
+.term-prompt { color: var(--agent, var(--claude)); font-weight: 500; flex-shrink: 0; }
+.term-cmd, .term-path { flex: 1; min-width: 0; font: inherit; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-path { color: var(--ink-2); }
+.term-tool { flex-shrink: 0; font: 500 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--agent, var(--claude)); background: var(--agent-soft, var(--claude-soft)); border: 1px solid var(--agent-line, var(--claude-line)); border-radius: 6px; padding: 1px 6px; }
+.term-meta { flex-shrink: 0; color: var(--dim); font-size: 11px; }
+.term-status { margin-left: auto; flex-shrink: 0; font-size: 12px; line-height: 1; }
+.term-status.ok { color: var(--ok); }
+.term-status.err { color: var(--err); }
+.term-status.run { width: 7px; height: 13px; border-radius: 1px; background: var(--agent, var(--claude)); animation: blink 1s steps(2, start) infinite; }
+.activity-entry .term-block pre { margin: 0; padding: 10px 12px; max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 12px/1.6 var(--mono); color: var(--ink-2); background: transparent; border: 0; border-radius: 0; }
+.activity-entry .term-block pre.err { color: var(--err); }
+.term-diff span, .term-code span { display: block; }
+.term-diff .d-add { color: #8be8ad; background: #74d39a14; }
+.term-diff .d-del { color: #ffa597; background: #f2816f14; }
+.term-diff .d-ctx { color: var(--ink-2); }
+.term-code { counter-reset: line; }
+.term-code .cl { position: relative; padding-left: 3.4em; counter-increment: line; }
+.term-code .cl::before { content: counter(line); position: absolute; left: 0; width: 2.4em; text-align: right; color: var(--dim); }
+.term-more summary { cursor: pointer; padding: 6px 12px; color: var(--muted); font-size: 11px; list-style: none; }
+.term-more summary::before { content: "▸ "; }
+.term-more[open] summary::before { content: "▾ "; }
+.term-more summary:hover { color: var(--ink); }
+.term-todos { display: grid; gap: 4px; padding: 8px 12px; }
+.term-todo { display: flex; gap: 8px; color: var(--ink-2); }
+.term-todo.completed { color: var(--dim); text-decoration: line-through; }
+.term-todo.in_progress { color: var(--ink); }
+.activity-entry.approval { --dot: var(--warn); }
+.activity-entry.approval p { color: var(--warn); }
+@keyframes blink { to { visibility: hidden; } }
+
+/* ───────────────────────── Git approvals ───────────────────────── */
+.gitbar { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 10px; margin: 12px 28px 0; padding: 12px 14px; border: 1px solid #eab96847; border-radius: 16px; background: linear-gradient(180deg, #eab9681c, #eab96809); flex-shrink: 0; animation: enter .3s ease-out; }
+.gitbar-head { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--warn); }
+.gitbar-head svg { width: 16px; height: 16px; }
+.gitbar-note { margin-left: auto; color: var(--muted); font-size: 12px; }
+.gitbar-items { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 8px; }
+.git-item { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: #0a0b0e99; }
+.git-kind { flex-shrink: 0; font: 500 10px var(--mono); letter-spacing: .1em; color: var(--warn); background: #eab9681a; border: 1px solid #eab96847; border-radius: 6px; padding: 3px 8px; }
+.git-text { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* Check rows (settings and new repository) */
+.modal label.check-row { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); cursor: pointer; transition: border-color .2s; }
+.modal label.check-row:hover { border-color: #ffffff3d; }
+.modal .check-row input { display: inline-block; width: 16px; height: 16px; margin: 3px 0 0; padding: 0; border: 0; background: none; accent-color: var(--gold); flex-shrink: 0; }
+.check-row strong { display: block; font-size: 13px; font-weight: 600; color: var(--ink); }
+.check-row small { margin-top: 3px; }
+.settings-grid .input-action input { margin-top: 8px; }
 
 /* ───────────────────────── Motion ───────────────────────── */
 @keyframes ping { 0% { box-shadow: 0 0 0 0 #74d39a66; } 70%, 100% { box-shadow: 0 0 0 8px #74d39a00; } }
@@ -601,7 +682,16 @@ select option { background: #15171b; color: var(--ink); }
   .workflow-line > span:not(.current)::before { font-size: 10.5px; }
   .workflow-line > span:not(.current):hover { font-size: 10.5px; gap: 8px; }
 }
+@media (max-width: 1699px) {
+  .agent-footnote { display: none; }
+}
+@media (max-width: 1180px) {
+  .effort-control .control-label { display: none; }
+  .team-chip > span:not(.team-count) { display: none; }
+  .team-chip { padding: 0 9px; gap: 6px; }
+}
 @media (max-width: 1280px) {
+  .gitbar { margin-left: 22px; margin-right: 22px; }
   .version { display: none; }
   .top-actions .accounts-button span:not(.account-count) { display: none; }
   .topbar { gap: 16px; padding: 0 22px; }
@@ -641,7 +731,11 @@ select option { background: #15171b; color: var(--ink); }
 @media (max-width: 600px) {
   .app { display: flex; flex-direction: column; height: 100dvh; min-height: 0; }
   .rail { display: none; }
-  .main { flex: 1; min-height: 0; }
+  .main { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+  .main > * { flex-shrink: 0; }
+  /* Transient bars (Git approvals) push the page taller: scroll instead of squashing the feed. */
+  .workspace { flex: 1 0 380px; min-height: 380px; }
+  .command-center { position: sticky; bottom: 0; }
   .topbar { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "brand actions" "project project"; gap: 10px 12px; padding: 12px 14px 10px; min-height: 0; }
   .wordmark { grid-area: brand; font-size: 27px; }
   .top-actions { grid-area: actions; gap: 6px; }
@@ -735,4 +829,27 @@ select option { background: #15171b; color: var(--ink); }
   .source-choice svg { display: none; }
   .settings-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-links .button { flex: 1; }
+  .team-chip > span:not(.team-count) { display: none; }
+  .team-chip { padding: 0 9px; gap: 6px; }
+  .entry-agent { padding: 0 6px; font-size: 9px; }
+  .team-section { padding: 14px; }
+  .team-head { align-items: flex-start; gap: 11px; }
+  .team-head h3 { font-size: 21px; }
+  .team-head p { display: none; }
+  .team-row { grid-template-columns: 28px minmax(0, 1fr) 40px; grid-template-areas: "idx model end" ". effort ."; row-gap: 8px; }
+  .team-index { grid-area: idx; align-self: end; }
+  .team-model { grid-area: model; }
+  .team-effort { grid-area: effort; }
+  .team-end { grid-area: end; align-self: end; }
+  .team-badge { display: none; }
+  .gitbar { margin: 8px 12px 0; padding: 10px 12px; }
+  .gitbar-note { display: none; }
+  .gitbar { gap: 6px; }
+  .gitbar-head { font-size: 12px; }
+  .git-item { gap: 8px; padding: 6px 8px; }
+  .git-kind { padding: 2px 6px; font-size: 9px; }
+  .git-text { font-size: 12px; }
+  .git-actions { gap: 6px; }
+  .git-actions .button { min-height: 30px; padding: 0 10px; font-size: 11.5px; }
+  .project-source-picker { grid-template-columns: minmax(0, 1fr); }
 }
