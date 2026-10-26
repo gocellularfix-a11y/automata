@@ -5,6 +5,7 @@ Automata v0.3.1 is a preview for Windows and Android.
 - Publish each agent's response as soon as its turn finishes.
 - Support local folders without requiring Git, plus optional GitHub sign-in and repository import.
 - Connect Claude Code and Codex/ChatGPT through their official sign-in flows.
+- Normalize Windows short-path aliases when checking an existing GitHub checkout.
 
 Windows: download `Automata-0.3.1-Windows-x64.zip`, extract the complete folder, and run `Automata.exe`. Keep its supporting files together. Install Claude Code and Codex CLI separately, then connect your accounts inside Automata.
 
@@ -14,4 +15,4 @@ This preview contains an unsigned Windows application and a development-signed A
 
 Validation: 34 core tests, 7 chat UI checks, a packaged EXE demo/chat cycle, and a real Windows comparison showing 12 visible consoles before the fix and zero after it. No model credits were used for these checks.
 
-App source: commit `441ab4bd910d84b59a7d65ca74d45521148611c6`. `release-manifest.json` records build provenance; `SHA256SUMS.txt` verifies the download files.
+`release-manifest.json` records the exact source commit used for this release; `SHA256SUMS.txt` verifies the download files. The Windows alias fix was found and corrected during release CI, before publication.

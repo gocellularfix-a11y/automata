@@ -24,8 +24,12 @@ export class GitHubProjects {
     work.pending = (async () => {
       if (action === "existing") {
         const root = await this.run("git", ["rev-parse", "--show-toplevel"], { cwd: project.directory, signal: controller.signal, timeoutMs: 20000 });
-        const normalized = value => process.platform === "win32" ? value.toLowerCase() : value;
-        if (root.code !== 0 || normalized(fs.realpathSync(root.stdout.trim())) !== normalized(project.directory)) throw new Error("Elige la carpeta raíz de la copia local del repositorio.");
+        const normalized = value => {
+          // Native realpath expands Windows 8.3 aliases such as RUNNER~1.
+          const canonical = fs.realpathSync.native(value);
+          return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+        };
+        if (root.code !== 0 || normalized(root.stdout.trim()) !== normalized(project.directory)) throw new Error("Elige la carpeta raíz de la copia local del repositorio.");
         const remote = await this.run("git", ["remote", "get-url", "origin"], { cwd: project.directory, signal: controller.signal, timeoutMs: 20000 });
         let actual;
         try { actual = githubRepository(remote.stdout.trim().replace(/^git@github\.com:/, "https://github.com/")); } catch {}
