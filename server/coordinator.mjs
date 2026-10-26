@@ -17,6 +17,10 @@ export class Coordinator extends EventEmitter {
     this.projects = store.read("projects.json", []);
     this.settings = validateSettings(store.read("settings.json", DEFAULT_SETTINGS));
     this.runs = store.read("runs.json", []);
+    for (const run of this.runs) if (run.settings) {
+      run.settings.accessMode ??= this.settings.accessMode;
+      run.settings.language ??= this.settings.language;
+    }
     this.events = store.read("events.json", []);
     this.messages = store.read("messages.json", []);
     for (const message of this.messages) if (message.status === "processing") {
@@ -72,7 +76,13 @@ export class Coordinator extends EventEmitter {
     this.persist();
   }
   updateSettings(input) {
+    const previousAccess = this.settings.accessMode;
     this.settings = validateSettings(input);
+    if (this.active?.settings) this.active.settings.language = this.settings.language;
+    if (previousAccess !== this.settings.accessMode && this.active?.settings && this.active.status !== "complete") {
+      this.active.settings.accessMode = this.settings.accessMode;
+      this.event({ role: "system", kind: "phase", text: `Permisos para la siguiente operación: acceso ${this.settings.accessMode === "full" ? "completo" : "limitado"}.` });
+    }
     this.persist();
     this.notify();
     return this.settings;
@@ -131,13 +141,35 @@ export class Coordinator extends EventEmitter {
   }
   async invoke(role, prompt, phase, dir) {
     const r = this.active;
-    const result = await this.agents.run({ role, prompt, phase, directory: dir, project: r.project, settings: r.settings, signal: this.controller.signal, emit: (e) => {
+    let watcher, projectChanged = false;
+    if (role === "auditor" && phase === "review" && r.settings.accessMode !== "limited") {
+      const storeRoot = path.resolve(this.store.directory).toLowerCase();
+      const projectRoot = path.resolve(r.project.directory).toLowerCase();
+      const nestedStore = storeRoot.startsWith(projectRoot + path.sep);
+      try {
+        watcher = fs.watch(r.project.directory, { recursive: true }, (_event, filename) => {
+          const relative = String(filename ?? "");
+          const target = path.resolve(r.project.directory, relative).toLowerCase();
+          if (nestedStore && (target === storeRoot || target.startsWith(storeRoot + path.sep)) || /^(?:\.git|node_modules|\.automata)(?:[\\/]|$)/.test(relative)) return;
+          projectChanged = true;
+        });
+        watcher.on("error", () => { projectChanged = true; });
+      } catch {
+        throw new Error("No se pudieron vigilar los cambios durante la auditoría con acceso completo.");
+      }
+    }
+    let result;
+    try {
+      result = await this.agents.run({ role, prompt, phase, directory: dir, project: r.project, settings: { ...r.settings }, signal: this.controller.signal, emit: (e) => {
       if (e.model) {
         r.actualModels ??= {};
         r.actualModels[role] = e.model;
       }
       this.event(e);
-    } });
+      } });
+      if (watcher) await new Promise(resolve => setTimeout(resolve, 50));
+    } finally { watcher?.close(); }
+    if (projectChanged) result = { ...result, projectChanged: true };
     if (result.usage) {
       const u = result.usage;
       r.tokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
@@ -167,6 +199,16 @@ ${JSON.stringify(r.checks)}
 ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige evidencia explícita."}`, history: r.review?.summary });
         const result = await this.invoke("auditor", prompt, phase, dir);
         const review = validateReview(result.review, p, phase);
+        if (result.projectChanged) {
+          r.checks = [];
+          r.checksRound = null;
+          if (review.decision === "complete") {
+            review.decision = "continue";
+            review.nextPrompt = "El director modificó archivos durante la revisión. Inspecciona esos cambios, comprueba que cumplen el objetivo y deja una entrega revisable. Automata volverá a ejecutar las verificaciones antes de aprobar.";
+            review.summary += " Se detectaron cambios durante la auditoría; falta una nueva ronda de verificación.";
+          }
+          this.event({ role: "system", kind: "warning", text: "El director cambió archivos. Se repetirán las verificaciones antes de aprobar." });
+        }
         if (review.decision === "complete" && r.checks.some((c) => !c.passed)) throw new Error("El auditor intentó aprobar con verificaciones fallidas. Revisa la evidencia antes de continuar.");
         if (review.decision === "complete" && p.checks.length && (r.checksRound !== r.round || r.checks.length !== p.checks.length)) throw new Error("Faltan verificaciones de la ronda actual.");
         fs.writeFileSync(path.join(dir, "review.json"), JSON.stringify(review, null, 2));
@@ -251,7 +293,7 @@ ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige ev
     if (!p) throw new Error("Selecciona un proyecto para conversar.");
     text = String(text ?? "").trim();
     if (!text || text.length > 12e3) throw new Error("Escribe un mensaje de hasta 12 000 caracteres.");
-    if (!["coder", "auditor", "both"].includes(target) || !["question", "instruction"].includes(kind)) throw new Error("Destino o tipo de mensaje no válido.");
+    if (!["coder", "auditor", "both"].includes(target) || !["task", "question", "instruction"].includes(kind)) throw new Error("Destino o tipo de mensaje no válido.");
     const message = { id: randomUUID(), projectId, target, text, kind, status: "queued", at: (/* @__PURE__ */ new Date()).toISOString() };
     this.messages.push(message);
     this.chatQueue.push({ message, project: p });
@@ -298,7 +340,8 @@ ${message.text}`;
             try {
               const dir = path.join(this.store.directory, "chats", message.id, role);
               fs.mkdirSync(dir, { recursive: true });
-              const result = await this.agents.run({ role, phase: "chat", prompt: chatPrompt(project, role, message.text, this.runs.find((r) => r.projectId === project.id)?.review?.summary), project, settings: { ...this.settings }, directory: dir, signal: withinRun ? this.controller.signal : this.chatController.signal, emit: (e) => this.event({ ...e, projectId: project.id }) });
+              message.settings = { ...this.settings };
+              const result = await this.agents.run({ role, phase: message.kind === "task" ? "task" : "chat", prompt: chatPrompt(project, role, message.text, this.runs.find((r) => r.projectId === project.id)?.review?.summary, message.settings, { kind: message.kind, previousAnswers: message.answers }), project, settings: message.settings, directory: dir, signal: withinRun ? this.controller.signal : this.chatController.signal, emit: (e) => this.event({ ...e, projectId: project.id }) });
               message.answers.push({ role, text: result.text });
             } catch (e) {
               message.answers.push({ role, text: e.message, error: true });
@@ -308,6 +351,14 @@ ${message.text}`;
             this.notify();
           }
           message.status = message.answers.some((a) => a.error) ? "error" : "answered";
+          if (withinRun && message.kind === "task" && this.active?.projectId === project.id) {
+            this.active.coderReport += `\n\nTAREA DIRECTA DEL USUARIO:\n${message.text}\nRESULTADO:\n${message.answers.map(answer => `${answer.role}: ${answer.text}`).join("\n")}`;
+            if (this.active.stage === "review") {
+              this.active.stage = "checks";
+              this.active.checks = [];
+              this.active.checksRound = null;
+            }
+          }
         }
         message.finishedAt = new Date().toISOString();
         this.persist();

@@ -1779,6 +1779,42 @@ img {
 }
 .bottom-line > span:first-child {
   min-width: 0;
+  flex: 1;
+}
+.access-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: 14px;
+  color: #6c7f60;
+  font-size: 8px;
+}
+.access-control > span {
+  letter-spacing: 1px;
+  font-size: 7px;
+}
+.access-control select {
+  background: #e8f0df;
+  border: 1px solid #d8e4cb;
+  color: #4f6b40;
+  border-radius: 5px;
+  padding: 4px 6px;
+  font-size: 9px;
+}
+@media (max-width: 600px) {
+  .access-control {
+    gap: 3px;
+    margin-left: 5px;
+  }
+  .access-control > span {
+    display: none;
+  }
+  .access-control select {
+    max-width: 110px;
+    font-size: 8px;
+    padding: 3px;
+  }
 }
 .bottom-line #bottomStatus {
   overflow: hidden;
@@ -2126,3 +2162,11 @@ img {
     bottom: 280px;
   }
 }
+/* Settings share the same controls on desktop and Android. */
+.settings-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 20px}
+.settings-grid label{min-width:0}.settings-grid input,.settings-grid select{width:100%;min-width:0}
+.settings-grid select{display:block;border:1px solid #dfe5d6;background:#f9faf5;color:#4e6542;border-radius:7px;font:inherit;font-size:12px;padding:12px;margin-top:7px;min-height:43px}
+.settings-grid select:focus{outline:2px solid #a4b293;outline-offset:2px}
+.settings-section{font-size:12px;text-transform:uppercase;letter-spacing:.13em;border-top:1px solid var(--line,#deded6);padding-top:22px;margin:22px 0 14px}
+.settings-links{display:flex;gap:10px;flex-wrap:wrap}.settings-grid small{line-height:1.5}
+@media(max-width:600px){.settings-grid{grid-template-columns:minmax(0,1fr)}.settings-links .button{flex:1}}

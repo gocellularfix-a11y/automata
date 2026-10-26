@@ -35,7 +35,7 @@ if (!page || !browser) throw new Error('Native startup did not recover. Read ' +
 try {
   const info = await page.evaluate(async () => {
     const c = await window.automata.connection();
-    return { node: typeof window.require, compatibilityMode: c.compatibilityMode, title: document.title, version: (await window.automata.request('capabilities')).version };
+    return { node: typeof window.require, compatibilityMode: c.compatibilityMode, title: document.title, version: (await window.automata.request('capabilities')).version, accessMode: document.querySelector('#accessMode').value, chatKind: document.querySelector('#chatKind').value };
   });
   if (info.node !== 'undefined') throw new Error('Node is exposed to the renderer.');
   const security = await page.evaluate(async () => {
@@ -57,18 +57,37 @@ try {
     await page.click('#accountsDialog [data-close]');
   }
   await page.screenshot({ path: path.join(output, 'windows.png'), timeout: 10000 });
-  let nativeChat;
+  let nativeChat, nativeTask;
   if (!live) {
     await page.click('#startButton');
     await page.waitForFunction(() => document.querySelector('#runState').textContent === 'Completado', null, { timeout: 25000 });
+    if (info.accessMode !== 'full' || info.chatKind !== 'task') throw new Error('Full access and direct work must be visible defaults.');
+    await page.fill('#chatText', 'Tarea directa de prueba desde la interfaz.');
+    await page.click('#chatForm button[type=submit]');
+    await page.waitForFunction(() => document.querySelector('#toast').textContent.includes('trabajando en tu petición'));
+    const taskNotice = await page.locator('#toast').textContent();
+    await page.waitForFunction(() => document.querySelectorAll('.chat-answer:not(.pending-msg)').length === 1);
+    nativeTask = { notice: taskNotice, answered: true, demo: true };
     await page.fill('#chatText', 'Consulta de prueba del estado de respuesta.');
+    await page.selectOption('#chatKind', 'question');
     await page.click('#chatForm button[type=submit]');
     await page.waitForFunction(() => document.querySelector('#toast').textContent.includes('está respondiendo'));
     const notice = await page.locator('#toast').textContent();
-    await page.waitForFunction(() => document.querySelector('.chat-answer')?.textContent.includes('demostración'));
+    await page.waitForFunction(() => document.querySelectorAll('.chat-answer').length === 2 && [...document.querySelectorAll('.chat-answer')].at(-1).textContent.includes('demostración'));
     nativeChat = { notice, answered: true, demo: true };
   }
-  const result = { ok: true, automaticRecovery: info.compatibilityMode, info, security, live, accounts, nativeChat, output };
+  let nativeSettings;
+  if (!live) {
+    await page.click('#settingsButton');
+    await page.selectOption('#settingsForm [name=language]', 'en');
+    await page.click('#settingsForm button[type=submit]');
+    await page.waitForFunction(() => document.documentElement.lang === 'en' && !document.querySelector('#settingsDialog').open);
+    nativeSettings = { language: await page.locator('html').getAttribute('lang'), work: await page.locator('#chatKind option:checked').textContent(), settingsTitle: await page.locator('#settingsDialog h2').textContent() };
+    if (nativeSettings.settingsTitle !== 'Settings') throw Error('Native Settings translation failed.');
+    await page.click('#settingsButton');
+    await page.screenshot({ path: path.join(output, 'windows-settings-en.png'), timeout: 10000 });
+  }
+  const result = { ok: true, automaticRecovery: info.compatibilityMode, info, security, live, accounts, nativeChat, nativeTask, nativeSettings, output };
   fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result, null, 2));
 } finally {

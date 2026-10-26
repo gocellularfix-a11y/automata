@@ -6,7 +6,7 @@ Aplicación para coordinar proyectos: el director convierte un objetivo en tarea
 
 Una interfaz compartida para Windows y Android: dos paneles en escritorio, pestañas en móvil y controles en la parte inferior.
 
-## Incluido en 0.3
+## Incluido en 0.4
 
 - Proyectos con carpeta, objetivo, criterios de aceptación, restricciones y comandos de verificación.
 - Tareas pequeñas, medianas o largas.
@@ -19,6 +19,9 @@ Una interfaz compartida para Windows y Android: dos paneles en escritorio, pesta
 - Demostración aislada que no llama a proveedores ni consume créditos.
 - Ventana de cuentas al abrir: conecta Claude y ChatGPT/Codex mediante sus herramientas oficiales, detecta sesiones existentes y comprueba ambas antes de trabajar.
 - Proyectos **Local** sin Git obligatorio y **GitHub** para clonar o usar una copia local existente. Conexión opcional de GitHub desde Cuentas.
+- Acceso completo para ambos agentes y tareas directas desde el chat con **Trabajar**. **Solo consultar** conserva la lectura explícita.
+- **English / Español** desde **Configuración / Settings**: interfaz, avisos y próximas respuestas de los agentes. Los mensajes originales y reportes anteriores se conservan.
+- Configuración reúne idioma, permisos, modelos y razonamiento de ambas AI, ritmo, rondas, tiempo máximo, cuentas y conexión al teléfono.
 
 ## Abrir en Windows
 
@@ -60,7 +63,7 @@ La PC conserva los archivos, ejecuta los agentes y debe permanecer encendida. El
 
 En **Nuevo proyecto**, elige:
 
-- **Local**: selecciona una carpeta existente y define el objetivo. No necesitas Git, GitHub ni un repositorio inicializado. La planificación, auditoría y consultas de Codex usan `--skip-git-repo-check` y mantienen `--sandbox read-only`. No se ejecuta `git init`.
+- **Local**: selecciona una carpeta existente y define el objetivo. No necesitas Git, GitHub ni un repositorio inicializado. Codex usa `--skip-git-repo-check`. Las consultas explícitas y el director en modo limitado mantienen `--sandbox read-only`; en acceso completo ambos agentes pueden ejecutar las tareas solicitadas. Agregar un proyecto local no ejecuta `git init`.
 - **GitHub → Clonar en una carpeta vacía**: instala Git y GitHub CLI, conecta GitHub en **Cuentas** e introduce `usuario/repositorio` o una URL HTTPS de GitHub. Elige una carpeta existente y vacía. Automata usa `gh repo clone`; los archivos se trabajan en tu PC.
 - **GitHub → Usar una copia local existente**: selecciona la raíz de tu copia e indica el repositorio. Automata comprueba que `origin` coincida; no vuelve a clonar ni cambia el remoto. Esta opción no necesita un nuevo login de GitHub.
 
@@ -95,7 +98,11 @@ El APK usa una firma de desarrollo local; no es una publicación en Google Play.
 
 El escritorio guarda proyectos y reportes en su carpeta de datos de usuario. El servidor usa `.automata/`. Estos archivos, los resultados de pruebas y los paquetes generados están excluidos de Git. No se incluyen proyectos de Blueprint.
 
-El auditor revisa en modo de solo lectura. El codificador conserva los permisos de Claude Code; Automata no los desactiva. Los comandos de verificación son los que defines al crear el proyecto. Commit, push y despliegue están fuera de las tareas automáticas.
+El control **Permisos** afecta a ambos agentes. **Acceso completo** permite archivos, comandos y red con los permisos de tu usuario de Windows: Claude usa `bypassPermissions` y Codex `--dangerously-bypass-approvals-and-sandbox`. No concede privilegios de administrador ni supera políticas del sistema o del proveedor. **Acceso limitado** conserva el director de lectura y Claude con edición acotada. Cambiar permisos se aplica a la siguiente operación, sin cambiar el proceso que ya está ejecutándose.
+
+El chat abre en **Trabajar**: una petición de implementar se ejecuta por el agente elegido sin exigir iniciar primero el ciclo. Con **Ambos**, cada uno recibe el resultado anterior para no repetir acciones. **Solo consultar** es una elección explícita de lectura, incluso si el permiso global es completo. **Al plan** entrega instrucciones al director de un trabajo activo. Crear repositorios, commit, push o despliegue se permiten cuando forman parte de la petición del usuario; GitHub usa la sesión conectada de GitHub CLI. Si no indicas visibilidad para un repo nuevo, el prompt pide crearlo privado.
+
+Los comandos de verificación son los que defines al crear el proyecto. Si una tarea directa o el director cambian archivos después de las comprobaciones, Automata exige nuevas verificaciones antes de aprobar.
 
 La aprobación necesita evidencia para todos los criterios y verificaciones aprobadas en la ronda actual. Sigue siendo una revisión de AI: conserva las comprobaciones apropiadas para tu proyecto.
 

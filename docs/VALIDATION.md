@@ -1,19 +1,21 @@
-# Validación de Automata 0.3.1
+# Validación de Automata 0.4.0
 
-Fecha: 2026-10-25. Primera implementación; no equivale a una certificación para trabajo desatendido.
+Fecha: 2026-10-26. Las pruebas con proveedores simulados no equivalen a validar inferencias reales.
 
 | Comprobación | Resultado |
 | --- | --- |
-| `node --test test/*.test.mjs` | **34 aprobadas, 0 fallidas** |
+| `node --test test/*.test.mjs` | **41 aprobadas, 0 fallidas** |
 | `node scripts/smoke.mjs` | **13 comprobaciones aprobadas** en Chrome de Windows |
 | `node scripts/smoke-auth.mjs` | **14 comprobaciones aprobadas**, login de AI/GitHub con procesos simulados y navegador real |
 | `node scripts/smoke-github.mjs` | **10 comprobaciones aprobadas**, GitHub simulado con clonación real de un repositorio Git local de prueba |
 | `node scripts/smoke-chat.mjs` | **7 comprobaciones aprobadas**, estados del chat con proveedores simulados y navegador real |
 | `scripts/smoke-console.ps1 -CompareWrapper` | **Reproducido y corregido**: 12 consolas visibles en 12 llamadas `--version` con el lanzador anterior; 0 en 12 llamadas con el ejecutable nativo |
-| `node scripts/smoke-recovery.mjs` (0.3.1) | **Aprobado**: EXE actualizado, recuperación Windows, ciclo de demo completo y consulta por IPC con aviso «Codex está respondiendo…» y respuesta recibida |
+| `node scripts/smoke-access.mjs` | **8 comprobaciones aprobadas**, CLI simuladas reciben permisos reales y crean archivos de prueba desde ambos roles |
+| `node scripts/smoke-settings.mjs` | **12 comprobaciones aprobadas**, English/Español, persistencia, modelos, límites, respuestas de demo y configuración móvil |
+| `node scripts/smoke-recovery.mjs` (0.4.0) | **Aprobado**: EXE actualizado, recuperación Windows, ciclo de demo completo, tareas directas y consulta por IPC |
 | `node scripts/smoke-recovery.mjs --live` | **Aprobado**: EXE 0.3.0 abre la ventana de cuentas por IPC, incluye GitHub opcional, consulta las CLI instaladas y mantiene la recuperación de Windows |
 | APK Android | Compilado y firma v2/v3 verificada |
-| Instalación y ejecución en Samsung SM-S938B (0.1.0) | **4 comprobaciones aprobadas**, conexión USB al coordinador; paquetes posteriores recompilados y firmados, sin repetir todavía la prueba física |
+| Instalación y ejecución en Samsung SM-S938B (0.4.0) | **8 comprobaciones aprobadas**: versión instalada, ciclo con checks reales, Settings, English/Español, controles de acceso y ausencia de errores o desbordamiento |
 | Paquete Windows portable | Generado en `dist/Automata-Windows` |
 | Renderer nativo Electron (0.1.1) | **Aprobado**: EXE empaquetado, ventana visible, puente IPC, Node deshabilitado en la página y ciclo de demostración completo en modo de compatibilidad |
 | Ventana Chrome lanzada directamente | **No validada** aquí: el proceso GPU falla; la misma interfaz funciona en Chrome bajo Playwright |
@@ -28,7 +30,9 @@ Fecha: 2026-10-25. Primera implementación; no equivale a una certificación par
 - Rechazo de aprobaciones con verificaciones fallidas, y verificación de la ronda actual.
 - Orden director → codificador → verificaciones → auditoría.
 - Modelos/razonamiento conservados en el snapshot de cada ejecución.
-- Adaptadores CLI ejecutados como procesos de prueba con stdin, JSONL, sesiones y resultados estructurados; auditor con sandbox de solo lectura.
+- Adaptadores CLI ejecutados como procesos de prueba con stdin, JSONL, sesiones y resultados estructurados; acceso completo en ambos roles y consulta explícita de solo lectura.
+- Tareas sin iniciar el ciclo, cambios de permisos en la próxima operación y repetición de checks si el director modifica archivos al auditar.
+- Idioma validado y transmitido en prompts sin traducir los criterios originales.
 - Argumentos transmitidos como datos, sin evaluar el prompt como PowerShell.
 - Exclusión mutua, persistencia, pausa sin repetir tareas, límite de rondas y recuperación después de una interrupción.
 - Instrucciones en cola que no omiten las verificaciones.

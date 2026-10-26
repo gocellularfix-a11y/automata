@@ -124,7 +124,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
           throw new Error("Acción de acceso no válida.");
         }
         if (url.pathname === "/api/state" && req.method === "GET") return send(200, coordinator.snapshot());
-        if (url.pathname === "/api/capabilities" && req.method === "GET") return send(200, { demo, version: VERSION, models: MODELS, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
+        if (url.pathname === "/api/capabilities" && req.method === "GET") return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, languages: ["es", "en"] }, models: MODELS, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
         if (url.pathname === "/api/pairing" && req.method === "GET") {
           if (!loopback(req.socket.remoteAddress)) return send(403, { error: "Abre la conexión de Android desde la PC." });
           return send(200, { token, lan, addresses: Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) });
@@ -150,7 +150,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
         }
         if (url.pathname === "/api/chat" && req.method === "POST") {
           const data = await body();
-          if ((data.kind ?? "question") === "question") await auth.requireConnected(data.target === "both" ? ["coder", "auditor"] : [data.target]);
+          if (["question", "task"].includes(data.kind ?? "question")) await auth.requireConnected(data.target === "both" ? ["coder", "auditor"] : [data.target]);
           return send(202, await coordinator.sendChat(data));
         }
         return send(404, { error: "Ruta no encontrada." });

@@ -21,6 +21,7 @@ try {
   await page.goto(app.origin + "/#token=" + app.token);
   await page.waitForSelector("#accountsDialog[open]");
   await page.click("#accountsDialog [data-close]");
+  await page.selectOption("#chatKind", "question");
   await page.fill("#chatText", "Primera consulta al director");
   await page.click("#chatForm button[type=submit]");
   await page.waitForFunction(() => document.querySelector("#auditorStatus").textContent.includes("Respondiendo"));

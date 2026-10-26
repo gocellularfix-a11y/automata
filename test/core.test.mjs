@@ -70,7 +70,7 @@ test("los adaptadores ejecutan CLI por stdin, conservan modelos y leen sus repor
     for (const [role, key] of [["coder", "AUTOMATA_CLAUDE"], ["auditor", "AUTOMATA_CODEX"]]) if (before[role] === void 0) delete process.env[key];
     else process.env[key] = before[role];
   });
-  const agents = new CliAgents(), settings = validateSettings({ coderModel: "fable", coderEffort: "high", auditorModel: "gpt-6-astra", auditorEffort: "low" }), project = projectInput(dir);
+  const agents = new CliAgents(), settings = validateSettings({ accessMode: "limited", coderModel: "fable", coderEffort: "high", auditorModel: "gpt-6-astra", auditorEffort: "low" }), project = projectInput(dir);
   const a = await agents.run({ role: "auditor", phase: "plan", prompt: "Inspecciona; no ejecutes $(nada).", project, settings, directory: dir, emit: () => {
   } });
   assert.equal(a.review.decision, "continue");

@@ -147,17 +147,20 @@ export class CliAgents {
     fs.writeFileSync(path.join(directory, `${phase}-prompt.txt`), prompt, { mode: 384 });
     let result = null, lastMessage = "", sessionId = null, usage = null;
     const outputFile = path.join(directory, `${phase}-response.json`);
+    const conversation = ["chat", "task"].includes(phase);
+    const fullAccess = settings.accessMode !== "limited" && phase !== "chat";
     let args;
     if (role === "auditor") {
-      const schema = phase === "chat" ? null : path.join(directory, "review-schema.json");
+      const schema = conversation ? null : path.join(directory, "review-schema.json");
       if (schema) fs.writeFileSync(schema, JSON.stringify(REVIEW_SCHEMA));
-      // The user selects a local project folder; Git is optional. Keep the auditor read-only.
-      args = ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "--model", settings.auditorModel, "--json", "--output-last-message", outputFile, "--cd", project.directory];
+      // Full access is selected by the user; explicit consultations stay read-only.
+      args = ["exec", "--skip-git-repo-check", ...(fullAccess ? ["--dangerously-bypass-approvals-and-sandbox"] : ["--sandbox", "read-only"]), "--model", settings.auditorModel, "--json", "--output-last-message", outputFile, "--cd", project.directory];
       if (schema) args.push("--output-schema", schema);
       if (settings.auditorEffort !== "default") args.push("-c", `model_reasoning_effort="${settings.auditorEffort}"`);
       args.push("-");
     } else {
-      args = ["-p", "--model", settings.coderModel, "--output-format", "stream-json", "--verbose", "--max-turns", String(MODES[settings.mode].turns), "--permission-mode", phase === "chat" ? "plan" : "acceptEdits", "--allowedTools", phase === "chat" ? "Read,Glob,Grep" : "Read,Glob,Grep,Edit,Write,Bash(git status *),Bash(git diff *),Bash(git log *)"];
+      args = ["-p", "--model", settings.coderModel, "--output-format", "stream-json", "--verbose", "--max-turns", String(MODES[settings.mode].turns), "--permission-mode", fullAccess ? "bypassPermissions" : phase === "chat" ? "plan" : "acceptEdits"];
+      if (!fullAccess) args.push("--allowedTools", phase === "chat" ? "Read,Glob,Grep" : "Read,Glob,Grep,Edit,Write,Bash(git status *),Bash(git diff *),Bash(git log *)");
       if (settings.coderEffort !== "default") args.push("--effort", settings.coderEffort);
     }
     const rawFile = path.join(directory, `${phase}-${role}.jsonl`);
@@ -190,7 +193,7 @@ export class CliAgents {
     }
     const text = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, "utf8").trim() : lastMessage;
     if (!text) throw new Error("Codex terminó sin respuesta.");
-    if (phase === "chat") return { text: redact(text), sessionId, usage };
+    if (conversation) return { text: redact(text), sessionId, usage };
     let review;
     try {
       review = JSON.parse(text);
@@ -242,7 +245,8 @@ ${command}
   return results;
 }
 export class DemoAgents {
-  async run({ role, phase, project, emit, signal }) {
+  async run({ role, phase, project, emit, signal, settings = {} }) {
+    const en = settings.language === "en";
     await new Promise((resolve, reject) => {
       const timer = setTimeout(resolve, 500);
       signal?.addEventListener("abort", () => {
@@ -250,14 +254,14 @@ export class DemoAgents {
         reject(Object.assign(new Error("Demostración detenida"), { name: "AbortError" }));
       }, { once: true });
     });
-    if (phase === "chat") return { text: "Estás en la demostración local. Puedes probar el flujo, los controles y el historial. Para consultar a un modelo real, abre Automata sin --demo y configura un proyecto." };
+    if (["chat", "task"].includes(phase)) return { text: (en ? "This is the local demo. Try the workflow, controls, and history. To use a real model, open Automata without --demo and configure a project." : "Estás en la demostración local. Puedes probar el flujo, los controles y el historial. Para trabajar con un modelo real, abre Automata sin --demo y configura un proyecto.") };
     if (role === "coder") {
       fs.writeFileSync(path.join(project.directory, "greet.mjs"), "export function greet(name) { return `Hola, ${name}. Bienvenido a Automata.`; }\n");
       fs.writeFileSync(path.join(project.directory, "greet.test.mjs"), "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { greet } from './greet.mjs';\ntest('saludo de Automata',()=>assert.equal(greet('compa'),'Hola, compa. Bienvenido a Automata.'));\n");
-      emit({ role: "coder", kind: "tool", text: "Demostración · creados greet.mjs y greet.test.mjs en el proyecto de ejemplo." });
-      return { text: "Demostración: implementé un saludo con su prueba. Automata ejecutará node --test para verificarlo. No se llamó a ninguna AI." };
+      emit({ role: "coder", kind: "tool", text: (en ? "Demo · created greet.mjs and greet.test.mjs in the sample project." : "Demostración · creados greet.mjs y greet.test.mjs en el proyecto de ejemplo.") });
+      return { text: (en ? "Demo: implemented a greeting and its test. Automata will run node --test to verify it. No AI was called." : "Demostración: implementé un saludo con su prueba. Automata ejecutará node --test para verificarlo. No se llamó a ninguna AI.") };
     }
     const complete = phase !== "plan";
-    return { review: { decision: complete ? "complete" : "continue", summary: complete ? "Demostración completada: el saludo y su prueba están creados. Las verificaciones reales se ejecutaron por separado." : "Preparé una tarea pequeña para probar el ciclo completo sin consumir créditos.", nextPrompt: complete ? "" : "Crea greet.mjs con un saludo y greet.test.mjs con una prueba de node:test.", findings: [], criteria: project.criteria.map((criterion) => ({ criterion, met: complete, evidence: complete ? "greet.mjs y greet.test.mjs del ejemplo; resultados de node --test." : "Pendiente de ejecución." })) } };
+    return { review: { decision: complete ? "complete" : "continue", summary: complete ? (en ? "Demo complete: the greeting and its test were created. Actual checks ran separately." : "Demostración completada: el saludo y su prueba están creados. Las verificaciones reales se ejecutaron por separado.") : (en ? "Prepared a small task to try the complete workflow without using credits." : "Preparé una tarea pequeña para probar el ciclo completo sin consumir créditos."), nextPrompt: complete ? "" : (en ? "Create greet.mjs with a greeting and greet.test.mjs with a node:test test." : "Crea greet.mjs con un saludo y greet.test.mjs con una prueba de node:test."), findings: [], criteria: project.criteria.map((criterion) => ({ criterion, met: complete, evidence: complete ? (en ? "Sample greet.mjs and greet.test.mjs; node --test results." : "greet.mjs y greet.test.mjs del ejemplo; resultados de node --test.") : (en ? "Awaiting execution." : "Pendiente de ejecución.") })) } };
   }
 }

@@ -1,4 +1,4 @@
-# Automata 0.3.1
+# Automata 0.4.0
 
 Una interfaz compartida para Windows y Android; un coordinador que trabaja en la PC.
 
@@ -18,15 +18,15 @@ Flutter no estaba instalado. Se implementó una interfaz compartida con Electron
 
 Solo un proceso de agente se ejecuta a la vez. El director inicial y el auditor son Codex. Las consultas a ambos se serializan. Pausar espera el final de la operación actual; detener cancela el proceso activo. Una interrupción del codificador se recupera verificando y auditando el trabajo parcial.
 
-Cada ejecución conserva una copia de la definición del proyecto y de los modelos elegidos. Cambiar preferencias no cambia una ejecución en marcha. Para ampliar un límite alcanzado se actualiza el máximo y se continúa explícitamente.
+Cada ejecución conserva una copia de la definición del proyecto y de los modelos elegidos. Los cambios de modelo se aplican al siguiente trabajo; idioma y permisos se aplican a la siguiente operación. Para ampliar un límite alcanzado se actualiza el máximo y se continúa explícitamente.
 
 Los comandos de verificación deben pertenecer a la ronda actual para aprobar. `complete` exige evidencia no vacía para todos los criterios originales y ningún hallazgo crítico/importante pendiente. El coordinador rechaza una aprobación si falló un comando. La inspección de AI sigue siendo falible: estas reglas comprueban el contrato, no prueban por sí solas la corrección del código.
 
 ## Permisos y datos
 
-Codex se invoca con `--sandbox read-only`. Claude usa `acceptEdits`; Automata permite herramientas de archivo y lectura de Git, sin saltarse los permisos de la CLI. Las verificaciones configuradas por la persona se ejecutan desde PowerShell en la carpeta del proyecto. No se evalúan comandos recibidos en el JSON del auditor.
+`accessMode=full` es el permiso solicitado para ambos agentes. Claude se inicia con `--permission-mode bypassPermissions`, sin una lista de herramientas que lo reduzca a lectura; Codex usa `--dangerously-bypass-approvals-and-sandbox`. Esto permite operaciones de archivo, comandos y red bajo la cuenta del proceso. No modifica las restricciones del entorno donde se desarrolla Automata, no eleva privilegios y no cambia políticas administradas de Windows/proveedor. `limited` conserva el comportamiento anterior. Las consultas `question` siempre usan modo de lectura, de forma explícita.
 
-Los proyectos locales no requieren repositorio: todas las invocaciones de Codex exec (plan, review y chat) incluyen `--skip-git-repo-check`, conservando el sandbox de solo lectura. La evidencia Git es opcional; si está disponible, status y diff se limitan a la carpeta del proyecto con un pathspec. Los prompts piden revisar archivos directamente y no inicializar un repositorio por cuenta del agente.
+Los proyectos locales no requieren repositorio: las invocaciones de Codex exec incluyen `--skip-git-repo-check`. La evidencia Git es opcional; status y diff se limitan a la carpeta del proyecto con un pathspec. El modo completo permite inicializar o crear un repositorio cuando el usuario lo pide, sin convertir Git en un requisito para trabajar.
 
 La PC escucha solo en loopback por defecto. `--lan` habilita la red local. Todos los endpoints API requieren un token aleatorio. El código para emparejar se muestra solo en la PC autenticada. El APK guarda la conexión en el almacenamiento privado de su WebView, no las credenciales de los proveedores.
 
@@ -73,6 +73,22 @@ Los registros de inicio están en `boot.log` dentro de los datos de usuario. Se 
 El lanzador npm de Codex encontrado en la PC inicia el binario nativo mediante otro `spawn` sin `windowsHide`. Ocultar solo el primer proceso no ocultaba ese hijo. En Windows, Automata ahora resuelve el paquete opcional de arquitectura y ejecuta su `codex.exe` directamente con pipes y `windowsHide: true`, conservando los metadatos de instalación npm. Esto se aplica a consultas, planificación, auditoría y estado/login. Las rutas de instalación antiguas con `vendor/.../codex/codex.exe` también se detectan; los overrides de CLI explícitos siguen teniendo prioridad.
 
 Una consulta cambia de `queued` a `processing` con `activeRole` al iniciar su turno. La API devuelve ese estado real y la UI ya no deduce la cola de `busy`, porque una consulta que está respondiendo también ocupa al coordinador. Las respuestas parciales a ambos agentes se publican al terminar cada turno. Un error libera al agente y queda en el panel. Al reabrir, las consultas que estaban procesándose se marcan interrumpidas, sin reenviarlas automáticamente.
+
+## Tareas directas y permisos (0.4.0)
+
+`task` ejecuta una petición desde el chat y devuelve texto, sin exigir el esquema JSON de revisión ni un ciclo activo. `question` mantiene consulta de solo lectura y `instruction` se entrega al plan activo. El destino puede ser coder, auditor o ambos; la cola serializa sus llamadas y pasa las respuestas previas al siguiente agente. Cada llamada conserva sus permisos y el resultado declara errores reales, sin sustituirlos por éxito.
+
+Los modelos y límites de un trabajo se conservan en su snapshot. Un cambio explícito del permiso actualiza el permiso de las siguientes operaciones del trabajo activo; los argumentos del proceso ya iniciado no cambian. Los trabajos anteriores sin ese campo adoptan la selección actual al cargar.
+
+Una tarea directa entregada justo antes de revisar invalida los checks de esa ronda. En revisiones con permiso completo se vigila el directorio del proyecto, excluyendo el almacenamiento propio, `.git`, `.automata` y `node_modules`. Si el director cambia archivos, no se acepta `complete`: se solicita otra entrega y se repiten los checks, con el mismo límite de rondas. Esto evita aprobar modificaciones con resultados anteriores; sigue sin certificar por sí solo la corrección del código.
+
+Fuentes: [permisos de Claude Code](https://code.claude.com/docs/en/permissions) y [CLI de Codex](https://learn.chatgpt.com/docs/developer-commands?surface=cli).
+
+## Idiomas y configuración (0.4.0)
+
+`settings.language` acepta `es` o `en`. El coordinador persiste la elección y la comparte por eventos con Windows y Android. Los prompts solicitan las próximas respuestas en ese idioma y conservan literalmente los criterios de aceptación. Las llamadas ya iniciadas conservan su snapshot. La interfaz recuerda el idioma localmente incluso antes de conectarse; el coordinador es la fuente de la preferencia al establecer conexión.
+
+`public/i18n.js` traduce los textos de interfaz y atributos accesibles. No traduce mensajes del usuario, nombres de proyecto, rutas, criterios ni respuestas históricas. Configuración reúne los controles de idioma, permisos, modelos con identificadores personalizados, razonamiento, ritmo y límites; también permite abrir cuentas y conexión. Las opciones de razonamiento se recalculan cuando cambia el modelo.
 
 ## Fuentes utilizadas
 

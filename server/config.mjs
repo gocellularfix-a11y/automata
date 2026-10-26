@@ -18,14 +18,16 @@ export const MODELS = {
     { id: "gpt-6-astra", label: "Astra", detail: "Análisis profundo" }
   ]
 };
-export const DEFAULT_SETTINGS = { mode: "small", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30 };
+export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30 };
 export function effortsFor(model, role) {
   if (role === "coder") return ["default", "low", "medium", "high", "xhigh", "max"];
   return ["default", "low", "medium", "high", "xhigh", "max", .../luna/.test(model) ? [] : ["ultra"]];
 }
 export function validateSettings(value = {}) {
   const s = { ...DEFAULT_SETTINGS, ...value };
+  if (!["es", "en"].includes(s.language)) throw new Error("Elige English o Español.");
   if (!MODES[s.mode]) throw new Error("Elige un tamaño de trabajo válido.");
+  if (!["full", "limited"].includes(s.accessMode)) throw new Error("Elige acceso completo o limitado.");
   for (const role of ["coder", "auditor"]) {
     if (typeof s[`${role}Model`] !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:[\]-]{0,99}$/.test(s[`${role}Model`])) throw new Error("Identificador de modelo no válido.");
     if (!effortsFor(s[`${role}Model`], role).includes(s[`${role}Effort`])) throw new Error("Ese nivel de razonamiento no es compatible.");
