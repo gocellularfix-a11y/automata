@@ -108,10 +108,10 @@ export class Coordinator extends EventEmitter {
       const closed = run.status === "interrupted" && run.interruptedBy === "close";
       if (!LIVE.has(run.status) && run.status !== "waiting" && !closed) continue;
       delete run.interruptedBy;
-      const wasWaiting = run.status === "waiting";
+      const wasWaiting = run.status === "waiting", stageAtShutdown = run.stage;
       const saved = completedAttempt(run.inflight);
       run.recovery ??= { attempts: {}, log: [], waits: 0 };
-      run.recovery.log.push({ at: now(), kind: "shutdown", stage: run.stage, round: run.round, completed: !!saved, waiting: wasWaiting ? run.waiting?.kind ?? null : null });
+      run.recovery.log.push({ at: now(), kind: "shutdown", stage: stageAtShutdown, round: run.round, completed: !!saved, waiting: wasWaiting ? run.waiting?.kind ?? null : null });
       run.recovery.log = run.recovery.log.slice(-60);
       if (saved) {
         // The agent finished and Automata closed before noting it: the result is reused, not repeated.
@@ -125,7 +125,7 @@ export class Coordinator extends EventEmitter {
           run.coderReport = "La ejecución anterior se interrumpió. Inspecciona el trabajo parcial antes de dar la siguiente instrucción.";
         }
       }
-      this.remember("guardar", () => this.memory.addFact(run.projectId, { kind: "recovery", text: `Automata se cerró durante la etapa ${run.stage} de la ronda ${run.round}${saved ? "; el resultado del agente se recuperó sin repetir la operación" : ""}${wasWaiting ? "; estaba esperando para reintentar" : ""}.`, source: "automata", runId: run.id, round: run.round }));
+      this.remember("guardar", () => this.memory.addFact(run.projectId, { kind: "recovery", text: `Automata se cerró durante la etapa ${stageAtShutdown} de la ronda ${run.round}${saved ? "; el resultado del agente se recuperó sin repetir la operación" : stageAtShutdown === "code" && !wasWaiting ? "; el trabajo parcial de Claude pasó a verificación" : ""}${wasWaiting ? "; estaba esperando para reintentar" : ""}.`, source: "automata", runId: run.id, round: run.round }));
       if (this.settings.autoResume) {
         // Waiting runs keep their appointment; interrupted ones continue shortly after startup.
         if (wasWaiting && run.waiting?.resumeAt) this.toResume.push({ run, at: run.waiting.resumeAt });

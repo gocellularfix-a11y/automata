@@ -13,8 +13,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
 const arg = (name, fallback) => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : fallback; };
 const port = Number(arg("--port", 4791));
+// Which stage to cut: code (Claude mid-task, default), plan or review (Codex mid-inspection).
+const killStage = arg("--kill-stage", "code");
+const killRole = killStage === "code" ? "coder" : "auditor";
 const projectDir = path.resolve(arg("--project", path.join(process.env.USERPROFILE ?? "", "Automata Projects", "paso1-recuperacion")));
-const output = path.join(root, "artifacts", "real-recovery-" + new Date().toISOString().replace(/[:.]/g, "-"));
+const output = path.join(root, "artifacts", `real-recovery-${killStage}-` + new Date().toISOString().replace(/[:.]/g, "-"));
 const data = path.join(output, "data");
 fs.mkdirSync(data, { recursive: true });
 const origin = `http://127.0.0.1:${port}`;
@@ -94,12 +97,12 @@ try {
   while (Date.now() < deadline) {
     const state = await api("state");
     const run = runOf(state);
-    const coderTools = state.events.filter((e) => e.runId === run?.id && e.role === "coder" && e.kind === "tool").length;
-    if (run && run.status === "running" && run.stage === "code" && run.round === 1 && coderTools >= 2) {
-      before = { status: run.status, stage: run.stage, round: run.round, coderTools, events: state.events.filter((e) => e.runId === run.id).length };
+    const tools = state.events.filter((e) => e.runId === run?.id && e.role === killRole && e.kind === "tool" && (killStage !== "review" || e.at > (run.updatedAt ?? ""))).length;
+    if (run && run.status === "running" && run.stage === killStage && (killStage !== "code" || run.round === 1) && tools >= 2) {
+      before = { status: run.status, stage: run.stage, round: run.round, tools, events: state.events.filter((e) => e.runId === run.id).length };
       killedAt = new Date().toISOString();
       killHard(server);
-      log(`servidor y Claude eliminados a la fuerza en la ronda 1 con ${coderTools} acciones de Claude registradas`, before);
+      log(`servidor y ${killRole === "coder" ? "Claude" : "Codex"} eliminados a la fuerza en la etapa ${killStage} de la ronda ${run.round} con ${tools} acciones registradas`, before);
       break;
     }
     if (run && !["running", "pausing"].includes(run.status)) {
@@ -109,7 +112,7 @@ try {
     await sleep(400);
   }
   report.phases.interruption = { killedAt, before };
-  if (!killedAt) throw new Error("No se pudo interrumpir el trabajo en la ronda 1.");
+  if (!killedAt) throw new Error(`No se pudo interrumpir el trabajo en la etapa ${killStage}.`);
   await sleep(1500);
   // Phase 2: start again with the same data; nobody touches the controls.
   server = startServer("2");
