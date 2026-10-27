@@ -109,7 +109,7 @@ export function validateProject(input, { checkDirectory = true } = {}) {
 export const REVIEW_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["decision", "summary", "nextPrompt", "findings", "criteria", "git", "run"],
+  required: ["decision", "summary", "nextPrompt", "findings", "criteria", "git", "run", "memory"],
   properties: {
     decision: { type: "string", enum: ["continue", "complete", "blocked"] },
     summary: { type: "string" },
@@ -119,9 +119,20 @@ export const REVIEW_SCHEMA = {
     // What the director decides about Git. The executor (not the director) carries it out; empty values mean "do nothing".
     git: { type: "object", additionalProperties: false, required: ["commit", "message", "push", "branch", "merge_into"], properties: { commit: { type: "boolean" }, message: { type: "string" }, push: { type: "boolean" }, branch: { type: "string" }, merge_into: { type: "string" } } },
     // Whether the app can already be opened, and how. Automata asks the user before running anything.
-    run: { type: "object", additionalProperties: false, required: ["ready", "command", "url", "note"], properties: { ready: { type: "boolean" }, command: { type: "string" }, url: { type: "string" }, note: { type: "string" } } }
+    run: { type: "object", additionalProperties: false, required: ["ready", "command", "url", "note"], properties: { ready: { type: "boolean" }, command: { type: "string" }, url: { type: "string" }, note: { type: "string" } } },
+    // What the project memory should keep (durable, verified facts) and which shown facts (#id) are wrong or stale.
+    memory: { type: "object", additionalProperties: false, required: ["add", "retire"], properties: {
+      add: { type: "array", items: { type: "object", additionalProperties: false, required: ["kind", "text"], properties: { kind: { type: "string", enum: ["decision", "env", "pending", "gotcha", "note"] }, text: { type: "string" } } } },
+      retire: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "reason"], properties: { id: { type: "integer" }, reason: { type: "string" } } } }
+    } }
   }
 };
+// Keeps only well-formed memory items, a few per review. Reviews without the field are valid.
+export function normalizeMemory(memory) {
+  const add = (Array.isArray(memory?.add) ? memory.add : []).filter((item) => ["decision", "env", "pending", "gotcha", "note"].includes(item?.kind) && typeof item.text === "string" && item.text.trim()).slice(0, 6).map((item) => ({ kind: item.kind, text: item.text.trim().slice(0, 400) }));
+  const retire = (Array.isArray(memory?.retire) ? memory.retire : []).filter((item) => Number.isInteger(item?.id) && item.id > 0).slice(0, 10).map((item) => ({ id: item.id, reason: String(item.reason ?? "").trim().slice(0, 200) }));
+  return { add, retire };
+}
 const LOCAL_URL = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?(?:[/?#][^\s]*)?$/i;
 // Keeps only what Automata may offer: a one-line command and, optionally, a local address.
 export function normalizeRun(run) {
@@ -143,6 +154,7 @@ export function combineReviews(reviews, labels) {
     nextPrompt: "",
     git: reviews[0].git,
     run: reviews[0].run,
+    memory: normalizeMemory({ add: reviews.flatMap((review) => review.memory?.add ?? []), retire: reviews.flatMap((review) => review.memory?.retire ?? []) }),
     findings: reviews.flatMap((review, i) => review.findings.map((f) => ({ ...f, description: `[${labels[i]}] ${f.description}` }))),
     criteria: reviews[0].criteria.map((c) => ({
       criterion: c.criterion,
@@ -165,5 +177,6 @@ export function validateReview(r, project, phase = "review") {
     if (r.findings.some((f) => ["critical", "major"].includes(f.severity))) throw new Error("Hay hallazgos importantes pendientes.");
   }
   r.run = normalizeRun(r.run);
+  r.memory = normalizeMemory(r.memory);
   return r;
 }

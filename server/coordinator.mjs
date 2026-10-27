@@ -8,6 +8,7 @@ import { GitOps, normalizeGit, hasGitActions } from "./git.mjs";
 import { directorPrompt, coderPrompt, chatPrompt } from "./prompts.mjs";
 import { observe, digest } from "./watch.mjs";
 import { AppRunner } from "./apprun.mjs";
+import { MemoryStore, parseRemember, changedFiles } from "./memory.mjs";
 const LIVE = /* @__PURE__ */ new Set(["running", "pausing"]);
 // When checks fail the executor fixes them straight away; the director only steps in after this many tries.
 const MAX_AUTO_FIXES = 3;
@@ -24,10 +25,12 @@ VERIFICACIONES FALLIDAS:
 ${failing.map((check) => `$ ${check.command ?? "(sin comando)"} → código ${check.code ?? "?"}\n${tail(check.output, 2500)}${check.stderr ? "\n" + tail(check.stderr, 800) : ""}`).join("\n\n")}`;
 const gitView = ({ kind, message, branch, into, push }) => ({ kind, message, branch, into, push });
 export class Coordinator extends EventEmitter {
-  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app } = {}) {
+  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app, memory } = {}) {
     super();
     this.store = store;
     this.demo = demo;
+    // One SQLite file per project, next to the rest of Automata's data and outside the project folder.
+    this.memory = memory ?? new MemoryStore(path.join(store.directory, "memory"));
     this.agents = agents ?? (demo ? new DemoAgents() : new CliAgents());
     this.checks = checks;
     this.evidence = evidence;
@@ -179,6 +182,46 @@ export class Coordinator extends EventEmitter {
       if (this.chatQueue.length) this.chatPending = this.drainChats();
     });
   }
+  // Memory helps the agents but must never stop the work: a failure is shown once and the run goes on.
+  remember(action, fn) {
+    try {
+      return fn();
+    } catch (error) {
+      if (!this.memoryWarned) {
+        this.memoryWarned = true;
+        this.event({ role: "system", kind: "warning", text: `No se pudo ${action} la memoria del proyecto: ${error.message}` });
+      }
+      return null;
+    }
+  }
+  memoryBrief(projectId, options) {
+    return this.remember("leer", () => this.memory.brief(projectId, options))?.text ?? "";
+  }
+  // Facts an agent listed under «PARA RECORDAR:» at the end of its report.
+  rememberReport(projectId, text, meta) {
+    const items = parseRemember(text);
+    if (items.length) this.remember("guardar", () => this.memory.applyAgentMemory(projectId, { add: items }, meta));
+  }
+  recordCommands(projectId, log, meta) {
+    if (log?.length) this.remember("guardar", () => this.memory.recordCommands(projectId, { ...meta, log }));
+  }
+  // Read, add, correct, retire and restore what a project remembers (the Memory panel and the API).
+  memoryAction(input = {}) {
+    const p = this.projects.find((project) => project.id === input.projectId);
+    if (!p) throw new Error("Selecciona un proyecto.");
+    const m = this.memory, id = Number(input.id);
+    switch (input.action ?? "list") {
+      case "list": return { facts: m.listFacts(p.id, { status: ["active", "retired", "all"].includes(input.status) ? input.status : "active", q: input.q }), errors: m.listErrors(p.id, { q: input.q }), stats: m.stats(p.id) };
+      case "brief": return m.brief(p.id, { query: String(input.q ?? "") });
+      case "add": return { fact: m.addFact(p.id, { kind: input.kind, text: input.text, source: "user" }) };
+      case "update": return { fact: m.updateFact(p.id, id, { text: input.text, kind: input.kind, by: "user" }) };
+      case "retire": return { fact: m.setFactStatus(p.id, id, "retired", { reason: input.reason || "Retirado por el usuario", by: "user" }) };
+      case "restore": return { fact: m.setFactStatus(p.id, id, "active", { by: "user" }) };
+      case "history": return { history: m.history(p.id, id) };
+      case "errorStatus": return { error: m.setErrorStatus(p.id, id, input.status) };
+      default: throw new Error("Acción de memoria no válida.");
+    }
+  }
   pauseIfRequested() {
     if (this.active.status !== "pausing") return false;
     this.active.status = "paused";
@@ -220,17 +263,25 @@ export class Coordinator extends EventEmitter {
       }
     }
     let result;
+    // This call's own commands, so failed builds and tests (and their fixes) reach the project memory once.
+    const commands = role === "coder" ? [] : null;
     try {
       result = await this.agents.run({ role, prompt: resume ? short : full, fallbackPrompt: full, phase, directory: dir, project: r.project, settings: { ...r.settings }, agent, signal: this.controller.signal, emit: (e) => {
       if (e.model) {
         r.actualModels ??= {};
         r.actualModels[role] = e.model;
       }
-      if (role === "coder") observe(r.watch ??= [], e);
+      if (role === "coder") {
+        observe(r.watch ??= [], e);
+        observe(commands, e);
+      }
       this.event(team.length > 1 ? { ...e, agent: agent.label } : e);
       } });
       if (watcher) await new Promise(resolve => setTimeout(resolve, 50));
-    } finally { watcher?.close(); }
+    } finally {
+      watcher?.close();
+      this.recordCommands(r.projectId, commands, { runId: r.id, round: r.round, directory: r.project.directory });
+    }
     if (projectChanged) result = { ...result, projectChanged: true };
     if (result.usage) {
       const u = result.usage;
@@ -283,6 +334,7 @@ export class Coordinator extends EventEmitter {
     item.summary = result.summary;
     item.error = result.error;
     item.doneAt = (/* @__PURE__ */ new Date()).toISOString();
+    if (result.ok && item.kind === "commit" && !result.noop) this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "progress", text: `${result.summary}: ${item.message}`, source: "automata", runId: r.id, round: item.round }));
     if (result.blocked?.length) this.event({ role: "system", kind: "warning", text: `Archivos sensibles excluidos del commit: ${result.blocked.join(", ")}`, ...tag });
     this.event({ role: "system", kind: result.ok ? "success" : "warning", text: result.ok ? result.summary : result.error, ...tag });
     this.persist();
@@ -433,13 +485,17 @@ ${state}`;
         // Everything the coder did since the last review, as the director "saw" it happen.
         const watched = r.watch?.length ?? 0, watch = digest(r.watch, p.directory);
         if (watched) fs.writeFileSync(path.join(dir, "watch.txt"), watch);
+        // What earlier sessions learned, filtered by what is on the table now.
+        const memory = this.memoryBrief(p.id, { query: `${r.coderReport}\n${r.nextPrompt}\n${p.objective}`, failing });
+        if (memory) fs.writeFileSync(path.join(dir, "memory.txt"), memory);
         for (let i = 0; i < reviewers; i++) {
           const reviewDir = i === 0 ? dir : path.join(dir, `reviewer-${i + 1}`);
           fs.mkdirSync(reviewDir, { recursive: true });
-          const options = { phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo }, watch };
+          const options = { phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo }, watch, memory };
           const prompts = { full: directorPrompt(p, s, { ...options, evidence: evidenceFull }), short: directorPrompt(p, s, { ...options, evidence: state, short: true }) };
           const result = await this.invoke("auditor", prompts, phase, reviewDir, i);
           reviews.push(validateReview(result.review, p, phase));
+          this.remember("guardar", () => this.memory.applyAgentMemory(p.id, reviews[i].memory, { source: "director", runId: r.id, round: r.round }));
           projectChanged ||= !!result.projectChanged;
           if (reviews[i].decision !== "complete" || projectChanged) break;
         }
@@ -459,6 +515,7 @@ ${state}`;
         review.git = normalizeGit(review.git);
         fs.writeFileSync(path.join(dir, "review.json"), JSON.stringify(review, null, 2));
         r.review = review;
+        this.remember("guardar", () => this.memory.recordReview(p.id, { review, runId: r.id, round: r.round, criteria: p.criteria }));
         // The director has seen it: the next review only gets what happens from here on.
         r.watch = (r.watch ?? []).slice(watched);
         this.event({ role: "auditor", kind: "review", text: review.summary, review });
@@ -485,6 +542,7 @@ ${state}`;
           this.event({ role: "system", kind: "warning", text: `Se alcanzó el límite de ${s.maxRounds} rondas. El objetivo sigue pendiente.` });
           break;
         }
+        const failingBefore = r.checks.filter((c) => !c.passed);
         r.round++;
         r.checks = [];
         r.checksRound = null;
@@ -494,15 +552,23 @@ ${state}`;
         const coders = teamOf(s, "coder"), turn = (r.round - 1) % coders.length;
         const teamInfo = coders.length > 1 ? { index: turn, count: coders.length } : null;
         this.event({ role: "coder", kind: "phase", text: `Ronda ${r.round} · ${r.nextPrompt}`, ...coders.length > 1 ? { agent: agentLabel("coder", coders, turn) } : {} });
-        const prompts = { full: coderPrompt(p, s, r.nextPrompt, r.baseline, teamInfo), short: coderPrompt(p, s, r.nextPrompt, r.baseline, teamInfo, true) };
+        // A failure that already happened before comes with the solution that fixed it then.
+        const memory = this.memoryBrief(p.id, { query: r.nextPrompt, failing: failingBefore });
+        if (memory) fs.writeFileSync(path.join(work, "memory.txt"), memory);
+        const prompts = { full: coderPrompt(p, s, r.nextPrompt, r.baseline, teamInfo, false, memory), short: coderPrompt(p, s, r.nextPrompt, r.baseline, teamInfo, true, memory) };
         const result = await this.invoke("coder", prompts, "code", work, turn);
         r.coderReport = result.text;
         fs.writeFileSync(path.join(work, "coder-report.md"), r.coderReport);
         this.event({ role: "coder", kind: "report", text: r.coderReport });
+        this.rememberReport(p.id, r.coderReport, { source: "coder", runId: r.id, round: r.round });
         r.stage = "checks";
       } else if (r.stage === "checks") {
         r.checks = await this.checks(p, dir, this.controller.signal, (e) => this.event(e));
         r.checksRound = r.round;
+        // Failing checks become open errors; a check that passes again resolves them with what changed.
+        const recorded = this.remember("guardar", () => this.memory.recordChecks(p.id, { runId: r.id, round: r.round, checks: r.checks, files: changedFiles(r.watch, p.directory), report: r.coderReport }));
+        if (recorded?.recurred.length) this.event({ role: "system", kind: "warning", text: `Este error ya había pasado en este proyecto (${recorded.recurred.map((id) => "E" + id).join(", ")}). La solución anterior va en la siguiente instrucción.` });
+        if (recorded?.resolved.length) this.event({ role: "system", kind: "success", text: `Memoria: ${recorded.resolved.length === 1 ? "un error quedó registrado" : `${recorded.resolved.length} errores quedaron registrados`} con su solución verificada.` });
         r.stage = "review";
       } else break;
       r.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -603,18 +669,24 @@ ${message.text}`;
             message.activeRole = role;
             this.persist();
             this.notify();
+            const commands = role === "coder" ? [] : null;
             try {
               const dir = path.join(this.store.directory, "chats", message.id, role);
               fs.mkdirSync(dir, { recursive: true });
               message.settings = { ...this.settings };
-              const result = await this.agents.run({ role, phase: message.kind === "task" ? "task" : "chat", prompt: chatPrompt(project, role, message.text, this.runs.find((r) => r.projectId === project.id)?.review?.summary, message.settings, { kind: message.kind, previousAnswers: message.answers }), project, settings: message.settings, directory: dir, signal: withinRun ? this.controller.signal : this.chatController.signal, emit: (e) => {
+              const memory = this.memoryBrief(project.id, { query: message.text });
+              const result = await this.agents.run({ role, phase: message.kind === "task" ? "task" : "chat", prompt: chatPrompt(project, role, message.text, this.runs.find((r) => r.projectId === project.id)?.review?.summary, message.settings, { kind: message.kind, previousAnswers: message.answers, memory }), project, settings: message.settings, directory: dir, signal: withinRun ? this.controller.signal : this.chatController.signal, emit: (e) => {
                 // Work asked from the chat also goes in front of the director's eyes.
                 if (e.role === "coder" && this.active?.projectId === project.id && this.active.status !== "complete") observe(this.active.watch ??= [], e);
+                if (commands && e.role === "coder") observe(commands, e);
                 this.event({ ...e, projectId: project.id });
               } });
               message.answers.push({ role, text: result.text });
+              this.rememberReport(project.id, result.text, { source: role === "coder" ? "coder" : "director", runId: null, round: null });
             } catch (e) {
               message.answers.push({ role, text: e.message, error: true });
+            } finally {
+              this.recordCommands(project.id, commands, { runId: null, round: null, directory: project.directory });
             }
             delete message.activeRole;
             this.persist();

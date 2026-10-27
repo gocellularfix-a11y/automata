@@ -5,6 +5,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createRequire } from "node:module";
 import { MODES, REVIEW_SCHEMA, agentEnv } from "./config.mjs";
+import { redactTokens } from "./redact.mjs";
 export function findCodexNative(packageRoot, { platform = process.platform, arch = process.arch } = {}) {
   if (platform !== "win32" || !["x64", "arm64"].includes(arch)) return null;
   const target = arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
@@ -32,7 +33,8 @@ export function findAgent(role) {
   if (process.platform !== "win32") return { command: role === "coder" ? "claude" : "codex", args: [] };
   return null;
 }
-export const redact = (text) => String(text).replace(/\bsk-[a-zA-Z0-9_-]{12,}/g, "[credencial omitida]").replace(/\bgh[pousr]_[a-zA-Z0-9]{15,}/g, "[credencial omitida]");
+// Used on raw CLI lines too, so it only replaces token shapes (never quotes): the JSON stays valid.
+export const redact = (text) => redactTokens(String(text).replace(/\bsk-[a-zA-Z0-9_-]{12,}/g, "[credencial omitida]").replace(/\bgh[pousr]_[a-zA-Z0-9]{15,}/g, "[credencial omitida]"));
 export async function killTree(child) {
   if (!child?.pid || child.exitCode != null) return;
   if (process.platform === "win32") await promisify(execFile)("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true }).catch(() => child.kill());

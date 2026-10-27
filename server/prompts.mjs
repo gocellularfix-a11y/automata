@@ -40,7 +40,12 @@ ${watch}` : "";
 // The director tells Automata when there is something the user can open; Automata asks before running it.
 const runSection = `APP (lo decides tú, sin ejecutar nada): en el campo run indica si ya hay algo que el usuario pueda abrir y probar, aunque falten criterios. ready=true con command = el comando exacto para arrancarla desde la carpeta del proyecto (por ejemplo npm start, npm run dev o python main.py; una sola línea, sin instalar nada que no esté ya instalado); url = la dirección local si se abre en el navegador (http://localhost:PUERTO), o cadena vacía; note = una frase de lo que verá el usuario. Si todavía no hay nada que correr o es una biblioteca sin app, ready=false y cadenas vacías. Al marcar complete indica siempre cómo correrla si aplica. Automata le preguntará al usuario antes de ejecutar el comando.`;
 const language = (settings) => settings.language === "en" ? "English" : "Español";
-export function directorPrompt(project, settings, { phase, report = "", evidence = "", history = "", team = null, git = null, short = false, watch = "" }) {
+// What Automata remembers about the project between sessions, already filtered and within its budget.
+export const memorySection = (memory) => memory ? `MEMORIA DEL PROYECTO (Automata la conserva entre sesiones; es un resumen de rondas anteriores, no evidencia: confirma en el código lo que vayas a aprobar. Úsala para no repetir investigaciones ni errores ya resueltos):
+${memory}` : "";
+const directorMemoryRule = "MEMORIA: en memory.add registra solo hechos duraderos y comprobados que convenga recordar en sesiones futuras (decisiones técnicas, datos del entorno, pendientes, trampas ya descartadas), una frase cada uno, sin secretos y sin repetir lo que ya está en la memoria. En memory.retire indica los #id de recuerdos que comprobaste falsos u obsoletos, con el motivo. Si no hay nada, deja las dos listas vacías.";
+const rememberRule = "Si descubriste algo duradero que convenga recordar en sesiones futuras (un dato del entorno, una decisión técnica, una trampa ya descartada), termina con una sección «PARA RECORDAR:» con una línea por hecho, por ejemplo «- [entorno] Android compila con el JDK 21». Etiquetas: entorno, decisión, pendiente, trampa, nota. Sin secretos ni datos personales.";
+export function directorPrompt(project, settings, { phase, report = "", evidence = "", history = "", team = null, git = null, short = false, watch = "", memory = "" }) {
   const teamLine = team ? `
 EQUIPO: eres el revisor ${team.index + 1} de ${team.count}. Para completar el objetivo todos los revisores deben aprobar; evalúa de forma independiente y no asumas que otro revisor ya comprobó algo.` : "";
   const watched = phase === "review" && !!watch;
@@ -50,6 +55,7 @@ EQUIPO: eres el revisor ${team.index + 1} de ${team.count}. Para completar el ob
     return `Seguimos en la misma sesión como director y auditor independiente de Automata. Siguen vigentes tus reglas, el proyecto y los criterios de la primera instrucción (eres de solo lectura).
 IDIOMA DE RESPUESTA: ${language(settings)}. Usa ese idioma en summary, nextPrompt, findings y evidence; conserva las claves JSON y el texto exacto de cada criterion.${teamLine}
 FASE: ${phaseText(phase, watched)}
+${memorySection(memory)}
 REPORTE DEL CODIFICADOR:
 ${report || "Todavía no hay ejecución."}
 ${watchSection(watch)}
@@ -57,12 +63,14 @@ EVIDENCIA RECOGIDA POR AUTOMATA:
 ${evidence}
 ${gitSection(git)}
 ${runSection}
+${directorMemoryRule}
 ${closing}`;
   }
   return `Eres el director y auditor independiente de Automata. ${directorRules}
 IDIOMA DE RESPUESTA: ${language(settings)}. Usa ese idioma en summary, nextPrompt, findings y evidence; conserva las claves JSON y el texto exacto de cada criterion.${teamLine}
 ${brief(project, settings)}
 FASE: ${phaseText(phase, watched)}
+${memorySection(memory)}
 ${history ? "CONTEXTO DE LA RONDA ANTERIOR:\n" + history : ""}
 REPORTE DEL CODIFICADOR:
 ${report || "Todavía no hay ejecución."}
@@ -71,14 +79,16 @@ EVIDENCIA RECOGIDA POR AUTOMATA:
 ${evidence}
 ${gitSection(git)}
 ${runSection}
+${directorMemoryRule}
 ${closing}`;
 }
-export function coderPrompt(project, settings, task, baseline, team = null, short = false) {
+export function coderPrompt(project, settings, task, baseline, team = null, short = false, memory = "") {
   const teamLine = team ? ` (codificador ${team.index + 1} de ${team.count}; los codificadores se turnan por ronda, así que revisa el trabajo previo en lugar de duplicarlo)` : "";
-  const report = `Al terminar entrega un reporte en ${language(settings)} con: cambios y archivos, comprobaciones realmente ejecutadas y resultados, fallos o limitaciones, trabajo pendiente y, si la app ya se puede abrir, el comando para correrla. No declares completado el objetivo global: eso lo decide la auditoría independiente.`;
+  const report = `Al terminar entrega un reporte en ${language(settings)} con: cambios y archivos, comprobaciones realmente ejecutadas y resultados, fallos o limitaciones, trabajo pendiente y, si la app ya se puede abrir, el comando para correrla. No declares completado el objetivo global: eso lo decide la auditoría independiente. ${rememberRule}`;
   const noGit = "No hagas commit, push ni merge por tu cuenta: el director decide cuándo y Automata lo ejecuta.";
   if (short) {
     return `Seguimos en la misma sesión como codificador de Automata${teamLine}. Siguen vigentes el proyecto, los criterios y tus reglas de la primera instrucción.
+${memorySection(memory)}
 TAREA DEL DIRECTOR:
 ${task}
 Implementa la tarea hasta dejarla revisable. ${noGit} ${report}`;
@@ -87,11 +97,12 @@ Implementa la tarea hasta dejarla revisable. ${noGit} ${report}`;
 ${brief(project, settings)}
 CAMBIOS QUE YA EXISTIAN AL INICIAR:
 ${baseline}
+${memorySection(memory)}
 TAREA DEL DIRECTOR:
 ${task}
 Implementa la tarea hasta dejarla revisable. ${noGit} Trabaja dentro de los permisos disponibles; si una herramienta requiere permiso no disponible, informa el bloqueo sin simular éxito. ${report}`;
 }
-export function chatPrompt(project, role, text, context, settings = {}, { kind = "task", previousAnswers = [] } = {}) {
+export function chatPrompt(project, role, text, context, settings = {}, { kind = "task", previousAnswers = [], memory = "" } = {}) {
   const director = role === "auditor";
   const readOnly = kind === "question";
   const headline = director
@@ -114,8 +125,9 @@ CARPETA DE TRABAJO: ${project.directory}
 OBJETIVO: ${project.objective}
 ESTADO RECIENTE:
 ${context || "Todavía no hay ejecución."}
+${memorySection(memory)}
 ${previous}
 PETICIÓN DEL USUARIO:
 ${text}
-Responde en ${language(settings)} con ${closing}.`;
+Responde en ${language(settings)} con ${closing}. ${rememberRule}`;
 }

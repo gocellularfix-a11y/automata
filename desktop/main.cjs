@@ -65,7 +65,7 @@ else {
     });
     ipcMain.handle("automata:request", async (event, route, options2 = {}) => {
       validateSender(event);
-      if (typeof route !== "string" || !["state", "capabilities", "pairing", "auth", "projects", "settings", "start", "control", "chat", "git"].includes(route)) throw new Error("Ruta no permitida.");
+      if (typeof route !== "string" || !["state", "capabilities", "pairing", "auth", "projects", "settings", "start", "control", "chat", "git", "memory"].includes(route)) throw new Error("Ruta no permitida.");
       const method = options2.method ?? "GET";
       if (!["GET", "POST", "PUT"].includes(method)) throw new Error("Método no permitido.");
       const response = await fetch(service.origin + "/api/" + route, { method, headers: { Authorization: "Bearer " + service.token, "Content-Type": "application/json" }, body: options2.body ? JSON.stringify(options2.body) : void 0 });

@@ -178,6 +178,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
           if (["approve", "reject"].includes(data.decision)) return send(200, coordinator.resolveRun(String(data.runId ?? ""), String(data.offerId ?? ""), data.decision));
           return send(200, await coordinator.appControl(data.action));
         }
+        if (url.pathname === "/api/memory" && req.method === "POST") return send(200, coordinator.memoryAction(await body()));
         if (url.pathname === "/api/chat" && req.method === "POST") {
           const data = await body();
           if (["question", "task"].includes(data.kind ?? "question")) await auth.requireConnected(data.target === "both" ? ["coder", "auditor"] : [data.target]);
