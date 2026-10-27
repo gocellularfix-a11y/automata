@@ -40,7 +40,7 @@ Fecha: 2026-10-26. Las pruebas con proveedores simulados no equivalen a validar 
 
 ## De una idea a un proyecto (P3, 27 oct 2026)
 
-`node --test test/*.test.mjs`: **153 aprobadas** (las 145 de P2 más 8 de `test/ideas.test.mjs`). Cambió una expectativa: el historial del plan incluye ahora la fila de reordenamiento. Una prueba de P1 que comparaba tiempos de reloj se volvió determinista (compara las esperas planificadas).
+`node --test test/*.test.mjs`: **154 aprobadas** (las 145 de P2 más 9 de `test/ideas.test.mjs`). Cambió una expectativa: el historial del plan incluye ahora la fila de reordenamiento. Una prueba de P1 que comparaba tiempos de reloj se volvió determinista (compara las esperas planificadas).
 
 Pruebas nuevas: reglas de carpetas (raíz, Automata, sus datos, sistema, usuario, carpeta de proyectos, repositorios anidados, `node_modules`, `.git` propio), rechazo al registrar y al iniciar, validación de la propuesta, flujo completo con corrección, ajuste, aceptación, plan sembrado, archivos para Claude y memoria, propuesta que falla por límite o cierre, confirmación de tareas directas y reordenamiento con historial, API de ideas con carpeta real y Git, rechazo en demostración, y la CLI simulada en la fase `define`.
 
