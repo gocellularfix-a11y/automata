@@ -86,6 +86,21 @@ export function redactSecrets(text) {
   out = out.replace(LONG_RUN, (run) => looksRandom(run) ? HIDDEN : run);
   return out;
 }
+// Every string inside a parsed value, so a JSON line keeps its structure while losing its secrets.
+export function redactDeep(value) {
+  if (typeof value === "string") return redactSecrets(value);
+  if (Array.isArray(value)) return value.map(redactDeep);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactDeep(item)]));
+  return value;
+}
+// Raw CLI log lines: JSON is parsed, cleaned and written back; anything else is cleaned as text.
+export function redactJsonLine(line) {
+  try {
+    return JSON.stringify(redactDeep(JSON.parse(line)));
+  } catch {
+    return redactSecrets(line);
+  }
+}
 const SENSITIVE_FILES = new Set([".env", "credentials.json", "credentials.yml", "credentials.yaml", "secrets.json", "secrets.yml", "secrets.yaml", ".npmrc", ".netrc", ".pypirc", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "kubeconfig", "token.json", "auth.json"]);
 export function isSensitiveFile(file) {
   const name = path.basename(String(file ?? "")).toLowerCase();

@@ -5,7 +5,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createRequire } from "node:module";
 import { MODES, REVIEW_SCHEMA, agentEnv } from "./config.mjs";
-import { redactTokens } from "./redact.mjs";
+import { redactTokens, redactSecrets, redactJsonLine } from "./redact.mjs";
 export function findCodexNative(packageRoot, { platform = process.platform, arch = process.arch } = {}) {
   if (platform !== "win32" || !["x64", "arm64"].includes(arch)) return null;
   const target = arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
@@ -152,7 +152,7 @@ export function toolInfo(name, input = {}) {
   }
 }
 const toolLabel = (tool) => `${tool.name} · ${tool.command ?? tool.path ?? tool.pattern ?? tool.input ?? ""}`.trim();
-const redactTool = (tool) => Object.fromEntries(Object.entries(tool).map(([key, value]) => [key, typeof value === "string" ? redact(value) : value]));
+const redactTool = (tool) => Object.fromEntries(Object.entries(tool).map(([key, value]) => [key, typeof value === "string" ? redactSecrets(value) : value]));
 const resultText = (content) => Array.isArray(content) ? content.map((part) => part?.text ?? "").join("\n") : String(content ?? "");
 // One raw CLI line can carry several things (text plus tool calls), so decoding returns a list.
 export function decodeEvents(role, raw) {
@@ -248,17 +248,18 @@ export class CliAgents {
         timeoutMs: settings.timeoutMinutes * 6e4,
         onLine: (line, stream) => {
           if (stream === "stderr") {
-            fs.appendFileSync(rawFile, JSON.stringify({ stderr: redact(line) }) + "\n");
+            fs.appendFileSync(rawFile, JSON.stringify({ stderr: redactSecrets(line) }) + "\n");
             return;
           }
-          fs.appendFileSync(rawFile, redact(line) + "\n");
+          // The raw log keeps every event for audit, without the secrets a tool result may have shown.
+          fs.appendFileSync(rawFile, redactJsonLine(line) + "\n");
           for (const e of decodeEvents(role, line)) {
             if (PROGRESS.has(e.kind)) progressed = true;
             if (e.kind === "result") result = e;
             if (e.sessionId) newSessionId = e.sessionId;
             if (e.usage) usage = e.usage;
             if (e.kind === "message") lastMessage = e.text;
-            if (e.kind !== "result" && (e.text || e.kind === "toolresult")) emit({ role, ...e, text: redact(e.text ?? "") });
+            if (e.kind !== "result" && (e.text || e.kind === "toolresult")) emit({ role, ...e, text: redactSecrets(e.text ?? "") });
           }
         }
       });
@@ -266,16 +267,16 @@ export class CliAgents {
       error.progressed = progressed;
       throw error;
     }
-    if (executed.code !== 0 || result?.error) throw Object.assign(new Error(redact(result?.text || executed.stderr || `El agente terminó con código ${executed.code}.`).slice(-8e3)), { progressed });
+    if (executed.code !== 0 || result?.error) throw Object.assign(new Error(redactSecrets(result?.text || executed.stderr || `El agente terminó con código ${executed.code}.`).slice(-8e3)), { progressed });
     const sessionOut = newSessionId ?? sessionId ?? null;
     if (role === "coder") {
       if (!result?.text?.trim()) throw Object.assign(new Error("Claude terminó sin reporte final."), { progressed });
       fs.writeFileSync(outputFile, JSON.stringify(result));
-      return { text: redact(result.text), sessionId: sessionOut, resumed: !!sessionId, usage, cost: result.cost ?? null };
+      return { text: redactSecrets(result.text), sessionId: sessionOut, resumed: !!sessionId, usage, cost: result.cost ?? null };
     }
     const text = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, "utf8").trim() : lastMessage;
     if (!text) throw Object.assign(new Error("Codex terminó sin respuesta."), { progressed });
-    if (conversation) return { text: redact(text), sessionId: sessionOut, resumed: !!sessionId, usage };
+    if (conversation) return { text: redactSecrets(text), sessionId: sessionOut, resumed: !!sessionId, usage };
     let review;
     try {
       review = JSON.parse(text);
@@ -343,7 +344,7 @@ export async function runChecks(project, directory, signal, emit) {
       args = [filename];
     }
     const r = await runProcess(windows ? "powershell.exe" : "/bin/sh", args, { cwd: project.directory, signal, timeoutMs: 3e5 });
-    const result = { command, passed: r.code === 0, code: r.code, output: redact(r.stdout.slice(-3e4)), stderr: r.stderr };
+    const result = { command, passed: r.code === 0, code: r.code, output: redactSecrets(r.stdout.slice(-3e4)), stderr: redactSecrets(r.stderr) };
     fs.writeFileSync(path.join(directory, `check-${i + 1}.json`), JSON.stringify(result, null, 2));
     results.push(result);
     emit({ role: "system", kind: result.passed ? "success" : "warning", text: `${result.passed ? "Aprobado" : "Falló"} · ${command}` });

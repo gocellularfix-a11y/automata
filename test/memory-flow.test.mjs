@@ -162,6 +162,32 @@ test("si la memoria falla, el trabajo sigue y se avisa una sola vez", async (t) 
   assert.equal(c.events.filter((e) => /memoria del proyecto/.test(e.text ?? "")).length, 1);
 });
 
+test("el registro original de la CLI y los eventos guardan todo menos los secretos, y siguen siendo JSON válido", async (t) => {
+  const dir = fixture(), work = path.join(dir, "round"), stub = path.join(dir, "claude-stub.mjs");
+  fs.mkdirSync(work);
+  const password = "Sup3r" + "S3cret0!", key = "sk-ant-api03-" + "Qw7".repeat(12);
+  const env = `DB_PASSWORD=${password}\nAPI_KEY=${key}\nPORT=3000`;
+  fs.writeFileSync(stub, `for await (const _ of process.stdin) {}
+const out = (o) => console.log(JSON.stringify(o));
+out({ type: "system", subtype: "init", session_id: "s1", model: "sonnet" });
+out({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: ".env" } }, { type: "tool_use", id: "t2", name: "Bash", input: { command: "curl -H 'Authorization: Bearer ${key}' https://api.example" } }] } });
+out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: ${JSON.stringify(env)} }] } });
+out({ type: "result", result: "Listo. La base usa password=${password}", session_id: "s1" });`);
+  const previous = process.env.AUTOMATA_CLAUDE;
+  process.env.AUTOMATA_CLAUDE = stub;
+  t.after(() => { previous === undefined ? delete process.env.AUTOMATA_CLAUDE : process.env.AUTOMATA_CLAUDE = previous; });
+  const { CliAgents } = await import("../server/agents.mjs");
+  const { validateSettings } = await import("../server/config.mjs");
+  const events = [];
+  const result = await new CliAgents().run({ role: "coder", prompt: "x", phase: "code", project: { directory: dir }, settings: validateSettings({}), directory: work, emit: (e) => events.push(e), agent: null });
+  const raw = fs.readFileSync(path.join(work, "code-coder.jsonl"), "utf8").trim().split("\n");
+  for (const line of raw) assert.doesNotThrow(() => JSON.parse(line), line);
+  const everything = raw.join("\n") + JSON.stringify(events) + result.text;
+  assert.equal(everything.includes(password), false);
+  assert.equal(everything.includes(key), false);
+  assert.match(raw.join("\n"), /PORT=3000/, "lo que no es secreto se conserva para la auditoría");
+});
+
 test("la API de memoria exige el token y permite consultar, corregir, retirar y restaurar", async (t) => {
   const dir = fixture();
   const app = await createServer({ port: 0, demo: true, dataDir: dir });
