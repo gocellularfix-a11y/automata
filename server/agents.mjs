@@ -8,6 +8,7 @@ import { MODES, REVIEW_SCHEMA, PROPOSAL_SCHEMA, agentEnv } from "./config.mjs";
 import { redactTokens, redactSecrets, redactJsonLine } from "./redact.mjs";
 import { classifyError } from "./recovery.mjs";
 import { claudeRequest, summarizeRequests, codexRequests } from "./usage.mjs";
+import { trackChild, releaseChild, reapDescendants } from "./procs.mjs";
 export function findCodexNative(packageRoot, { platform = process.platform, arch = process.arch } = {}) {
   if (platform !== "win32" || !["x64", "arm64"].includes(arch)) return null;
   const target = arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
@@ -51,12 +52,16 @@ export async function killTree(child) {
 // Only a child that re-runs this executable as Node needs ELECTRON_RUN_AS_NODE; leaking it to
 // checks and agents would make any Electron app they launch behave as plain Node.
 export const nodeEnv = (command) => command === process.execPath ? { ELECTRON_RUN_AS_NODE: "1" } : {};
+// track: { role } records the process in the registry of children (so a hard close of Automata can be cleaned up
+// afterwards); reap: when it ends, whatever it started and left running is closed (onReaped says what).
 export function runProcess(command, args, { cwd, input = "", signal, timeoutMs = 18e5, onLine = () => {
-}, env = {} } = {}) {
+}, env = {}, track = null, reap = false, onReaped = null } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(Object.assign(new Error("Ejecución detenida."), { name: "AbortError" }));
     const child = spawn(command, args, { cwd, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...nodeEnv(command), ...env } });
     let stdout = "", stderr = "", pending = "", failure = null, settled = false;
+    const startedAt = Date.now();
+    if (track) trackChild(child, { command: path.basename(command), ...track });
     const abort = () => {
       failure = Object.assign(new Error("Ejecución detenida."), { name: "AbortError" });
       void killTree(child);
@@ -114,7 +119,13 @@ export function runProcess(command, args, { cwd, input = "", signal, timeoutMs =
           failure = e;
         }
       }
-      finish(failure, { code: code ?? -1, signal: exitSignal, stdout, stderr: redact(stderr) });
+      const done = () => finish(failure, { code: code ?? -1, signal: exitSignal, stdout, stderr: redact(stderr) });
+      if (track) releaseChild(child.pid);
+      if (!reap) return done();
+      // The program has ended; what it started on the way and left running is not wanted (memory, ports).
+      reapDescendants(child.pid, { startedAt }).then((closed) => {
+        if (closed.length) try { onReaped?.(closed); } catch {}
+      }).catch(() => {}).finally(done);
     });
     child.stdin.on("error", () => {
     });
@@ -258,6 +269,8 @@ export class CliAgents {
         signal,
         env: { ...executable.env, ...agentEnv(settings, role) },
         timeoutMs: settings.timeoutMinutes * 6e4,
+        track: { role }, reap: true,
+        onReaped: (closed) => emit?.({ role: "system", kind: "warning", text: `Se cerraron ${closed.length} proceso(s) que ${role === "coder" ? "Claude" : "Codex"} dejó abiertos al terminar (${[...new Set(closed.map((p) => p.name))].join(", ")}).` }),
         onLine: (line, stream) => {
           if (stream === "stderr") {
             fs.appendFileSync(rawFile, JSON.stringify({ stderr: redactSecrets(line) }) + "\n");
@@ -378,7 +391,7 @@ export async function runChecks(project, directory, signal, emit) {
       fs.writeFileSync(filename, `set -e\n${command}\n`);
       args = [filename];
     }
-    const r = await runProcess(windows ? "powershell.exe" : "/bin/sh", args, { cwd: project.directory, signal, timeoutMs: 3e5 });
+    const r = await runProcess(windows ? "powershell.exe" : "/bin/sh", args, { cwd: project.directory, signal, timeoutMs: 3e5, track: { role: "check" }, reap: true, onReaped: (closed) => emit({ role: "system", kind: "warning", text: `La verificación dejó ${closed.length} proceso(s) abiertos y se cerraron (${[...new Set(closed.map((p) => p.name))].join(", ")}).` }) });
     const result = { command, passed: r.code === 0, code: r.code, output: redactSecrets(r.stdout.slice(-3e4)), stderr: redactSecrets(r.stderr) };
     fs.writeFileSync(path.join(directory, `check-${i + 1}.json`), JSON.stringify(result, null, 2));
     results.push(result);

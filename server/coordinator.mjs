@@ -14,6 +14,7 @@ import { MemoryStore, parseRemember, changedFiles, staleMentions, shallowNames }
 import { PlanStore, invalidPlan } from "./plan.mjs";
 import { isCasual, casualAnswer } from "./chat.mjs";
 import { consumed } from "./usage.mjs";
+import { sharedChecker } from "./resources.mjs";
 import { classifyError, planWait, describeWait, agentName, DEFAULT_BACKOFF, MAX_REVIEW_FIXES, MAX_LIMIT_WAITS } from "./recovery.mjs";
 const LIVE = /* @__PURE__ */ new Set(["running", "pausing"]);
 // Statuses the user can continue from. "waiting" continues on its own; Continuar just skips the wait.
@@ -48,7 +49,7 @@ function completedAttempt(inflight) {
   }
 }
 export class Coordinator extends EventEmitter {
-  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app, memory, backoff, beforeResume = null, resumeDelayMs = 1500 } = {}) {
+  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app, memory, backoff, beforeResume = null, resumeDelayMs = 1500, resources } = {}) {
     super();
     this.store = store;
     this.demo = demo;
@@ -69,6 +70,8 @@ export class Coordinator extends EventEmitter {
     this.beforeResume = beforeResume;
     this.resumeDelayMs = resumeDelayMs;
     this.waitTimer = null;
+    // Looks at the PC's memory before something heavy starts (resources.mjs); the demo calls no agents.
+    this.resources = resources === undefined ? (demo ? null : sharedChecker) : resources;
     // App output can arrive many times per second; the UI only needs a refresh now and then.
     this.app.on("change", () => {
       const st = this.app.state;
@@ -513,7 +516,7 @@ export class Coordinator extends EventEmitter {
     }
     r.recovery.waits = (r.recovery.waits ?? 0) + 1;
     r.status = "waiting";
-    r.waiting = { kind: verdict.kind, role, reason: clip(e.message, 400), resumeAt: new Date(plan.resumeAt).toISOString(), reliable: plan.reliable, attempt, maxAttempts: verdict.kind === "limit" ? MAX_LIMIT_WAITS : (r.settings.maxRetries ?? DEFAULT_SETTINGS.maxRetries), stage: r.stage, round: r.round, since: now() };
+    r.waiting = { kind: verdict.kind, memory: e.reason === "memory" || undefined, role, reason: clip(e.message, 400), resumeAt: new Date(plan.resumeAt).toISOString(), reliable: plan.reliable, attempt, maxAttempts: verdict.kind === "limit" ? MAX_LIMIT_WAITS : (r.settings.maxRetries ?? DEFAULT_SETTINGS.maxRetries), stage: r.stage, round: r.round, since: now() };
     r.resumeAt = r.waiting.resumeAt;
     const text = describeWait(r.waiting, r.settings.language);
     this.event({ role: "system", kind: "wait", text: `${text}. Motivo: ${clip(e.message, 240)}`, waiting: r.waiting });
@@ -752,6 +755,7 @@ export class Coordinator extends EventEmitter {
       this.event({ role: "system", kind: "success", text: `${agentName(role)} ya había terminado esta operación antes del cierre; se usa su resultado sin repetirla.` });
       result = saved;
     } else {
+      await this.requireResources();
       r.inflight = { id: randomUUID(), role, phase, index, dir, round: r.round, at: now() };
       this.persist();
       let watcher, projectChanged = false;
@@ -821,6 +825,13 @@ export class Coordinator extends EventEmitter {
       r[`${role}SessionId`] = result.sessionId;
     }
     return result;
+  }
+  // Before opening an agent (or starting a proposal or a run): enough free memory, or a clear reason to wait.
+  // Inside a run the error is a passing failure, so the run waits and tries again by itself.
+  async requireResources() {
+    if (!this.resources) return;
+    const check = await this.resources();
+    if (!check.ok) throw Object.assign(new Error(check.message), { kind: "transient", reason: "memory", memory: check.memory });
   }
   // A project created from an idea (P3) is for someone who cannot judge a publication: push and merge always wait
   // for them, whatever the Git mode says. Saving versions locally never does (unless the mode asks for everything).

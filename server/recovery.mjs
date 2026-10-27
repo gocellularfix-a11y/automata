@@ -155,7 +155,7 @@ export function describeWait(waiting, language = "es") {
   const sameDay = when && when.toDateString() === new Date().toDateString();
   const clock = when ? when.toLocaleTimeString(en ? "en-US" : "es-MX", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) + (sameDay ? "" : " " + when.toLocaleDateString(en ? "en-US" : "es-MX", { day: "numeric", month: "short" })) : "";
   const attempt = waiting.maxAttempts ? (en ? ` (attempt ${waiting.attempt} of ${waiting.maxAttempts})` : ` (intento ${waiting.attempt} de ${waiting.maxAttempts})`) : "";
-  const reason = {
+  const reason = waiting.memory ? (en ? "Low free memory on this PC" : "Poca memoria libre en la PC") : {
     limit: en ? `${who} usage limit${waiting.reliable ? "" : ", reset time unknown"}` : `Límite de uso de ${who}${waiting.reliable ? "" : ", sin hora confiable de restablecimiento"}`,
     transient: en ? `${who} failed for a passing reason` : `Fallo pasajero de ${who}`,
     context: en ? `${who} session grew too large; a new one starts` : `La sesión de ${who} creció demasiado; se abre una nueva`

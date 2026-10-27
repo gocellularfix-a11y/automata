@@ -11,6 +11,7 @@ import { findAgent } from "./agents.mjs";
 import { AuthManager } from "./auth.mjs";
 import { GitHubProjects } from "./github.mjs";
 import { CodexModels } from "./models.mjs";
+import { sweepOrphans, useRegistry } from "./procs.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
 const mime = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json", ".woff2": "font/woff2" };
@@ -25,10 +26,17 @@ export async function createServer({ port = 4780, lan = false, demo = false, dat
     auth.agentEnv = (role) => agentEnv(coordinator.settings, role);
     codexModels.env = () => agentEnv(coordinator.settings, "auditor");
     // A run that resumes on its own needs both accounts, exactly like pressing Continuar.
-    coordinator.beforeResume ??= demo ? null : () => auth.requireConnected();
+    coordinator.beforeResume ??= demo ? null : async (run) => { await auth.requireConnected(); await coordinator.requireResources(); };
   } catch (e) {
     release();
     throw e;
+  }
+  // Agents and checks that a previous Automata left running (it was closed hard) are closed before new ones start.
+  const childrenFile = store.location("children.json");
+  if (!demo) {
+    const swept = await sweepOrphans(childrenFile);
+    if (swept.length) coordinator.event({ role: "system", kind: "warning", text: `Se cerraron ${swept.length} proceso(s) que una sesión anterior de Automata dejó abiertos (${[...new Set(swept.map((p) => p.name))].join(", ")}).`, runId: null, projectId: null });
+    useRegistry(childrenFile);
   }
   const tokenFile = store.location("access-token");
   let token;
@@ -166,11 +174,12 @@ data: ${JSON.stringify(coordinator.snapshot())}
         if (url.pathname === "/api/start" && req.method === "POST") {
           const data = await body();
           await auth.requireConnected();
+          await coordinator.requireResources();
           return send(202, coordinator.start(data.projectId));
         }
         if (url.pathname === "/api/control" && req.method === "POST") {
           const data = await body();
-          if (data.action === "resume") await auth.requireConnected();
+          if (data.action === "resume") { await auth.requireConnected(); await coordinator.requireResources(); }
           return send(200, coordinator.control(data.action, typeof data.runId === "string" ? data.runId : void 0));
         }
         if (url.pathname === "/api/git" && req.method === "POST") {
@@ -189,12 +198,14 @@ data: ${JSON.stringify(coordinator.snapshot())}
           const data = await body();
           if (data.action === "propose" || data.action === "adjust") {
             await auth.requireConnected(["auditor"]);
+            await coordinator.requireResources();
             return send(202, coordinator.propose({ idea: data.idea, adjustments: data.adjustments, id: data.action === "adjust" ? String(data.id ?? "") : null }));
           }
           if (data.action === "discard") return send(200, coordinator.discardProposal(String(data.id ?? "")));
           if (data.action === "accept") {
             if (demo) throw new Error("Abre Automata sin --demo para crear proyectos desde una idea.");
             await auth.requireConnected();
+            await coordinator.requireResources();
             const root = projectsRootOf(coordinator.settings);
             return send(201, await coordinator.acceptProposal(String(data.id ?? ""), (input) => github.createNew(input, { root })));
           }
@@ -203,7 +214,10 @@ data: ${JSON.stringify(coordinator.snapshot())}
         if (url.pathname === "/api/chat" && req.method === "POST") {
           const data = await body();
           if (data.action === "reset") return send(200, coordinator.resetChat(data.projectId, data.target));
-          if (["question", "task"].includes(data.kind ?? "question")) await auth.requireConnected(data.target === "both" ? ["coder", "auditor"] : [data.target]);
+          if (["question", "task"].includes(data.kind ?? "question")) {
+            await auth.requireConnected(data.target === "both" ? ["coder", "auditor"] : [data.target]);
+            await coordinator.requireResources();
+          }
           return send(202, await coordinator.sendChat(data));
         }
         return send(404, { error: "Ruta no encontrada." });
