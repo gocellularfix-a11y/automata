@@ -175,6 +175,33 @@ export const PROPOSAL_SCHEMA = {
   }
 };
 const lines = (value, max, maxLength) => (Array.isArray(value) ? value : []).map((item) => String(item ?? "").trim()).filter(Boolean).slice(0, max).map((item) => item.slice(0, maxLength));
+const criterionKey = (text) => String(text).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const clip = (text, max) => { const value = String(text ?? "").replace(/\s+/g, " ").trim(); return value.length > max ? value.slice(0, max - 1) + "…" : value; };
+// Which criteria does a task mean when it quotes one? Returns { kind, indexes } or null (nothing fits).
+//   exact · reformatted (same words, other case, accents or punctuation) · shortened (cut off; it opens exactly one criterion)
+//   · merged / extended (whole criteria found inside the quote, in list order) · fragment (a piece from the middle of one)
+//   · ambiguous (it fits several: never guessed).
+export function resolveQuote(quote, criteria) {
+  if (criteria.includes(quote)) return { kind: "exact", indexes: [criteria.indexOf(quote)] };
+  const q = criterionKey(quote), keys = criteria.map(criterionKey);
+  if (!q) return null;
+  const where = (test) => keys.flatMap((k, i) => test(k) ? [i] : []);
+  const same = where((k) => k === q);
+  if (same.length === 1) return { kind: "reformatted", indexes: same };
+  const cut = q.replace(/\s*\S*$/, "");
+  if (cut.length >= 20) {
+    const opens = where((k) => k.startsWith(cut));
+    if (opens.length === 1) return { kind: "shortened", indexes: opens };
+    if (opens.length > 1) return { kind: "ambiguous", indexes: opens };
+  }
+  const inside = where((k) => k.length >= 15 && q.includes(k));
+  if (inside.length) return { kind: inside.length > 1 ? "merged" : "extended", indexes: inside };
+  if (q.length >= 25) {
+    const within = where((k) => k.includes(q));
+    if (within.length) return { kind: within.length === 1 ? "fragment" : "ambiguous", indexes: within };
+  }
+  return null;
+}
 export function validateProposal(p) {
   if (!p || typeof p !== "object") throw Object.assign(new Error("El director no entregó una propuesta válida."), { kind: "malformed", role: "auditor" });
   const proposal = {
@@ -189,20 +216,36 @@ export function validateProposal(p) {
   if (proposal.criteria.length < 3) throw invalid("La propuesta necesita al menos 3 criterios de aceptación comprobables.");
   if (!proposal.checks.length) throw invalid("La propuesta necesita al menos un comando de verificación (por ejemplo node --test).");
   if (proposal.plan.length < 3) throw invalid("La propuesta necesita un plan inicial de al menos 3 tareas.");
-  // A task that quotes a criterion shortened or with different accents/punctuation is linked to it when
-  // exactly one criterion matches (in the real run, two of three proposals failed only for this).
-  const key = (text) => String(text).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  // How the tasks quote the acceptance criteria: unambiguous slips are resolved here (see resolveQuote), so they do
+  // not cost the director another attempt; a criterion nobody mentions, or a quote that fits none or several, still does.
+  const adjusted = [];
+  proposal.plan.forEach((task, index) => {
+    if (!task.criterion) return;
+    const found = resolveQuote(task.criterion, proposal.criteria);
+    if (!found || found.kind === "ambiguous") return;
+    if (found.kind !== "exact") adjusted.push({ task: task.title, kind: found.kind, criterion: proposal.criteria[found.indexes[0]], also: found.indexes.slice(1).map((i) => proposal.criteria[i]) });
+    task.criterion = proposal.criteria[found.indexes[0]];
+    task.alsoCovers = found.indexes.slice(1).map((i) => proposal.criteria[i]);
+    task.position = index;
+  });
+  const quoted = new Set(proposal.plan.map((task) => task.criterion).filter(Boolean));
+  // A task that served several criteria quoted together keeps the first; each of the others, if no task of its
+  // own mentions it, gets a verification task after the rest, so that the director closes it with its own evidence.
+  const derived = [];
+  for (const task of proposal.plan) for (const criterion of task.alsoCovers ?? []) if (!quoted.has(criterion) && !derived.some((d) => d.criterion === criterion)) derived.push({ title: `Comprobar: ${criterion}`.slice(0, 140), detail: `Confirmar con evidencia que se cumple este criterio. Lo construye la tarea «${task.title}».`.slice(0, 600), criterion, dependsOn: [`N${task.position + 1}`] });
+  for (const task of proposal.plan) { delete task.alsoCovers; delete task.position; }
+  proposal.plan.push(...derived);
+  const covered = new Set(proposal.plan.map((task) => task.criterion).filter(Boolean));
+  const uncovered = proposal.criteria.filter((criterion) => !covered.has(criterion));
+  if (uncovered.length) throw invalid(`Cada criterio necesita al menos una tarea del plan que cite su texto completo y exacto en criterion (una tarea, un criterio). Sin tarea: ${uncovered.map((c) => `«${clip(c, 200)}»`).join("; ")}.`);
   for (const task of proposal.plan) {
     if (!task.criterion || proposal.criteria.includes(task.criterion)) continue;
-    const quoted = key(task.criterion).replace(/\s*\S*$/, "");
-    if (quoted.length < 20) continue;
-    const matches = proposal.criteria.filter((criterion) => key(criterion).startsWith(quoted) || quoted.startsWith(key(criterion)));
-    if (matches.length === 1) task.criterion = matches[0];
+    const found = resolveQuote(task.criterion, proposal.criteria);
+    throw invalid(found?.kind === "ambiguous"
+      ? `La tarea «${task.title}» cita «${clip(task.criterion, 100)}», que puede ser cualquiera de ${found.indexes.length} criterios. Copia el texto completo de uno solo.`
+      : `La tarea «${task.title}» cita «${clip(task.criterion, 100)}», que no coincide con ningún criterio de la lista: cita un criterio exacto o deja criterion vacío.`);
   }
-  const uncovered = proposal.criteria.filter((criterion) => !proposal.plan.some((task) => task.criterion === criterion));
-  if (uncovered.length) throw invalid(`Cada criterio necesita al menos una tarea del plan con su texto exacto en criterion. Sin tarea: ${uncovered.map((c) => `«${c.slice(0, 60)}»`).join("; ")}.`);
-  const stray = proposal.plan.filter((task) => task.criterion && !proposal.criteria.includes(task.criterion));
-  if (stray.length) throw invalid(`Las tareas deben citar un criterio exacto de la lista o dejar criterion vacío: «${stray[0].title}».`);
+  proposal.adjusted = adjusted;
   for (const [index, task] of proposal.plan.entries()) {
     if (!task.title) throw invalid(`La tarea ${index + 1} del plan no tiene título.`);
     for (const ref of task.dependsOn) {

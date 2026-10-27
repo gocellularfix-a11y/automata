@@ -326,6 +326,9 @@ export class Coordinator extends EventEmitter {
         // Every attempt opens its own session, so the thread's total is this call's consumption.
         if (u) proposal.usage.push({ at: now(), input: u.input_tokens ?? 0, cached: u.cached_input_tokens ?? u.cache_read_input_tokens ?? 0, output: u.output_tokens ?? 0, context: result.contextPeak ?? null, requests: result.requests ?? null });
         proposal.draft = validateProposal(result.proposal);
+        // How many times the director was asked, and the references that were resolved instead of asked again.
+        proposal.attempts = attempt;
+        if (proposal.draft.adjusted?.length) this.event({ role: "system", kind: "success", text: `La propuesta citaba criterios de forma distinta a la lista; Automata los enlazó sin pedirla de nuevo (${proposal.draft.adjusted.length}).`, runId: null, projectId: null, proposalId: proposal.id });
         proposal.status = "ready";
         proposal.readyAt = now();
         const root = projectsRootOf(this.settings);

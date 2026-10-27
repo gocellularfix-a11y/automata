@@ -1,0 +1,412 @@
+{
+ "_about": "Propuestas que Codex (gpt-6-luna) entregó de verdad el 27 oct 2026 en los dos ensayos de P3, tal como salieron. Las dos primeras de «inventario» omiten criterios; la tercera es válida; la de «gastos» fusiona criterios en una sola cita.",
+ "omittedFirst": {
+  "name": "Inventario de tienda",
+  "summary": "Una aplicación local para registrar los productos de tu tienda y revisar cuántas unidades tienes. Puedes buscar productos, actualizar existencias y detectar cuáles necesitan reposición.",
+  "objective": "Crear una primera versión útil de una aplicación de inventario que se abra en el navegador de Windows y guarde los datos en ese navegador, sin cuentas ni conexión a Internet. Permitirá administrar productos y existencias; no incluirá ventas, compras ni varios usuarios.",
+  "features": [
+   "Registrar productos con código, nombre, categoría, existencias y mínimo deseado.",
+   "Editar los datos de un producto y eliminarlo con confirmación.",
+   "Buscar productos por código o nombre y filtrarlos por categoría.",
+   "Mostrar qué productos están por debajo de su mínimo deseado.",
+   "Aumentar o reducir existencias sin permitir cantidades negativas.",
+   "Guardar los cambios en el navegador para recuperarlos al volver a abrir la aplicación."
+  ],
+  "criteria": [
+   "Al abrir index.html en el navegador, se muestra la lista de productos y controles para registrar uno.",
+   "Al registrar un producto con código y nombre no vacíos, existencias enteras desde cero y mínimo entero desde cero, aparece en la lista; los datos inválidos y los códigos duplicados se rechazan con un mensaje visible.",
+   "Al editar un producto, la lista muestra sus datos actualizados; al confirmar su eliminación, deja de aparecer.",
+   "Al buscar por una parte del código o nombre, solo aparecen coincidencias; al elegir una categoría, solo aparecen productos de esa categoría.",
+   "Un producto con existencias inferiores a su mínimo aparece marcado como bajo; uno con existencias iguales o superiores no aparece marcado.",
+   "Al ajustar existencias, se muestra la nueva cantidad; si el ajuste la dejaría por debajo de cero, se rechaza y la cantidad no cambia.",
+   "Después de registrar un producto y volver a abrir la página en el mismo navegador, el producto y sus existencias siguen guardados.",
+   "El README en español explica cómo abrir la aplicación, registrar y modificar productos, y dónde se guardan los datos."
+  ],
+  "checks": [
+   "node --test tests/inventory.test.js"
+  ],
+  "platform": "Página web local abierta en el navegador de Windows desde index.html.",
+  "plan": [
+   {
+    "title": "Preparar la aplicación y las pruebas",
+    "detail": "Revisar el proyecto existente, crear la estructura mínima de la página y añadir pruebas automatizadas con el módulo node:test incluido en Node.js.",
+    "criterion": "",
+    "dependsOn": []
+   },
+   {
+    "title": "Implementar las reglas del inventario",
+    "detail": "Crear funciones para validar productos, impedir códigos duplicados y cantidades inválidas, actualizar existencias y detectar niveles bajos; probar cada regla.",
+    "criterion": "Al registrar un producto con código y nombre no vacíos, existencias enteras desde cero y mínimo entero desde cero, aparece en la lista; los datos inválidos y los códigos duplicados se rechazan con un mensaje visible.",
+    "dependsOn": [
+     "N1"
+    ]
+   },
+   {
+    "title": "Crear la página para administrar productos",
+    "detail": "Construir la lista y los formularios para registrar, editar y eliminar productos, con mensajes claros y confirmación antes de eliminar.",
+    "criterion": "Al abrir index.html en el navegador, se muestra la lista de productos y controles para registrar uno.",
+    "dependsOn": [
+     "N1",
+     "N2"
+    ]
+   },
+   {
+    "title": "Añadir búsqueda y avisos de reposición",
+    "detail": "Agregar búsqueda por código o nombre, filtro por categoría y una marca visible para productos bajo el mínimo.",
+    "criterion": "Al buscar por una parte del código o nombre, solo aparecen coincidencias; al elegir una categoría, solo aparecen productos de esa categoría.",
+    "dependsOn": [
+     "N3"
+    ]
+   },
+   {
+    "title": "Añadir cambios de existencias y guardado local",
+    "detail": "Permitir ajustar cantidades con validación y guardar y recuperar los productos del almacenamiento local del navegador.",
+    "criterion": "Al ajustar existencias, se muestra la nueva cantidad; si el ajuste la dejaría por debajo de cero, se rechaza y la cantidad no cambia.",
+    "dependsOn": [
+     "N2",
+     "N3"
+    ]
+   },
+   {
+    "title": "Documentar el uso y completar la comprobación",
+    "detail": "Escribir el README en español con los pasos de apertura y uso, y ejecutar las pruebas automatizadas desde la carpeta del proyecto.",
+    "criterion": "El README en español explica cómo abrir la aplicación, registrar y modificar productos, y dónde se guardan los datos.",
+    "dependsOn": [
+     "N3",
+     "N4",
+     "N5"
+    ]
+   }
+  ],
+  "risks": [
+   "Los datos se guardan únicamente en el navegador de esta PC; no se sincronizan entre personas ni dispositivos.",
+   "Si se borran los datos del navegador o se cambia de navegador, se puede perder el inventario.",
+   "Esta primera versión no incluye ventas, compras, copias de seguridad ni informes contables.",
+   "Las pruebas aprobadas comprueban los comportamientos definidos, pero no garantizan calidad comercial ni compatibilidad con todos los navegadores. La aplicación requiere un navegador disponible en la PC."
+  ],
+  "questions": []
+ },
+ "omittedSecond": {
+  "name": "Inventario de tienda",
+  "summary": "Una aplicación local para llevar los productos y las existencias de tu tienda. Podrás consultar qué hay disponible y detectar productos que necesitan reponerse.",
+  "objective": "Crear una primera versión de inventario que se use en una página web local, sin instalar servicios ni conectarse a Internet. Permitirá registrar y editar productos, actualizar existencias y conservar los datos en el mismo navegador y equipo.",
+  "features": [
+   "Registrar productos con nombre, código, precio, existencias y cantidad mínima.",
+   "Editar los datos de un producto y eliminarlo con confirmación.",
+   "Buscar productos por nombre o código.",
+   "Aumentar o reducir existencias e impedir que queden por debajo de cero.",
+   "Identificar los productos cuyas existencias están por debajo de su cantidad mínima.",
+   "Conservar los datos al cerrar y volver a abrir la página en el mismo navegador."
+  ],
+  "criteria": [
+   "Al guardar un producto con nombre, código, precio, existencias y cantidad mínima válidos, aparece en la lista con esos cinco datos.",
+   "Al editar un producto y guardar cambios válidos, la lista muestra sus datos actualizados.",
+   "Al eliminar un producto y confirmar la acción, deja de aparecer en la lista.",
+   "Al buscar por una parte del nombre o del código, aparecen los productos coincidentes y no aparecen los demás.",
+   "Al aumentar o reducir las existencias, se muestra la nueva cantidad; una operación que las dejaría por debajo de cero se rechaza y conserva la cantidad anterior.",
+   "Un producto con existencias inferiores a su mínimo aparece marcado como pendiente de reposición; uno con existencias iguales o superiores al mínimo no aparece marcado.",
+   "Después de registrar un producto y volver a abrir la página en el mismo navegador, el producto y sus datos siguen disponibles.",
+   "La aplicación se puede usar abriendo el archivo index.html en un navegador compatible, sin instalar dependencias ni conectarse a Internet.",
+   "El archivo README.md está en español e indica cómo abrir la aplicación, registrar y actualizar productos, y dónde se guardan los datos."
+  ],
+  "checks": [
+   "node --test .\\tests\\inventory.test.js"
+  ],
+  "platform": "Página web local abierta en un navegador de Windows.",
+  "plan": [
+   {
+    "title": "Preparar la estructura y las pruebas iniciales",
+    "detail": "Crear los archivos de la aplicación y una prueba automatizada inicial del manejo de productos con las herramientas integradas de Node.js.",
+    "criterion": "",
+    "dependsOn": []
+   },
+   {
+    "title": "Implementar el registro de productos",
+    "detail": "Validar los campos obligatorios y guardar productos nuevos con sus datos.",
+    "criterion": "Al guardar un producto con nombre, código, precio, existencias y cantidad mínima válidos, aparece en la lista con esos cinco datos.",
+    "dependsOn": [
+     "N1"
+    ]
+   },
+   {
+    "title": "Implementar la edición y eliminación",
+    "detail": "Permitir guardar cambios en un producto existente y eliminarlo tras confirmar la acción.",
+    "criterion": "Al editar un producto y guardar cambios válidos, la lista muestra sus datos actualizados.",
+    "dependsOn": [
+     "N2"
+    ]
+   },
+   {
+    "title": "Implementar la búsqueda",
+    "detail": "Filtrar la lista al escribir una parte del nombre o del código.",
+    "criterion": "Al buscar por una parte del nombre o del código, aparecen los productos coincidentes y no aparecen los demás.",
+    "dependsOn": [
+     "N2"
+    ]
+   },
+   {
+    "title": "Implementar los cambios de existencias",
+    "detail": "Añadir controles para aumentar o reducir la cantidad y rechazar cantidades negativas resultantes.",
+    "criterion": "Al aumentar o reducir las existencias, se muestra la nueva cantidad; una operación que las dejaría por debajo de cero se rechaza y conserva la cantidad anterior.",
+    "dependsOn": [
+     "N2"
+    ]
+   },
+   {
+    "title": "Marcar productos para reponer",
+    "detail": "Comparar las existencias de cada producto con su mínimo y mostrar cuáles están por debajo.",
+    "criterion": "Un producto con existencias inferiores a su mínimo aparece marcado como pendiente de reposición; uno con existencias iguales o superiores al mínimo no aparece marcado.",
+    "dependsOn": [
+     "N2"
+    ]
+   },
+   {
+    "title": "Conservar los datos en el navegador",
+    "detail": "Guardar los cambios en el almacenamiento local del navegador y recuperarlos al cargar la página.",
+    "criterion": "Después de registrar un producto y volver a abrir la página en el mismo navegador, el producto y sus datos siguen disponibles.",
+    "dependsOn": [
+     "N2"
+    ]
+   },
+   {
+    "title": "Completar el inicio y las instrucciones",
+    "detail": "Verificar que la página abre desde index.html sin instalación ni conexión y redactar el README en español con instrucciones de uso y almacenamiento.",
+    "criterion": "La aplicación se puede usar abriendo el archivo index.html en un navegador compatible, sin instalar dependencias ni conectarse a Internet.",
+    "dependsOn": [
+     "N2",
+     "N3",
+     "N4",
+     "N5",
+     "N6",
+     "N7"
+    ]
+   },
+   {
+    "title": "Documentar el uso para la persona",
+    "detail": "Asegurar que el README explica cómo abrir la aplicación, registrar y actualizar productos, y dónde se guardan los datos.",
+    "criterion": "El archivo README.md está en español e indica cómo abrir la aplicación, registrar y actualizar productos, y dónde se guardan los datos.",
+    "dependsOn": [
+     "N8"
+    ]
+   }
+  ],
+  "risks": [
+   "Los datos se guardan en el navegador y equipo usados; no se comparten entre equipos ni usuarios.",
+   "Borrar los datos del navegador puede borrar el inventario. Esta versión no incluye copias de seguridad ni exportación.",
+   "La aplicación requiere un navegador compatible disponible en el equipo.",
+   "Las pruebas aprobadas comprueban los casos incluidos, pero no garantizan por sí solas calidad comercial ni cubren todos los posibles usos."
+  ],
+  "questions": []
+ },
+ "validThird": {
+  "name": "Inventario de tienda",
+  "summary": "Una aplicación local para llevar el control de los productos y sus existencias. Permite consultar el inventario desde el navegador y guardar los cambios en esta PC.",
+  "objective": "Crear una primera versión de una aplicación web local para registrar productos de una tienda, consultar y buscar el inventario, actualizar existencias y eliminar productos con confirmación. Los datos se guardan en archivos de esta PC mediante un servidor Node.js, sin servicios externos ni publicación en Internet.",
+  "features": [
+   "Registrar productos con nombre, código, precio, cantidad disponible y nivel mínimo de existencias.",
+   "Mostrar los productos con sus datos y el estado de sus existencias.",
+   "Buscar productos por nombre o código.",
+   "Editar los datos de un producto y actualizar su cantidad.",
+   "Eliminar un producto después de confirmar la acción.",
+   "Avisar cuáles productos están por debajo de su nivel mínimo de existencias.",
+   "Guardar los cambios en esta PC para conservarlos al cerrar y volver a abrir la aplicación."
+  ],
+  "criteria": [
+   "Al iniciar la aplicación con el comando documentado y abrir la dirección local indicada, aparece la pantalla del inventario en el navegador.",
+   "Al registrar un producto con nombre, código único, precio, cantidad y mínimo válidos, aparece en la lista con esos mismos datos.",
+   "Al intentar registrar un producto con campos obligatorios vacíos, valores numéricos negativos o un código ya existente, la aplicación muestra un mensaje y no guarda el producto.",
+   "Al buscar por una parte del nombre o por el código, la lista muestra los productos coincidentes y oculta los que no coinciden; al borrar la búsqueda, vuelve a mostrar todos.",
+   "Al editar un producto y guardar cambios válidos, la lista muestra los nuevos datos y conserva el mismo producto.",
+   "Al eliminar un producto y confirmar la acción, deja de aparecer en la lista y no aparece después de reiniciar la aplicación.",
+   "Al guardar un producto con cantidad menor que su mínimo, la lista lo identifica como existencias bajas; si la cantidad alcanza o supera el mínimo, deja de marcarlo así.",
+   "Después de registrar o editar un producto, reiniciar el servidor y volver a abrir la aplicación, el producto y sus datos siguen presentes.",
+   "El README está escrito en español e indica cómo iniciar la aplicación en Windows, qué dirección abrir, cómo usar las funciones principales y dónde se guardan los datos."
+  ],
+  "checks": [
+   "node --test tests",
+   "node --check server.js"
+  ],
+  "platform": "Página web local en el navegador, servida por Node.js en Windows.",
+  "plan": [
+   {
+    "title": "Preparar la estructura y las pruebas automatizadas",
+    "detail": "Crear la estructura mínima del proyecto y pruebas con Node.js para los criterios de registro, validación, búsqueda, edición, eliminación, existencias bajas y persistencia.",
+    "criterion": "",
+    "dependsOn": []
+   },
+   {
+    "title": "Crear el almacenamiento local y las operaciones de productos",
+    "detail": "Implementar con Node.js la lectura y escritura de los datos en archivos locales, junto con las operaciones para registrar, consultar, editar y eliminar productos y validar sus datos.",
+    "criterion": "Al registrar un producto con nombre, código único, precio, cantidad y mínimo válidos, aparece en la lista con esos mismos datos.",
+    "dependsOn": [
+     "N1"
+    ]
+   },
+   {
+    "title": "Validar entradas y evitar códigos repetidos",
+    "detail": "Añadir validaciones de campos obligatorios, números no negativos y códigos únicos; comunicar los errores sin guardar entradas inválidas.",
+    "criterion": "Al intentar registrar un producto con campos obligatorios vacíos, valores numéricos negativos o un código ya existente, la aplicación muestra un mensaje y no guarda el producto.",
+    "dependsOn": [
+     "N2"
+    ]
+   },
+   {
+    "title": "Construir la pantalla de inventario y búsqueda",
+    "detail": "Crear la página local que muestra los productos y permite buscar por nombre o código, mostrando todos los productos al limpiar la búsqueda.",
+    "criterion": "Al buscar por una parte del nombre o por el código, la lista muestra los productos coincidentes y oculta los que no coinciden; al borrar la búsqueda, vuelve a mostrar todos.",
+    "dependsOn": [
+     "N2"
+    ]
+   },
+   {
+    "title": "Añadir edición y eliminación confirmada",
+    "detail": "Incorporar controles para editar productos y pedir confirmación antes de eliminar; actualizar la lista al completar cada acción.",
+    "criterion": "Al editar un producto y guardar cambios válidos, la lista muestra los nuevos datos y conserva el mismo producto.",
+    "dependsOn": [
+     "N4"
+    ]
+   },
+   {
+    "title": "Mostrar alertas de existencias bajas",
+    "detail": "Comparar la cantidad disponible con el mínimo de cada producto y señalar los que estén por debajo del mínimo.",
+    "criterion": "Al guardar un producto con cantidad menor que su mínimo, la lista lo identifica como existencias bajas; si la cantidad alcanza o supera el mínimo, deja de marcarlo así.",
+    "dependsOn": [
+     "N4"
+    ]
+   },
+   {
+    "title": "Comprobar persistencia y eliminación",
+    "detail": "Completar pruebas automatizadas que comprueben que los datos sobreviven al reinicio y que los productos eliminados no reaparecen.",
+    "criterion": "Después de registrar o editar un producto, reiniciar el servidor y volver a abrir la aplicación, el producto y sus datos siguen presentes.",
+    "dependsOn": [
+     "N2",
+     "N5"
+    ]
+   },
+   {
+    "title": "Documentar el inicio y el uso en Windows",
+    "detail": "Escribir un README en español con los pasos para iniciar el servidor, abrir la dirección local, administrar productos y ubicar los archivos de datos.",
+    "criterion": "El README está escrito en español e indica cómo iniciar la aplicación en Windows, qué dirección abrir, cómo usar las funciones principales y dónde se guardan los datos.",
+    "dependsOn": [
+     "N4"
+    ]
+   },
+   {
+    "title": "Verificar el arranque documentado",
+    "detail": "Asegurar que el comando descrito en el README inicia la aplicación y que la dirección local muestra la pantalla del inventario.",
+    "criterion": "Al iniciar la aplicación con el comando documentado y abrir la dirección local indicada, aparece la pantalla del inventario en el navegador.",
+    "dependsOn": [
+     "N8"
+    ]
+   },
+   {
+    "title": "Completar pruebas de eliminación confirmada",
+    "detail": "Comprobar automáticamente el resultado de confirmar la eliminación y que el producto no vuelva a mostrarse tras reiniciar.",
+    "criterion": "Al eliminar un producto y confirmar la acción, deja de aparecer en la lista y no aparece después de reiniciar la aplicación.",
+    "dependsOn": [
+     "N5",
+     "N7"
+    ]
+   }
+  ],
+  "risks": [
+   "Esta primera versión está pensada para una sola tienda y para usarse en una sola PC; no sincroniza datos entre dispositivos ni usuarios.",
+   "Los datos dependen de los archivos locales de la PC. Si se pierden o se borran, la aplicación no incluye recuperación ni copias de seguridad automáticas.",
+   "Se necesita Node.js instalado en la PC para iniciar el servidor local.",
+   "Las pruebas aprobadas comprueban los criterios indicados, pero no garantizan calidad comercial ni cubren todos los usos posibles."
+  ],
+  "questions": []
+ },
+ "mergedCitations": {
+  "name": "Gastos de casa",
+  "summary": "Anota los gastos de cada mes y consulta cuánto has gastado. Tus datos se guardan en este dispositivo.",
+  "objective": "Crear una primera versión de una aplicación local para registrar, consultar, modificar y eliminar gastos del hogar, organizados por mes. La aplicación funcionará en el navegador de Windows sin instalar programas adicionales y guardará los datos en el almacenamiento local del navegador.",
+  "features": [
+   "Registrar gastos con fecha, descripción, categoría e importe.",
+   "Ver los gastos de un mes y el total gastado.",
+   "Cambiar de mes para consultar sus gastos.",
+   "Modificar o eliminar un gasto registrado.",
+   "Elegir entre categorías domésticas predefinidas.",
+   "Guardar los gastos en el navegador para recuperarlos al volver a abrir la aplicación."
+  ],
+  "criteria": [
+   "Al abrir la aplicación, se muestra el mes actual, un formulario para registrar gastos y una lista de los gastos de ese mes.",
+   "Al guardar un gasto con fecha, descripción, categoría e importe válidos, aparece en la lista del mes correspondiente con esos datos.",
+   "El importe debe ser mayor que cero; una fecha, descripción o categoría vacía, o un importe inválido, muestra un mensaje y no guarda el gasto.",
+   "La suma mostrada para un mes coincide con la suma de los importes de sus gastos; al cambiar de mes, la lista y la suma corresponden al nuevo mes.",
+   "Al modificar un gasto, la lista y el total muestran sus datos e importe actualizados.",
+   "Al eliminar un gasto, deja de aparecer en la lista y su importe deja de contar en el total.",
+   "Después de recargar la página en el mismo navegador, los gastos guardados siguen disponibles.",
+   "La persona puede usar la aplicación abriendo el archivo index.html en un navegador de Windows, sin servidor, instalación ni conexión a Internet.",
+   "El archivo README.md está escrito en español e indica cómo abrir la aplicación, registrar y gestionar gastos, cambiar de mes y dónde se guardan los datos."
+  ],
+  "checks": [
+   "node --test"
+  ],
+  "platform": "Página local en el navegador de Windows, abierta desde el archivo index.html",
+  "plan": [
+   {
+    "title": "Preparar la estructura de la aplicación y las pruebas",
+    "detail": "Crear los archivos mínimos para la página local y una suite de pruebas con Node.js que no requiera instalaciones ni red.",
+    "criterion": "",
+    "dependsOn": []
+   },
+   {
+    "title": "Implementar el registro y validación de gastos",
+    "detail": "Crear la lógica para guardar gastos con fecha, descripción, categoría e importe, rechazando los datos inválidos definidos.",
+    "criterion": "Al guardar un gasto con fecha, descripción, categoría e importe válidos, aparece en la lista del mes correspondiente con esos datos. El importe debe ser mayor que cero; una fecha, descripción o categoría vacía, o un importe inválido, muestra un mensaje y no guarda el gasto.",
+    "dependsOn": [
+     "N1"
+    ]
+   },
+   {
+    "title": "Añadir consulta por mes y suma de gastos",
+    "detail": "Mostrar el mes actual al abrir y permitir seleccionar otros meses con su lista y suma correspondientes.",
+    "criterion": "Al abrir la aplicación, se muestra el mes actual, un formulario para registrar gastos y una lista de los gastos de ese mes. La suma mostrada para un mes coincide con la suma de los importes de sus gastos; al cambiar de mes, la lista y la suma corresponden al nuevo mes.",
+    "dependsOn": [
+     "N2"
+    ]
+   },
+   {
+    "title": "Añadir edición y eliminación de gastos",
+    "detail": "Permitir cambiar los datos de un gasto existente y eliminarlo, actualizando la vista y la suma.",
+    "criterion": "Al modificar un gasto, la lista y el total muestran sus datos e importe actualizados. Al eliminar un gasto, deja de aparecer en la lista y su importe deja de contar en el total.",
+    "dependsOn": [
+     "N3"
+    ]
+   },
+   {
+    "title": "Guardar los datos en el navegador",
+    "detail": "Persistir los gastos en el almacenamiento local del navegador y cargarlos cuando se vuelve a abrir la página.",
+    "criterion": "Después de recargar la página en el mismo navegador, los gastos guardados siguen disponibles.",
+    "dependsOn": [
+     "N4"
+    ]
+   },
+   {
+    "title": "Construir la interfaz local",
+    "detail": "Conectar el formulario, los controles de mes y las acciones de edición y eliminación con la lógica de gastos; asegurar que index.html se pueda abrir directamente.",
+    "criterion": "La persona puede usar la aplicación abriendo el archivo index.html en un navegador de Windows, sin servidor, instalación ni conexión a Internet.",
+    "dependsOn": [
+     "N3",
+     "N5"
+    ]
+   },
+   {
+    "title": "Escribir la guía y completar las pruebas",
+    "detail": "Documentar el uso y almacenamiento de datos en español. Completar las pruebas automáticas de la lógica principal y ejecutar node --test.",
+    "criterion": "El archivo README.md está escrito en español e indica cómo abrir la aplicación, registrar y gestionar gastos, cambiar de mes y dónde se guardan los datos.",
+    "dependsOn": [
+     "N6"
+    ]
+   }
+  ],
+  "risks": [
+   "Los datos se guardan únicamente en el navegador y el dispositivo donde se usan; no se sincronizan ni tienen copia de seguridad automática.",
+   "Borrar los datos del navegador puede eliminar los gastos guardados.",
+   "Esta primera versión no incluye presupuestos, ingresos, exportación de informes ni varios usuarios.",
+   "Las pruebas automáticas aprobadas comprueban los casos definidos, pero no garantizan calidad comercial ni compatibilidad con todos los navegadores."
+  ],
+  "questions": []
+ }
+}
