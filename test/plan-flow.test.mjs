@@ -223,7 +223,7 @@ test("consultas, tareas directas e instrucciones: solo las dos últimas entran a
   } });
   t.after(() => c.close());
   const p = c.addProject(projectInput(dir));
-  for (const text of ["buen trabajo jóvenes!", "gracias", "Hola equipo", "ok", "Good job!"]) {
+  for (const text of ["buen trabajo jóvenes!", "¡Buen trabajo, jóvenes!", "gracias", "Hola equipo", "ok", "Good job!", "¡¡Excelente!!"]) {
     const m = await c.sendChat({ projectId: p.id, target: "auditor", kind: "task", text });
     assert.equal(m.status, "answered", text);
     assert.equal(m.casual, true);
