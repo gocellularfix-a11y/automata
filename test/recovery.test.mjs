@@ -174,7 +174,9 @@ test("un fallo pasajero se reintenta con espera creciente hasta maxRetries y lue
   assert.equal(c.active.status, "error");
   assert.match(c.active.error, /falló 3 veces seguidas por un motivo pasajero/);
   assert.equal(stamps.length, 3, "intento inicial más dos reintentos");
-  assert.ok(stamps[2] - stamps[1] >= stamps[1] - stamps[0] - 15, "la segunda espera no es menor que la primera");
+  // The planned waits grow (20 ms, then 40 ms with the test backoff); wall-clock gaps are too noisy to compare.
+  const planned = c.active.recovery.log.filter((e) => e.kind === "transient" && e.resumeAt).map((e) => Date.parse(e.resumeAt) - Date.parse(e.at));
+  assert.ok(planned.length >= 2 && planned[1] > planned[0], `la segunda espera es mayor que la primera: ${planned}`);
   const log = c.active.recovery.log.filter((e) => e.kind === "transient");
   assert.deepEqual(log.map((e) => e.attempt), [1, 2, 3]);
   // Continuar after the error starts the counters over.
