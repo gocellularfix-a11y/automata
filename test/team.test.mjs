@@ -31,7 +31,7 @@ test("el equipo se valida: de 1 a 3 codificadores y de 1 a 2 revisores, sin mode
   assert.deepEqual(ok.extraCoders, [{ model: "opus", effort: "high" }, { model: "haiku", effort: "default" }]);
   assert.deepEqual(ok.extraAuditors, [{ model: "gpt-6-luna", effort: "low" }]);
   assert.deepEqual(teamOf(ok, "coder").map((a) => a.model), ["sonnet", "opus", "haiku"]);
-  assert.deepEqual(teamOf(ok, "auditor").map((a) => a.model), ["gpt-6.1-sol", "gpt-6-luna"]);
+  assert.deepEqual(teamOf(ok, "auditor").map((a) => a.model), ["gpt-6-sol", "gpt-6-luna"]);
   assert.throws(() => validateSettings({ extraCoders: [{ model: "a" }, { model: "b" }, { model: "c" }] }), /1 a 3 codificadores/);
   assert.throws(() => validateSettings({ extraAuditors: [{ model: "a" }, { model: "b" }] }), /1 a 2 revisores/);
   assert.throws(() => validateSettings({ extraCoders: "opus" }), /codificadores/);
@@ -103,7 +103,7 @@ test("los revisores confirman por turnos: el segundo solo interviene si el prime
   c.start(c.addProject(projectInput(dir)).id);
   await settled(c);
   assert.equal(c.active.status, "complete");
-  assert.deepEqual(calls, ["plan:0:gpt-6.1-sol", "review:0:gpt-6.1-sol", "review:0:gpt-6.1-sol", "review:1:gpt-6-luna", "review:0:gpt-6.1-sol", "review:1:gpt-6-luna"]);
+  assert.deepEqual(calls, ["plan:0:gpt-6-sol", "review:0:gpt-6-sol", "review:0:gpt-6-sol", "review:1:gpt-6-luna", "review:0:gpt-6-sol", "review:1:gpt-6-luna"]);
   assert.equal(coderPrompts.length, 3);
   assert.match(coderPrompts[2], /Falta cubrir el caso vacío/);
   assert.doesNotMatch(directorPrompts["plan:0"][0], /EQUIPO/);
@@ -152,7 +152,7 @@ test("cada agente del equipo pasa su modelo y su razonamiento a la CLI", async (
   let args = read();
   assert.equal(args[args.indexOf("--model") + 1], "gpt-6-luna");
   assert.ok(args.includes('model_reasoning_effort="low"'));
-  assert.ok(!args.includes("gpt-6.1-sol"));
+  assert.ok(!args.includes("gpt-6-sol"));
   await agents.run({ role: "coder", phase: "code", prompt: "Tarea", project, settings, directory: dir, emit: () => {}, agent: { model: "opus", effort: "max", index: 2, count: 3 } });
   args = read();
   assert.equal(args[args.indexOf("--model") + 1], "opus");

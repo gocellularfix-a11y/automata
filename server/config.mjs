@@ -14,7 +14,7 @@ export const MODELS = {
     { id: "fable", label: "Fable", detail: "Trabajo de largo alcance" }
   ],
   auditor: [
-    { id: "gpt-6.1-sol", label: "Sol", detail: "Dirección y revisión" },
+    { id: "gpt-6-sol", label: "Sol", detail: "Dirección y revisión" },
     { id: "gpt-6-luna", label: "Luna", detail: "Revisiones ágiles" },
     { id: "gpt-6-astra", label: "Astra", detail: "Análisis profundo" }
   ]
@@ -23,7 +23,9 @@ export const MODELS = {
 export const TEAM_LIMITS = { coder: 3, auditor: 2 };
 const TEAM_KEYS = { coder: "extraCoders", auditor: "extraAuditors" };
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:[\]-]{0,99}$/;
-export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true };
+export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true };
+// Identifiers that earlier versions offered but Codex does not accept, and what they meant.
+export const RENAMED_MODELS = { "gpt-6.1-sol": "gpt-6-sol" };
 // planOnly: Claude and Codex use the user's subscription login, as in the terminal. API keys found in
 // Windows are left out, because with a key the CLIs bill per use instead of using the plan.
 export const API_KEY_VARIABLES = { coder: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"], auditor: ["OPENAI_API_KEY", "CODEX_API_KEY"] };
@@ -45,6 +47,8 @@ export function effortsFor(model, role) {
 }
 export function validateSettings(value = {}) {
   const s = { ...DEFAULT_SETTINGS, ...value };
+  s.auditorModel = RENAMED_MODELS[s.auditorModel] ?? s.auditorModel;
+  if (Array.isArray(s.extraAuditors)) s.extraAuditors = s.extraAuditors.map((agent) => agent && RENAMED_MODELS[agent.model] ? { ...agent, model: RENAMED_MODELS[agent.model] } : agent);
   if (!["es", "en"].includes(s.language)) throw new Error("Elige English o Español.");
   if (!MODES[s.mode]) throw new Error("Elige un tamaño de trabajo válido.");
   if (!["full", "limited"].includes(s.accessMode)) throw new Error("Elige acceso completo o limitado.");

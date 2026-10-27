@@ -36,7 +36,7 @@ Los datos se guardan en `%APPDATA%/Automata/workspace` en escritorio y en `.auto
 
 ## Modelos
 
-Se incluyen los alias Haiku, Sonnet, Opus y Fable, y los identificadores `gpt-6.1-sol`, `gpt-6-luna` y `gpt-6-astra`. Se pueden introducir otros identificadores. Las listas son opciones de configuración, no una certificación de acceso en las cuentas del usuario. Cada CLI decide disponibilidad y niveles admitidos; los errores se muestran y no se sustituyen por respuestas simuladas.
+Se incluyen los alias Haiku, Sonnet, Opus y Fable. La lista del director se pide a Codex (`codex debug models`, solo los modelos visibles para la cuenta; se guarda 10 minutos) con los niveles de razonamiento que admite cada uno; si Codex no responde se usan `gpt-6-sol`, `gpt-6-luna` y `gpt-6-astra`. El antiguo `gpt-6.1-sol`, que Codex rechaza con una cuenta de ChatGPT, se corrige al cargar los ajustes. Se pueden introducir otros identificadores. Las listas son opciones de configuración, no una certificación de acceso en las cuentas del usuario. Cada CLI decide disponibilidad y niveles admitidos; los errores se muestran y no se sustituyen por respuestas simuladas.
 
 El razonamiento interno no se muestra. Los paneles contienen mensajes visibles, actividad de herramientas, reportes, verificaciones y decisiones. Los tokens se muestran solo cuando la CLI los reporta.
 

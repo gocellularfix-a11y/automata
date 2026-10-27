@@ -5,7 +5,7 @@ const icon = (name) => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const effortNames = { default: "Predeterminado", low: "Bajo", medium: "Medio", high: "Alto", xhigh: "Extra alto", max: "Máximo", ultra: "Ultra" };
 const stateNames = { running: "Trabajando", pausing: "Pausando", paused: "En pausa", stopped: "Detenido", complete: "Completado", blocked: "Necesita tu atención", error: "Error de ejecución", interrupted: "Sesión interrumpida", limit: "Límite de rondas" };
 const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", tool: "ACTIVIDAD", session: "SESIÓN", message: "MENSAJE", warning: "ATENCIÓN", error: "ERROR", check: "VERIFICACIÓN", success: "VERIFICADO", start: "INICIO", pause: "PAUSA", stop: "DETENIDO", complete: "COMPLETADO", approval: "APROBACIÓN", runoffer: "APP" };
-let state = { projects: [], settings: { language: i18n.language, mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30 }, runs: [], events: [], messages: [], busy: false };
+let state = { projects: [], settings: { language: i18n.language, mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30 }, runs: [], events: [], messages: [], busy: false };
 let selected = localStorage.getItem("automata.project"), capabilities = null, connection = null, streamAbort = null, toastTimer, reconnectTimer, renderTimer;
 let accounts = null, authTimer, authLoading = null, accountsOpened = false;
 const project = () => state.projects.find((p) => p.id === selected);
@@ -41,13 +41,26 @@ document.querySelectorAll("dialog").forEach((d) => d.addEventListener("click", (
   }
 }));
 function modelName(role, id) {
-  return capabilities?.models?.[role]?.find((m) => m.id === id)?.label ?? ({ sonnet: "Sonnet", haiku: "Haiku", opus: "Opus", fable: "Fable", "gpt-6.1-sol": "Sol", "gpt-6-luna": "Luna", "gpt-6-astra": "Astra" }[id] ?? id);
+  return capabilities?.models?.[role]?.find((m) => m.id === id)?.label ?? ({ sonnet: "Sonnet", haiku: "Haiku", opus: "Opus", fable: "Fable", "gpt-6-sol": "Sol", "gpt-6-luna": "Luna", "gpt-6-astra": "Astra" }[id] ?? id);
 }
 const teamKeys = { coder: "extraCoders", auditor: "extraAuditors" };
 const teamSize = (settings, role) => 1 + (settings?.[teamKeys[role]]?.length ?? 0);
 const teamSuffix = (settings, role) => teamSize(settings, role) > 1 ? " ×" + teamSize(settings, role) : "";
+// The PC sends the director's models from Codex itself; the pickers and lists follow that catalog.
+function applyModelCatalog() {
+  for (const role of ["coder", "auditor"]) {
+    const models = capabilities?.models?.[role];
+    if (!models?.length) continue;
+    const options = models.map((m) => `<option value="${esc(m.id)}" title="${esc(m.detail ?? "")}">${esc(m.label)}</option>`).join("");
+    $("#" + role + "Model").innerHTML = options + `<option value="custom">${esc(t("Otro modelo…"))}</option>`;
+    $(role === "coder" ? "#settingsCoderModels" : "#settingsAuditorModels").innerHTML = options;
+  }
+}
 function populateEffort(role, model, value, select = $("#" + role + "Effort")) {
-  const values = role === "coder" ? ["default", "low", "medium", "high", "xhigh", "max"] : ["default", "low", "medium", "high", "xhigh", "max", .../luna/.test(model) ? [] : ["ultra"]];
+  const known = role === "coder" ? ["default", "low", "medium", "high", "xhigh", "max"] : ["default", "low", "medium", "high", "xhigh", "max", .../luna/.test(model) ? [] : ["ultra"]];
+  // Codex says which reasoning levels each model accepts; offer only those.
+  const catalog = capabilities?.models?.[role]?.find((m) => m.id === model)?.efforts;
+  const values = catalog?.length ? known.filter((v) => catalog.includes(v)) : known;
   select.innerHTML = values.map((v) => `<option value="${v}">${t(effortNames[v])}</option>`).join("");
   select.value = values.includes(value) ? value : "default";
 }
@@ -408,6 +421,7 @@ async function connect() {
   try {
     [state, capabilities] = await Promise.all([api("state"), api("capabilities")]);
     $(".version").textContent = connection?.compatibilityMode ? `WINDOWS / ${capabilities.version} · COMPATIBILIDAD` : `WORKSPACE / ${capabilities.version}`;
+    applyModelCatalog();
     syncSettings();
     render();
     connected(true, "Conectado a tu PC");

@@ -10,11 +10,12 @@ import { MODELS, MODES, TEAM_LIMITS, GIT_MODES, projectsRootOf, effortsFor, agen
 import { findAgent } from "./agents.mjs";
 import { AuthManager } from "./auth.mjs";
 import { GitHubProjects } from "./github.mjs";
+import { CodexModels } from "./models.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
 const mime = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json", ".woff2": "font/woff2" };
 const loopback = (address) => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address);
-export async function createServer({ port = 4780, lan = false, demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), auth = new AuthManager({ demo }), github = new GitHubProjects({ auth }), ...injections } = {}) {
+export async function createServer({ port = 4780, lan = false, demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), auth = new AuthManager({ demo }), github = new GitHubProjects({ auth }), codexModels = new CodexModels(), ...injections } = {}) {
   const store = new Store(dataDir), release = store.acquire();
   let coordinator;
   try {
@@ -22,6 +23,7 @@ export async function createServer({ port = 4780, lan = false, demo = false, dat
     coordinator.seedDemo();
     // Status checks and logins see the same accounts as the runs (the plan, without API keys).
     auth.agentEnv = (role) => agentEnv(coordinator.settings, role);
+    codexModels.env = () => agentEnv(coordinator.settings, "auditor");
   } catch (e) {
     release();
     throw e;
@@ -130,7 +132,11 @@ data: ${JSON.stringify(coordinator.snapshot())}
           throw new Error("Acción de acceso no válida.");
         }
         if (url.pathname === "/api/state" && req.method === "GET") return send(200, coordinator.snapshot());
-        if (url.pathname === "/api/capabilities" && req.method === "GET") return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"] }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: MODELS, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
+        if (url.pathname === "/api/capabilities" && req.method === "GET") {
+          // The director list comes from Codex itself, so it only offers models the account accepts.
+          const catalog = demo ? { source: "builtin", models: MODELS.auditor } : await codexModels.list({ force: url.searchParams.has("refresh") });
+          return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"] }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: { coder: MODELS.coder, auditor: catalog.models }, modelSource: catalog.source, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
+        }
         if (url.pathname === "/api/pairing" && req.method === "GET") {
           if (!loopback(req.socket.remoteAddress)) return send(403, { error: "Abre la conexión de Android desde la PC." });
           return send(200, { token, lan, addresses: Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) });
