@@ -85,7 +85,7 @@ try {
   server = startServer("1");
   await waitForServer();
   const settings = await api("state").then((s) => s.settings);
-  await api("settings", { method: "PUT", body: JSON.stringify({ ...settings, accessMode: "limited", coderModel: "sonnet", coderEffort: "medium", auditorModel: "gpt-6-luna", auditorEffort: "default", maxRounds: 14, autoResume: true, planOnly: true, gitMode: "ask-push", sessionRefreshRounds: refresh }) });
+  await api("settings", { method: "PUT", body: JSON.stringify({ ...settings, accessMode: "limited", coderModel: "sonnet", coderEffort: "medium", auditorModel: "gpt-6-luna", auditorEffort: "default", maxRounds: 14, autoResume: true, planOnly: true, gitMode: "ask-push", coderRefreshRounds: refresh, auditorRefreshRounds: refresh }) });
   const created = await api("projects", { method: "POST", body: JSON.stringify(project) });
   report.projectId = created.id;
   log("proyecto registrado", { id: created.id });
