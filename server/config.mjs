@@ -26,9 +26,13 @@ const TEAM_KEYS = { coder: "extraCoders", auditor: "extraAuditors" };
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:[\]-]{0,99}$/;
 // autoResume: interrupted or waiting runs continue on their own when Automata opens again.
 // maxRetries: passing failures retried per stage before asking the user. autoStart: open with Windows (desktop only).
-// sessionRefreshRounds: a resumed CLI session is replaced by a fresh one (with the full prompt, plan and
-// memory) after this many rounds; 0 keeps sessions for the whole run.
-export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true, autoResume: true, maxRetries: 4, autoStart: false, sessionRefreshRounds: 8 };
+// coderRefreshRounds / auditorRefreshRounds: a resumed CLI session is replaced by a fresh one (with the full
+// prompt, plan and memory) after this many rounds, separately for Claude and for Codex; 0 keeps that agent's
+// sessions for the whole run. Codex re-reads more of the project each round, so it renews sooner.
+export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true, autoResume: true, maxRetries: 4, autoStart: false, coderRefreshRounds: 8, auditorRefreshRounds: 3 };
+// Settings saved before the renewal was set per agent had one number for both: a value the user chose
+// (anything but the old default of 8) still applies to both.
+const LEGACY_REFRESH_DEFAULT = 8;
 // Identifiers that earlier versions offered but Codex does not accept, and what they meant.
 export const RENAMED_MODELS = { "gpt-6.1-sol": "gpt-6-sol" };
 // planOnly: Claude and Codex use the user's subscription login, as in the terminal. API keys found in
@@ -52,6 +56,7 @@ export function effortsFor(model, role) {
 }
 export function validateSettings(value = {}) {
   const s = { ...DEFAULT_SETTINGS, ...value };
+  if (value.sessionRefreshRounds != null && Number(value.sessionRefreshRounds) !== LEGACY_REFRESH_DEFAULT) for (const k of ["coderRefreshRounds", "auditorRefreshRounds"]) if (value[k] == null) s[k] = value.sessionRefreshRounds;
   s.auditorModel = RENAMED_MODELS[s.auditorModel] ?? s.auditorModel;
   if (Array.isArray(s.extraAuditors)) s.extraAuditors = s.extraAuditors.map((agent) => agent && RENAMED_MODELS[agent.model] ? { ...agent, model: RENAMED_MODELS[agent.model] } : agent);
   if (!["es", "en"].includes(s.language)) throw new Error("Elige English o Español.");
@@ -76,7 +81,7 @@ export function validateSettings(value = {}) {
     s.projectsRoot = root;
   } else s.projectsRoot = "";
   for (const k of ["reuseSessions", "fastFix", "planOnly", "autoResume", "autoStart"]) if (typeof s[k] !== "boolean") throw new Error(`${k}: usa verdadero o falso.`);
-  for (const [k, min, max] of [["maxRounds", 1, 50], ["timeoutMinutes", 1, 120], ["maxRetries", 0, 10], ["sessionRefreshRounds", 0, 50]]) {
+  for (const [k, min, max] of [["maxRounds", 1, 50], ["timeoutMinutes", 1, 120], ["maxRetries", 0, 10], ["coderRefreshRounds", 0, 50], ["auditorRefreshRounds", 0, 50]]) {
     s[k] = Number(s[k]);
     if (!Number.isInteger(s[k]) || s[k] < min || s[k] > max) throw new Error(`${k}: usa un número entre ${min} y ${max}.`);
   }

@@ -53,7 +53,8 @@ test("las sesiones se retoman con prompts cortos, por agente, y se desactivan co
       return { review: review(a.phase === "review" && ++reviews === 3 ? "complete" : "continue"), sessionId };
     } } });
     t.after(() => c.close());
-    c.updateSettings({ ...c.settings, reuseSessions: reuse, extraCoders: [{ model: "opus", effort: "high" }] });
+    // This test is about resuming; the renewal rounds (3 for Codex by default) have their own tests.
+    c.updateSettings({ ...c.settings, reuseSessions: reuse, auditorRefreshRounds: 8, extraCoders: [{ model: "opus", effort: "high" }] });
     c.start(c.addProject(projectInput(dir)).id);
     await settled(c);
     assert.equal(c.active.status, "complete");

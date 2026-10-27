@@ -118,7 +118,7 @@ test("las sesiones se renuevan cada N rondas en un punto seguro, con el plan y l
     return { review: { ...base(reviews >= 3 ? "complete" : "continue"), task, plan: { add: [], update } }, sessionId: "d" + reviews, usage: { input_tokens: 200 * reviews, cached_input_tokens: 50, output_tokens: 20 } };
   } });
   t.after(() => c.close());
-  c.updateSettings({ ...c.settings, sessionRefreshRounds: 2 });
+  c.updateSettings({ ...c.settings, coderRefreshRounds: 2, auditorRefreshRounds: 2 });
   const p = c.addProject(projectInput(dir));
   c.start(p.id);
   await settled(c);
@@ -137,13 +137,15 @@ test("las sesiones se renuevan cada N rondas en un punto seguro, con el plan y l
   const usage = c.snapshot().runs[0].usage;
   assert.equal(usage.refreshes, 2);
   assert.equal(usage.coder.calls, 3);
-  assert.equal(usage.coder.context, 300, "contexto = entrada más caché");
-  assert.equal(usage.auditor.context, 100 + 200 + 400 + 600);
+  assert.equal(usage.coder.maxContext, 100, "sin medida del adaptador, el contexto es entrada más caché de la llamada");
+  assert.equal(usage.auditor.maxContext, 600);
+  assert.equal(usage.auditor.sessions, 2, "dos sesiones de Codex: la inicial y la renovada");
+  assert.deepEqual(c.active.sessionLog.map((x) => [x.role, x.calls, x.contextPeak]), [["auditor", 2, 200], ["coder", 2, 100]], "al renovar se guarda cuánto llegó a usar la sesión que se cierra");
   assert.equal(c.active.usageLog.filter((u) => u.resumed).length, 3);
   // 0 disables it.
   const d = coordinator(fixture(), { async run(a) { seen.push({ role: a.role, resume: a.agent.resume, off: true }); return a.role === "coder" ? { text: "x", sessionId: "c" } : { review: base(a.phase === "review" && seen.filter((x) => x.off && x.role === "auditor").length >= 4 ? "complete" : "continue"), sessionId: "d" }; } });
   t.after(() => d.close());
-  d.updateSettings({ ...d.settings, sessionRefreshRounds: 0 });
+  d.updateSettings({ ...d.settings, coderRefreshRounds: 0, auditorRefreshRounds: 0 });
   d.start(d.addProject(projectInput(dir)).id);
   await settled(d);
   assert.equal(seen.filter((x) => x.off && !x.resume).length, 2, "solo la primera llamada de cada agente abre sesión");
@@ -308,6 +310,12 @@ test("el panel y la API del plan: agregar ligado o libre, corregir, reordenar, d
   assert.equal(reset.status, 200);
   const caps = await (await fetch(app.origin + "/api/capabilities", { headers })).json();
   assert.equal(caps.features.plan, true);
-  assert.equal(validateSettings().sessionRefreshRounds, 8);
-  assert.throws(() => validateSettings({ sessionRefreshRounds: 51 }), /sessionRefreshRounds/);
+  assert.equal(validateSettings().coderRefreshRounds, 8);
+  assert.equal(validateSettings().auditorRefreshRounds, 3);
+  assert.throws(() => validateSettings({ coderRefreshRounds: 51 }), /coderRefreshRounds/);
+  assert.throws(() => validateSettings({ auditorRefreshRounds: -1 }), /auditorRefreshRounds/);
+  // Settings saved with the single number: the old default gives way to the new ones; a chosen value applies to both.
+  assert.deepEqual([validateSettings({ sessionRefreshRounds: 8 }).coderRefreshRounds, validateSettings({ sessionRefreshRounds: 8 }).auditorRefreshRounds], [8, 3]);
+  assert.deepEqual([validateSettings({ sessionRefreshRounds: 5 }).coderRefreshRounds, validateSettings({ sessionRefreshRounds: 5 }).auditorRefreshRounds], [5, 5]);
+  assert.equal(validateSettings({ sessionRefreshRounds: 5, auditorRefreshRounds: 2 }).auditorRefreshRounds, 2, "el valor por agente manda sobre el antiguo");
 });

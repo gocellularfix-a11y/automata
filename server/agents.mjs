@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { MODES, REVIEW_SCHEMA, PROPOSAL_SCHEMA, agentEnv } from "./config.mjs";
 import { redactTokens, redactSecrets, redactJsonLine } from "./redact.mjs";
 import { classifyError } from "./recovery.mjs";
+import { claudeRequest, summarizeRequests, codexRequests } from "./usage.mjs";
 export function findCodexNative(packageRoot, { platform = process.platform, arch = process.arch } = {}) {
   if (platform !== "win32" || !["x64", "arm64"].includes(arch)) return null;
   const target = arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
@@ -224,6 +225,8 @@ export class CliAgents {
     if (!executable) throw Object.assign(new Error(`${role === "coder" ? "Claude Code" : "Codex CLI"} no está instalado. Instálalo o configura AUTOMATA_CLAUDE / AUTOMATA_CODEX.`), { kind: "fatal", role });
     fs.writeFileSync(path.join(directory, `${phase}-prompt.txt`), prompt, { mode: 384 });
     let result = null, lastMessage = "", newSessionId = null, usage = null, progressed = false, rateLimit = null, lastFailure = null;
+    // Claude's requests in this call (the biggest one is the context that counts) and when the call began.
+    const requests = [], startedAt = Date.now();
     // What the coordinator needs to decide whether a failure is a limit, a passing error or real.
     const hints = (error) => Object.assign(error, { role, agent: true, progressed, lastMessage: lastMessage.slice(-2e3), rateLimit, detail: lastFailure?.text ?? "", failureCode: lastFailure?.code ?? null, subtype: result?.subtype ?? null });
     const outputFile = path.join(directory, `${phase}-response.json`);
@@ -262,6 +265,10 @@ export class CliAgents {
           }
           // The raw log keeps every event for audit, without the secrets a tool result may have shown.
           fs.appendFileSync(rawFile, redactJsonLine(line) + "\n");
+          if (role === "coder" && line.includes('"type":"assistant"')) {
+            const request = claudeRequest(line);
+            if (request) requests.push(request);
+          }
           for (const e of decodeEvents(role, line)) {
             if (PROGRESS.has(e.kind)) progressed = true;
             if (e.kind === "result") result = e;
@@ -287,6 +294,9 @@ export class CliAgents {
       throw error;
     }
     const sessionOut = newSessionId ?? sessionId ?? null;
+    // Claude's usage is the call's total; Codex's is the running total of its thread (usageCumulative).
+    // The context is the biggest single request, which neither total shows.
+    const measured = () => role === "coder" ? summarizeRequests(requests) : sessionOut ? codexRequests(sessionOut, startedAt - 2e3) : null;
     // Written only when the attempt succeeded: after a crash, the coordinator reads it instead of
     // asking the agent to do the same work again.
     const keep = (payload) => {
@@ -296,19 +306,19 @@ export class CliAgents {
     if (role === "coder") {
       if (!result?.text?.trim()) throw hints(Object.assign(new Error("Claude terminó sin reporte final."), { kind: progressed ? "turns" : "malformed" }));
       fs.writeFileSync(outputFile, JSON.stringify(result));
-      return keep({ text: redactSecrets(result.text), sessionId: sessionOut, resumed: !!sessionId, usage, cost: result.cost ?? null });
+      return keep({ text: redactSecrets(result.text), sessionId: sessionOut, resumed: !!sessionId, usage, cost: result.cost ?? null, ...measured() });
     }
     const text = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, "utf8").trim() : lastMessage;
     if (!text) throw hints(Object.assign(new Error("Codex terminó sin respuesta."), { kind: "malformed" }));
-    if (conversation) return keep({ text: redactSecrets(text), sessionId: sessionOut, resumed: !!sessionId, usage });
+    if (conversation) return keep({ text: redactSecrets(text), sessionId: sessionOut, resumed: !!sessionId, usage, usageCumulative: true, ...measured() });
     let review;
     try {
       review = JSON.parse(text);
     } catch {
       throw hints(Object.assign(new Error(phase === "define" ? "Codex no entregó la propuesta en el formato esperado." : "Codex no entregó el JSON de auditoría esperado."), { kind: "malformed" }));
     }
-    if (phase === "define") return keep({ text: review.summary ?? "", proposal: review, sessionId: sessionOut, resumed: !!sessionId, usage });
-    return keep({ text: review.summary, review, sessionId: sessionOut, resumed: !!sessionId, usage });
+    if (phase === "define") return keep({ text: review.summary ?? "", proposal: review, sessionId: sessionOut, resumed: !!sessionId, usage, usageCumulative: true, ...measured() });
+    return keep({ text: review.summary, review, sessionId: sessionOut, resumed: !!sessionId, usage, usageCumulative: true, ...measured() });
   }
 }
 export async function gitEvidence(directory) {

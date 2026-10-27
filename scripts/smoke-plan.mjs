@@ -91,7 +91,7 @@ try {
   await shot("03-chat");
   // English and the settings field.
   await page.click("#settingsButton");
-  check("el ajuste de renovación de sesiones está en la configuración", await page.locator("#settingsForm [name=sessionRefreshRounds]").inputValue() === "8");
+  check("los ajustes de renovación de sesiones (Claude 8, Codex 3) están en la configuración", await page.locator("#settingsForm [name=coderRefreshRounds]").inputValue() === "8" && await page.locator("#settingsForm [name=auditorRefreshRounds]").inputValue() === "3");
   await page.selectOption("#settingsForm [name=language]", "en");
   await page.click("#settingsForm button[type=submit]");
   await page.waitForFunction(() => document.documentElement.lang === "en" && !document.querySelector("#settingsDialog").open);

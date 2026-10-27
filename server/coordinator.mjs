@@ -13,6 +13,7 @@ import { AppRunner } from "./apprun.mjs";
 import { MemoryStore, parseRemember, changedFiles, staleMentions, shallowNames } from "./memory.mjs";
 import { PlanStore, invalidPlan } from "./plan.mjs";
 import { isCasual, casualAnswer } from "./chat.mjs";
+import { consumed } from "./usage.mjs";
 import { classifyError, planWait, describeWait, agentName, DEFAULT_BACKOFF, MAX_REVIEW_FIXES, MAX_LIMIT_WAITS } from "./recovery.mjs";
 const LIVE = /* @__PURE__ */ new Set(["running", "pausing"]);
 // Statuses the user can continue from. "waiting" continues on its own; Continuar just skips the wait.
@@ -210,15 +211,27 @@ export class Coordinator extends EventEmitter {
   planChanged(projectId) {
     delete this.planStats[projectId];
   }
-  // Context and output per agent for the whole run, from the per-call log.
+  // Tokens consumed and context reached per agent for the whole run, from the per-call log. maxContext is the
+  // biggest single request (what has to fit in the window); input/cached/output are what the calls consumed.
   usageSummary(r) {
-    const summary = { coder: { calls: 0, context: 0, output: 0 }, auditor: { calls: 0, context: 0, output: 0 }, refreshes: (r.sessionLog ?? []).length };
+    const empty = () => ({ calls: 0, sessions: 0, input: 0, cached: 0, output: 0, tokens: 0, maxContext: 0, lastContext: 0, avgContext: 0, window: null, measured: 0 });
+    const summary = { coder: empty(), auditor: empty(), refreshes: (r.sessionLog ?? []).length };
+    const contexts = { coder: 0, auditor: 0 };
     for (const item of r.usageLog ?? []) {
-      const s = summary[item.role] ?? (summary[item.role] = { calls: 0, context: 0, output: 0 });
+      const s = summary[item.role] ?? (summary[item.role] = empty());
+      contexts[item.role] = (contexts[item.role] ?? 0) + (item.context ?? 0);
       s.calls++;
-      s.context += item.context;
-      s.output += item.output;
+      if (!item.resumed) s.sessions++;
+      s.input += item.input ?? 0;
+      s.cached += item.cached ?? 0;
+      s.output += item.output ?? 0;
+      s.tokens = s.input + s.output;
+      s.maxContext = Math.max(s.maxContext, item.context ?? 0);
+      s.lastContext = item.context ?? 0;
+      s.window = item.window ?? s.window;
+      if (item.measured) s.measured++;
     }
+    for (const role of ["coder", "auditor"]) summary[role].avgContext = summary[role].calls ? Math.round(contexts[role] / summary[role].calls) : 0;
     return summary;
   }
   snapshot() {
@@ -310,7 +323,8 @@ export class Coordinator extends EventEmitter {
       try {
         const result = await this.agents.run({ role: "auditor", phase: "define", prompt, fallbackPrompt: prompt, project: { name: "Propuesta", directory: workspace, objective: proposal.idea, criteria: [], checks: [] }, settings: { ...this.settings }, directory: dir, signal: this.chatController.signal, agent: { ...team[0], index: 0, count: 1, label: agentLabel("auditor", team, 0), resume: null }, emit: (e) => this.event({ ...e, runId: null, projectId: null, proposalId: proposal.id }) });
         const u = result.usage;
-        if (u) proposal.usage.push({ at: now(), context: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), cached: u.cached_input_tokens ?? u.cache_read_input_tokens ?? 0, output: u.output_tokens ?? 0 });
+        // Every attempt opens its own session, so the thread's total is this call's consumption.
+        if (u) proposal.usage.push({ at: now(), input: u.input_tokens ?? 0, cached: u.cached_input_tokens ?? u.cache_read_input_tokens ?? 0, output: u.output_tokens ?? 0, context: result.contextPeak ?? null, requests: result.requests ?? null });
         proposal.draft = validateProposal(result.proposal);
         proposal.status = "ready";
         proposal.readyAt = now();
@@ -398,6 +412,9 @@ export class Coordinator extends EventEmitter {
       // Plan or API key is a property of this PC, not of a run.
       this.active.settings.planOnly = this.settings.planOnly;
       this.active.settings.maxRetries = this.settings.maxRetries;
+      // How often each agent's session is renewed can change while the work goes on.
+      this.active.settings.coderRefreshRounds = this.settings.coderRefreshRounds;
+      this.active.settings.auditorRefreshRounds = this.settings.auditorRefreshRounds;
     }
     if (previousAccess !== this.settings.accessMode && this.active?.settings && this.active.status !== "complete") {
       this.active.settings.accessMode = this.settings.accessMode;
@@ -708,15 +725,17 @@ export class Coordinator extends EventEmitter {
     const team = teamOf(r.settings, role), member = team[index] ?? team[0];
     const sessionKey = `${role}:${index}`;
     let resume = r.settings.reuseSessions !== false ? r.sessions?.[sessionKey] ?? null : null;
-    // A session that has served sessionRefreshRounds rounds is replaced by a fresh one: the full prompt
-    // brings the plan and the memory, so nothing is lost and the context stops growing.
-    const refreshEvery = r.settings.sessionRefreshRounds ?? DEFAULT_SETTINGS.sessionRefreshRounds;
+    // A session that has served its agent's refresh rounds is replaced by a fresh one: the full prompt
+    // brings the plan and the memory, so nothing is lost and the context stops growing. Each agent has its own
+    // number (Codex re-reads more, so it renews sooner); runs started before they were split keep the old one.
+    const refreshEvery = r.settings[`${role}RefreshRounds`] ?? r.settings.sessionRefreshRounds ?? DEFAULT_SETTINGS[`${role}RefreshRounds`];
     r.sessionRounds ??= {};
+    r.sessionStats ??= {};
     if (resume && allowRefresh && refreshEvery > 0 && r.round - (r.sessionRounds[sessionKey] ?? r.round) >= refreshEvery) {
-      const served = r.round - r.sessionRounds[sessionKey];
+      const served = r.round - r.sessionRounds[sessionKey], stats = r.sessionStats[sessionKey];
       delete r.sessions[sessionKey];
       resume = null;
-      r.sessionLog = [...r.sessionLog ?? [], { at: now(), role, index, round: r.round, served, reason: "rounds" }].slice(-100);
+      r.sessionLog = [...r.sessionLog ?? [], { at: now(), role, index, round: r.round, served, reason: "rounds", calls: stats?.calls ?? null, contextPeak: stats?.peak ?? null, contextLast: stats?.last ?? null }].slice(-100);
       this.event({ role: "system", kind: "session", text: `Sesión de ${agentName(role)} renovada tras ${served} rondas: la nueva recibe el plan y la memoria en el prompt completo.` });
     }
     const full = typeof prompts === "string" ? prompts : prompts.full;
@@ -776,10 +795,20 @@ export class Coordinator extends EventEmitter {
     }
     if (result.usage) {
       const u = result.usage;
-      r.tokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
-      // Context = everything the model read this call (Claude counts the cache apart; Codex inside input_tokens).
-      const context = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-      r.usageLog = [...r.usageLog ?? [], { at: now(), round: r.round, role, phase, context, cached: u.cache_read_input_tokens ?? u.cached_input_tokens ?? 0, output: u.output_tokens ?? 0, resumed: !!resume, files: role === "coder" ? (r.files?.length ?? 0) : undefined }].slice(-300);
+      // A call that did not resume started a session: its running totals begin at zero (usage.mjs).
+      const fresh = !resume || result.resumed === false;
+      const stats = fresh || !r.sessionStats[sessionKey] ? (r.sessionStats[sessionKey] = { calls: 0, peak: 0, last: 0, totals: null, since: r.round }) : r.sessionStats[sessionKey];
+      const { call, total } = consumed(u, { cumulative: result.usageCumulative === true, previous: stats.totals });
+      stats.totals = total;
+      r.tokens += call.input + call.output;
+      // The context is the biggest single request the agent made, measured by the adapter. Agents that cannot
+      // measure it (simulated ones) fall back to everything the call read, which overstates it.
+      const measured = Number.isFinite(result.contextPeak);
+      const context = measured ? result.contextPeak : (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+      stats.calls++;
+      stats.peak = Math.max(stats.peak, context);
+      stats.last = measured ? result.contextLast ?? context : context;
+      r.usageLog = [...r.usageLog ?? [], { at: now(), round: r.round, role, phase, session: sessionKey, input: call.input, cached: call.cached, created: call.created, output: call.output, context, last: stats.last, requests: result.requests ?? null, window: result.contextWindow ?? null, measured, resumed: !!resume, files: role === "coder" ? (r.files?.length ?? 0) : undefined }].slice(-300);
     }
     if (Number.isFinite(result.cost)) r.costUsd += result.cost;
     if (result.sessionId) {
