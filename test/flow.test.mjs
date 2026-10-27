@@ -94,7 +94,10 @@ test("si fallan las verificaciones el ejecutor corrige sin pasar por el director
 });
 
 test("la corrección directa tiene un tope de intentos y se puede desactivar", async (t) => {
-  for (const [fastFix, expected] of [[true, ["auditor:plan", "coder:code", "coder:code", "coder:code", "coder:code", "auditor:review"]], [false, ["auditor:plan", "coder:code", "auditor:review"]]]) {
+  // After the cap the director reviews; approving with red checks is an invalid review, so it is asked
+  // again up to three times (P1) before the run stops with the error.
+  const reviews = ["auditor:review", "auditor:review", "auditor:review"];
+  for (const [fastFix, expected] of [[true, ["auditor:plan", "coder:code", "coder:code", "coder:code", "coder:code", ...reviews]], [false, ["auditor:plan", "coder:code", ...reviews]]]) {
     const dir = fixture(), calls = [];
     const c = new Coordinator(new Store(path.join(dir, "data")), { git: fakeGit(), evidence: async () => "", checks: async () => [{ command: "x", passed: false, code: 1, output: "rojo" }], agents: { async run(a) {
       calls.push(`${a.role}:${a.phase}`);

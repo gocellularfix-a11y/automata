@@ -45,11 +45,23 @@ export const memorySection = (memory) => memory ? `MEMORIA DEL PROYECTO (Automat
 ${memory}` : "";
 const directorMemoryRule = "MEMORIA: en memory.add registra solo hechos duraderos y comprobados que convenga recordar en sesiones futuras (decisiones técnicas, datos del entorno, pendientes, trampas ya descartadas), una frase cada uno, sin secretos y sin repetir lo que ya está en la memoria. En memory.retire indica los #id de recuerdos que comprobaste falsos u obsoletos, con el motivo. Si no hay nada, deja las dos listas vacías.";
 const rememberRule = "Si descubriste algo duradero que convenga recordar en sesiones futuras (un dato del entorno, una decisión técnica, una trampa ya descartada), termina con una sección «PARA RECORDAR:» con una línea por hecho, por ejemplo «- [entorno] Android compila con el JDK 21». Etiquetas: entorno, decisión, pendiente, trampa, nota. Sin secretos ni datos personales.";
-export function directorPrompt(project, settings, { phase, report = "", evidence = "", history = "", team = null, git = null, short = false, watch = "", memory = "" }) {
+// The director's previous answer could not be accepted: the same session gets the reason and the rules again.
+export function reviewFixPrompt(error, attempt, max) {
+  return `Tu respuesta anterior no se pudo aceptar (intento ${attempt} de ${max}): ${error}
+Entrega de nuevo la revisión completa como JSON válido con el esquema indicado (decision, summary, nextPrompt, findings, criteria, git, run, memory), sin texto fuera del JSON y sin inventar comprobaciones. decision=complete exige evidencia concreta para cada criterio exacto, ninguna verificación fallida y ningún hallazgo critical/major; si eso no se cumple, usa decision=continue con un nextPrompt concreto o decision=blocked explicando qué falta.`;
+}
+// The coder's previous attempt at this task stopped midway: it must pick up, not start over.
+export function continuationPrompt(task, { reason = "se interrumpió" } = {}) {
+  return `La ejecución anterior de esta misma tarea se interrumpió (${reason}) después de hacer trabajo parcial. Revisa primero el estado actual de los archivos, no repitas lo que ya está hecho y termina la tarea.
+
+TAREA:
+${task}`;
+}
+export function directorPrompt(project, settings, { phase, report = "", evidence = "", history = "", team = null, git = null, short = false, watch = "", memory = "", fix = "" }) {
   const teamLine = team ? `
 EQUIPO: eres el revisor ${team.index + 1} de ${team.count}. Para completar el objetivo todos los revisores deben aprobar; evalúa de forma independiente y no asumas que otro revisor ya comprobó algo.` : "";
   const watched = phase === "review" && !!watch;
-  const closing = "Entrega el JSON solicitado. decision=continue: nextPrompt con una tarea concreta y verificable del tamaño elegido. decision=complete: evidencia para TODOS los criterios exactos, ninguna verificación fallida y ningún hallazgo critical/major pendiente. decision=blocked: explica qué información o condición externa falta. No inventes comprobaciones realizadas. Cada hallazgo debe incluir archivo y evidencia. Razona de forma independiente; preserva las limitaciones y los fallos.";
+  const closing = "Entrega el JSON solicitado. decision=continue: nextPrompt con una tarea concreta y verificable del tamaño elegido. decision=complete: evidencia para TODOS los criterios exactos, ninguna verificación fallida y ningún hallazgo critical/major pendiente. decision=blocked: explica qué información o condición externa falta. No inventes comprobaciones realizadas. Cada hallazgo debe incluir archivo y evidencia. Razona de forma independiente; preserva las limitaciones y los fallos." + (fix ? `\nRESPUESTA ANTERIOR RECHAZADA: ${fix}` : "");
   if (short) {
     // Same session as before: the rules, project and criteria from the first instruction still apply.
     return `Seguimos en la misma sesión como director y auditor independiente de Automata. Siguen vigentes tus reglas, el proyecto y los criterios de la primera instrucción (eres de solo lectura).
@@ -102,7 +114,7 @@ TAREA DEL DIRECTOR:
 ${task}
 Implementa la tarea hasta dejarla revisable. ${noGit} Trabaja dentro de los permisos disponibles; si una herramienta requiere permiso no disponible, informa el bloqueo sin simular éxito. ${report}`;
 }
-export function chatPrompt(project, role, text, context, settings = {}, { kind = "task", previousAnswers = [], memory = "" } = {}) {
+export function chatPrompt(project, role, text, context, settings = {}, { kind = "task", previousAnswers = [], memory = "", interrupted = false } = {}) {
   const director = role === "auditor";
   const readOnly = kind === "question";
   const headline = director
@@ -127,6 +139,7 @@ ESTADO RECIENTE:
 ${context || "Todavía no hay ejecución."}
 ${memorySection(memory)}
 ${previous}
+${interrupted ? "NOTA: un intento anterior de esta misma petición se interrumpió al cerrar Automata. Revisa lo que ya quedó hecho en el proyecto y no lo repitas; continúa desde ahí." : ""}
 PETICIÓN DEL USUARIO:
 ${text}
 Responde en ${language(settings)} con ${closing}. ${rememberRule}`;

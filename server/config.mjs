@@ -23,7 +23,9 @@ export const MODELS = {
 export const TEAM_LIMITS = { coder: 3, auditor: 2 };
 const TEAM_KEYS = { coder: "extraCoders", auditor: "extraAuditors" };
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:[\]-]{0,99}$/;
-export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true };
+// autoResume: interrupted or waiting runs continue on their own when Automata opens again.
+// maxRetries: passing failures retried per stage before asking the user. autoStart: open with Windows (desktop only).
+export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true, autoResume: true, maxRetries: 4, autoStart: false };
 // Identifiers that earlier versions offered but Codex does not accept, and what they meant.
 export const RENAMED_MODELS = { "gpt-6.1-sol": "gpt-6-sol" };
 // planOnly: Claude and Codex use the user's subscription login, as in the terminal. API keys found in
@@ -70,8 +72,8 @@ export function validateSettings(value = {}) {
     if (!path.isAbsolute(s.projectsRoot.trim()) || root === path.parse(root).root) throw new Error("La carpeta de proyectos debe ser una ruta absoluta que no sea la raíz del disco.");
     s.projectsRoot = root;
   } else s.projectsRoot = "";
-  for (const k of ["reuseSessions", "fastFix", "planOnly"]) if (typeof s[k] !== "boolean") throw new Error(`${k}: usa verdadero o falso.`);
-  for (const [k, min, max] of [["maxRounds", 1, 50], ["timeoutMinutes", 1, 120]]) {
+  for (const k of ["reuseSessions", "fastFix", "planOnly", "autoResume", "autoStart"]) if (typeof s[k] !== "boolean") throw new Error(`${k}: usa verdadero o falso.`);
+  for (const [k, min, max] of [["maxRounds", 1, 50], ["timeoutMinutes", 1, 120], ["maxRetries", 0, 10]]) {
     s[k] = Number(s[k]);
     if (!Number.isInteger(s[k]) || s[k] < min || s[k] > max) throw new Error(`${k}: usa un número entre ${min} y ${max}.`);
   }
@@ -166,15 +168,17 @@ export function combineReviews(reviews, labels) {
     }))
   };
 }
+// A review the director must redo: the coordinator asks again, with the reason, a bounded number of times.
+export const invalidReview = (message) => Object.assign(new Error(message), { kind: "malformed", role: "auditor" });
 export function validateReview(r, project, phase = "review") {
-  if (!r || !["continue", "complete", "blocked"].includes(r.decision) || typeof r.summary !== "string" || typeof r.nextPrompt !== "string" || !Array.isArray(r.findings) || !Array.isArray(r.criteria)) throw new Error("El auditor no entregó una decisión válida.");
-  if (r.findings.some((f) => !["critical", "major", "minor", "info"].includes(f.severity) || ["file", "description", "evidence"].some((k) => typeof f[k] !== "string"))) throw new Error("Los hallazgos del auditor no son válidos.");
-  if (r.criteria.some((c) => typeof c.criterion !== "string" || typeof c.met !== "boolean" || typeof c.evidence !== "string")) throw new Error("La evidencia de aceptación no es válida.");
-  if (r.decision === "continue" && !r.nextPrompt.trim()) throw new Error("El auditor no indicó la siguiente tarea.");
+  if (!r || !["continue", "complete", "blocked"].includes(r.decision) || typeof r.summary !== "string" || typeof r.nextPrompt !== "string" || !Array.isArray(r.findings) || !Array.isArray(r.criteria)) throw invalidReview("El auditor no entregó una decisión válida.");
+  if (r.findings.some((f) => !["critical", "major", "minor", "info"].includes(f.severity) || ["file", "description", "evidence"].some((k) => typeof f[k] !== "string"))) throw invalidReview("Los hallazgos del auditor no son válidos.");
+  if (r.criteria.some((c) => typeof c.criterion !== "string" || typeof c.met !== "boolean" || typeof c.evidence !== "string")) throw invalidReview("La evidencia de aceptación no es válida.");
+  if (r.decision === "continue" && !r.nextPrompt.trim()) throw invalidReview("El auditor no indicó la siguiente tarea.");
   if (r.decision === "complete") {
-    if (phase === "plan") throw new Error("El proyecto necesita ejecución y auditoría antes de marcarse terminado.");
-    if (project.criteria.some((c) => !r.criteria.some((x) => x.criterion === c && x.met && x.evidence.trim()))) throw new Error("Falta evidencia para uno o más criterios de aceptación.");
-    if (r.findings.some((f) => ["critical", "major"].includes(f.severity))) throw new Error("Hay hallazgos importantes pendientes.");
+    if (phase === "plan") throw invalidReview("El proyecto necesita ejecución y auditoría antes de marcarse terminado.");
+    if (project.criteria.some((c) => !r.criteria.some((x) => x.criterion === c && x.met && x.evidence.trim()))) throw invalidReview("Falta evidencia para uno o más criterios de aceptación.");
+    if (r.findings.some((f) => ["critical", "major"].includes(f.severity))) throw invalidReview("Hay hallazgos importantes pendientes.");
   }
   r.run = normalizeRun(r.run);
   r.memory = normalizeMemory(r.memory);

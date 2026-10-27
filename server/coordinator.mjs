@@ -2,19 +2,27 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { DEFAULT_SETTINGS, validateProject, validateSettings, validateReview, teamOf, agentLabel, combineReviews } from "./config.mjs";
+import { DEFAULT_SETTINGS, validateProject, validateSettings, validateReview, invalidReview, teamOf, agentLabel, combineReviews } from "./config.mjs";
 import { CliAgents, DemoAgents, gitEvidence, runChecks } from "./agents.mjs";
 import { GitOps, normalizeGit, hasGitActions } from "./git.mjs";
-import { directorPrompt, coderPrompt, chatPrompt } from "./prompts.mjs";
+import { directorPrompt, coderPrompt, chatPrompt, reviewFixPrompt, continuationPrompt } from "./prompts.mjs";
 import { observe, digest } from "./watch.mjs";
 import { AppRunner } from "./apprun.mjs";
-import { MemoryStore, parseRemember, changedFiles } from "./memory.mjs";
+import { MemoryStore, parseRemember, changedFiles, staleMentions, shallowNames } from "./memory.mjs";
+import { classifyError, planWait, describeWait, agentName, DEFAULT_BACKOFF, MAX_REVIEW_FIXES, MAX_LIMIT_WAITS } from "./recovery.mjs";
 const LIVE = /* @__PURE__ */ new Set(["running", "pausing"]);
+// Statuses the user can continue from. "waiting" continues on its own; Continuar just skips the wait.
+const RESUMABLE = ["paused", "interrupted", "error", "blocked", "limit", "stopped", "waiting"];
 // When checks fail the executor fixes them straight away; the director only steps in after this many tries.
 const MAX_AUTO_FIXES = 3;
+const now = () => (/* @__PURE__ */ new Date()).toISOString();
 const tail = (text, max) => {
   const value = String(text ?? "");
   return value.length > max ? "…" + value.slice(-max) : value;
+};
+const clip = (text, max) => {
+  const value = String(text ?? "").replace(/\s+/g, " ").trim();
+  return value.length > max ? value.slice(0, max - 1) + "…" : value;
 };
 const fixPrompt = (task, failing) => `Las verificaciones automáticas fallaron. Corrige el código para que pasen, sin cambiar los criterios ni debilitar o borrar las pruebas, y vuelve a ejecutarlas.
 
@@ -24,8 +32,18 @@ ${task}
 VERIFICACIONES FALLIDAS:
 ${failing.map((check) => `$ ${check.command ?? "(sin comando)"} → código ${check.code ?? "?"}\n${tail(check.output, 2500)}${check.stderr ? "\n" + tail(check.stderr, 800) : ""}`).join("\n\n")}`;
 const gitView = ({ kind, message, branch, into, push }) => ({ kind, message, branch, into, push });
+// A stored result of an interrupted operation: read back only if it belongs to the attempt that was in flight.
+function completedAttempt(inflight) {
+  if (!inflight?.id || !inflight.dir || !inflight.phase) return null;
+  try {
+    const saved = JSON.parse(fs.readFileSync(path.join(inflight.dir, `${inflight.phase}-result.json`), "utf8"));
+    return saved.attemptId === inflight.id ? saved : null;
+  } catch {
+    return null;
+  }
+}
 export class Coordinator extends EventEmitter {
-  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app, memory } = {}) {
+  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app, memory, backoff, beforeResume = null, resumeDelayMs = 1500 } = {}) {
     super();
     this.store = store;
     this.demo = demo;
@@ -37,6 +55,12 @@ export class Coordinator extends EventEmitter {
     this.git = git ?? new GitOps();
     this.gitBusy = false;
     this.app = app ?? new AppRunner();
+    // Waits between retries; tests shorten them.
+    this.backoff = backoff ?? DEFAULT_BACKOFF;
+    // Called before a run resumes on its own (the server checks that both accounts are connected).
+    this.beforeResume = beforeResume;
+    this.resumeDelayMs = resumeDelayMs;
+    this.waitTimer = null;
     // App output can arrive many times per second; the UI only needs a refresh now and then.
     this.app.on("change", () => {
       const st = this.app.state;
@@ -61,24 +85,101 @@ export class Coordinator extends EventEmitter {
     }
     this.events = store.read("events.json", []);
     this.messages = store.read("messages.json", []);
-    for (const message of this.messages) if (message.status === "processing") {
-      message.status = "interrupted";
-      message.error = "La consulta se interrumpió al cerrar Automata. Puedes enviarla de nuevo.";
-      delete message.activeRole;
-    }
     this.busy = false;
     this.controller = null;
     this.chatController = null;
+    this.toResume = [];
+    this.restoreMessages();
     this.chatQueue = this.messages.filter((m) => m.status === "queued").map((message) => ({ message, project: this.projects.find((p) => p.id === message.projectId) })).filter((m) => m.project);
-    this.active = this.runs.find((r) => LIVE.has(r.status) || ["paused", "interrupted", "error", "blocked", "limit", "stopped"].includes(r.status)) ?? null;
-    for (const run of this.runs) if (LIVE.has(run.status)) {
-      run.status = "interrupted";
-      if (run.stage === "code") {
-        run.stage = "checks";
-        run.coderReport = "La ejecución anterior se interrumpió. Inspecciona el trabajo parcial antes de dar la siguiente instrucción.";
+    this.active = this.runs.find((r) => LIVE.has(r.status) || r.status === "waiting" || RESUMABLE.includes(r.status)) ?? null;
+    this.restoreRuns();
+    this.persist();
+  }
+  // Automata closed while runs were in progress: keep what finished, continue what did not.
+  restoreRuns() {
+    for (const run of this.runs) {
+      for (const item of run.gitQueue ?? []) if (item.status === "pending" && item.startedAt) {
+        // The command was running when Automata closed: a push or merge may or may not have happened.
+        item.status = "uncertain";
+        item.error = "Automata se cerró mientras se ejecutaba. Comprueba el resultado en el repositorio antes de repetirla.";
+        item.doneAt = now();
+      }
+      // Closing Automata is not pressing Stop: a run cut by the shutdown is picked up again.
+      const closed = run.status === "interrupted" && run.interruptedBy === "close";
+      if (!LIVE.has(run.status) && run.status !== "waiting" && !closed) continue;
+      delete run.interruptedBy;
+      const wasWaiting = run.status === "waiting";
+      const saved = completedAttempt(run.inflight);
+      run.recovery ??= { attempts: {}, log: [], waits: 0 };
+      run.recovery.log.push({ at: now(), kind: "shutdown", stage: run.stage, round: run.round, completed: !!saved, waiting: wasWaiting ? run.waiting?.kind ?? null : null });
+      run.recovery.log = run.recovery.log.slice(-60);
+      if (saved) {
+        // The agent finished and Automata closed before noting it: the result is reused, not repeated.
+        run.inflight = { ...run.inflight, completed: saved };
+      } else {
+        run.inflight = null;
+        if (run.stage === "code" && !wasWaiting) {
+          run.stage = "checks";
+          run.codeStarted = null;
+          delete run.continuation;
+          run.coderReport = "La ejecución anterior se interrumpió. Inspecciona el trabajo parcial antes de dar la siguiente instrucción.";
+        }
+      }
+      this.remember("guardar", () => this.memory.addFact(run.projectId, { kind: "recovery", text: `Automata se cerró durante la etapa ${run.stage} de la ronda ${run.round}${saved ? "; el resultado del agente se recuperó sin repetir la operación" : ""}${wasWaiting ? "; estaba esperando para reintentar" : ""}.`, source: "automata", runId: run.id, round: run.round }));
+      if (this.settings.autoResume) {
+        // Waiting runs keep their appointment; interrupted ones continue shortly after startup.
+        if (wasWaiting && run.waiting?.resumeAt) this.toResume.push({ run, at: run.waiting.resumeAt });
+        else {
+          run.status = "interrupted";
+          delete run.waiting;
+          run.resumeAt = null;
+          this.toResume.push({ run, at: null });
+        }
+      } else {
+        run.status = "interrupted";
+        delete run.waiting;
+        run.resumeAt = null;
       }
     }
-    this.persist();
+  }
+  // A message that was being answered when Automata closed is queued again once, keeping the answers
+  // it already got. A second interruption leaves it for the user.
+  restoreMessages() {
+    for (const message of this.messages) {
+      if (message.status !== "processing") continue;
+      const saved = completedAttempt(message.inflight);
+      if (saved && message.inflight?.role && !(message.answers ?? []).some((a) => a.role === message.inflight.role)) {
+        (message.answers ??= []).push({ role: message.inflight.role, text: saved.text, recovered: true });
+      }
+      message.inflight = null;
+      delete message.activeRole;
+      if (this.settings.autoResume && !(message.requeued > 0)) {
+        message.requeued = 1;
+        message.status = "queued";
+        message.note = "Automata se cerró mientras se procesaba. Se retoma sin repetir lo ya respondido.";
+      } else {
+        message.status = "interrupted";
+        message.error = "La consulta se interrumpió al cerrar Automata. Puedes enviarla de nuevo.";
+      }
+    }
+  }
+  // Continues what the shutdown left behind, if the user allows it. The server calls this once it listens.
+  startAutoResume() {
+    const planned = this.toResume;
+    this.toResume = [];
+    if (!this.settings.autoResume) return;
+    const target = planned.find((item) => item.run === this.active) ?? planned[0];
+    if (target) {
+      const r = target.run;
+      if (target.at) {
+        this.active = r;
+        this.event({ role: "system", kind: "wait", text: describeWait(r.waiting, this.settings.language), runId: r.id, projectId: r.projectId });
+        this.scheduleWait(r);
+      } else {
+        const timer = setTimeout(() => void this.resumeNow(r, "startup"), this.resumeDelayMs);
+        timer.unref?.();
+      }
+    } else if (this.chatQueue.length && !this.busy) this.chatPending = this.drainChats();
   }
   persist() {
     clearTimeout(this.eventsTimer);
@@ -86,13 +187,13 @@ export class Coordinator extends EventEmitter {
     for (const [name, data] of Object.entries({ projects: this.projects, settings: this.settings, runs: this.runs, events: this.events.slice(-700), messages: this.messages.slice(-200) })) this.store.write(`${name}.json`, data);
   }
   snapshot() {
-    return { projects: this.projects, settings: this.settings, runs: this.runs.map(({ baseline, coderReport, nextPrompt, sessions, watch, ...r }) => ({ ...r, watched: watch?.length ?? 0 })), activeId: this.active?.id ?? null, events: this.events.slice(-250), messages: this.messages.slice(-100), demo: this.demo, busy: this.busy, app: this.app.view() };
+    return { projects: this.projects, settings: this.settings, runs: this.runs.map(({ baseline, coderReport, nextPrompt, sessions, watch, inflight, continuation, ...r }) => ({ ...r, watched: watch?.length ?? 0 })), activeId: this.active?.id ?? null, events: this.events.slice(-250), messages: this.messages.slice(-100).map(({ inflight, ...m }) => m), demo: this.demo, busy: this.busy, app: this.app.view() };
   }
   notify() {
     this.emit("state", this.snapshot());
   }
   event(event) {
-    const item = { id: randomUUID(), at: (/* @__PURE__ */ new Date()).toISOString(), runId: this.active?.id ?? null, projectId: this.active?.projectId ?? null, ...event };
+    const item = { id: randomUUID(), at: now(), runId: this.active?.id ?? null, projectId: this.active?.projectId ?? null, ...event };
     if (item.text) item.text = item.text.slice(0, 18e3);
     this.events.push(item);
     this.events = this.events.slice(-700);
@@ -109,7 +210,7 @@ export class Coordinator extends EventEmitter {
   }
   addProject(input) {
     if (this.demo) throw new Error("En demostración usa el proyecto de ejemplo. Reinicia sin --demo para agregar tus proyectos.");
-    const p = { ...validateProject(input), id: randomUUID(), createdAt: (/* @__PURE__ */ new Date()).toISOString() };
+    const p = { ...validateProject(input), id: randomUUID(), createdAt: now() };
     this.projects.push(p);
     this.persist();
     this.notify();
@@ -119,7 +220,7 @@ export class Coordinator extends EventEmitter {
     if (!this.demo) return;
     const dir = path.join(this.store.directory, "demo-project");
     fs.mkdirSync(dir, { recursive: true });
-    if (!this.projects.some((p) => p.id === "demo")) this.projects.push({ id: "demo", name: "Hola, Automata", directory: dir, objective: "Crear un saludo sencillo y verificarlo con una prueba automatizada.", criteria: ["El saludo incluye el nombre y la prueba pasa."], checks: ["node --test"], constraints: "Solo modificar el proyecto de demostración. No llamar a servicios de AI.", createdAt: (/* @__PURE__ */ new Date()).toISOString() });
+    if (!this.projects.some((p) => p.id === "demo")) this.projects.push({ id: "demo", name: "Hola, Automata", directory: dir, objective: "Crear un saludo sencillo y verificarlo con una prueba automatizada.", criteria: ["El saludo incluye el nombre y la prueba pasa."], checks: ["node --test"], constraints: "Solo modificar el proyecto de demostración. No llamar a servicios de AI.", createdAt: now() });
     this.persist();
   }
   updateSettings(input) {
@@ -129,6 +230,7 @@ export class Coordinator extends EventEmitter {
       this.active.settings.language = this.settings.language;
       // Plan or API key is a property of this PC, not of a run.
       this.active.settings.planOnly = this.settings.planOnly;
+      this.active.settings.maxRetries = this.settings.maxRetries;
     }
     if (previousAccess !== this.settings.accessMode && this.active?.settings && this.active.status !== "complete") {
       this.active.settings.accessMode = this.settings.accessMode;
@@ -139,11 +241,11 @@ export class Coordinator extends EventEmitter {
     return this.settings;
   }
   start(projectId) {
-    if (this.busy || this.active && ["paused", "interrupted", ...LIVE].includes(this.active.status)) throw new Error("Continúa o detén el trabajo actual antes de iniciar otro.");
+    if (this.busy || this.active && ["paused", "interrupted", "waiting", ...LIVE].includes(this.active.status)) throw new Error("Continúa o detén el trabajo actual antes de iniciar otro.");
     const p = this.projects.find((p2) => p2.id === projectId);
     if (!p) throw new Error("Selecciona un proyecto.");
     validateProject(p);
-    const run = { id: randomUUID(), projectId: p.id, project: { ...p }, settings: JSON.parse(JSON.stringify(this.settings)), status: "running", stage: "plan", round: 0, createdAt: (/* @__PURE__ */ new Date()).toISOString(), updatedAt: (/* @__PURE__ */ new Date()).toISOString(), baseline: "", coderReport: "", nextPrompt: "", review: null, checks: [], tokens: 0, costUsd: 0, sessions: {}, gitQueue: [] };
+    const run = { id: randomUUID(), projectId: p.id, project: { ...p }, settings: JSON.parse(JSON.stringify(this.settings)), status: "running", stage: "plan", round: 0, createdAt: now(), updatedAt: now(), baseline: "", coderReport: "", nextPrompt: "", review: null, checks: [], tokens: 0, costUsd: 0, sessions: {}, gitQueue: [], recovery: { attempts: {}, log: [], waits: 0 } };
     // A new run of the project replaces any question still open from an earlier one.
     for (const old of this.runs) if (old.projectId === p.id) for (const offer of old.runOffers ?? []) if (offer.status === "pending") offer.status = "superseded";
     this.runs.unshift(run);
@@ -158,29 +260,132 @@ export class Coordinator extends EventEmitter {
     if (this.busy) throw new Error("Hay una ejecución activa.");
     this.busy = true;
     this.controller = new AbortController();
+    this.clearWait();
     this.active.status = "running";
+    delete this.active.waiting;
+    this.active.resumeAt = null;
     this.notify();
-    this.pending = this.loop().catch((e) => {
-      const r = this.active;
-      if (e.name === "AbortError") {
-        r.status = "stopped";
-        if (r.stage === "code") {
-          r.stage = "checks";
-          r.coderReport = "Ejecución detenida por el usuario. Revisa el trabajo parcial.";
-        }
-      } else {
-        r.status = "error";
-        r.error = e.message;
-        this.event({ role: "system", kind: "error", text: e.message });
-      }
-    }).finally(async () => {
+    this.pending = this.loop().catch((e) => this.recover(e)).finally(async () => {
       this.busy = false;
       this.controller = null;
-      this.active.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      this.active.updatedAt = now();
       this.persist();
       this.notify();
       if (this.chatQueue.length) this.chatPending = this.drainChats();
     });
+  }
+  // ---- Recovery: what happens when the loop fails ------------------------------------------------
+  recover(e) {
+    const r = this.active;
+    if (e.name === "AbortError") {
+      if (e.paused) return;
+      if (this.closing) {
+        // Shutdown, not Stop: the next start decides whether to continue (autoResume).
+        r.status = "interrupted";
+        r.interruptedBy = "close";
+        return;
+      }
+      r.status = "stopped";
+      if (r.stage === "code") {
+        r.stage = "checks";
+        r.codeStarted = null;
+        r.coderReport = "Ejecución detenida por el usuario. Revisa el trabajo parcial.";
+      }
+      return;
+    }
+    const verdict = classifyError(e);
+    const role = e.role ?? (r.stage === "code" ? "coder" : ["plan", "review"].includes(r.stage) ? "auditor" : "system");
+    verdict.role = role;
+    r.recovery ??= { attempts: {}, log: [], waits: 0 };
+    const key = verdict.kind === "context" ? "transient" : verdict.kind;
+    const attempt = (r.recovery.attempts[key] ?? 0) + 1;
+    r.recovery.attempts[key] = attempt;
+    const plan = planWait(verdict, { attempt, maxRetries: r.settings.maxRetries ?? DEFAULT_SETTINGS.maxRetries, backoff: this.backoff, totalWaits: r.recovery.waits ?? 0 });
+    const entry = { at: now(), kind: verdict.kind, role, stage: r.stage, round: r.round, attempt, message: clip(e.message, 300), resumeAt: plan?.resumeAt ? new Date(plan.resumeAt).toISOString() : null, reliable: plan?.reliable ?? null, progressed: !!e.progressed };
+    r.recovery.log = [...r.recovery.log, entry].slice(-60);
+    // Work the coder did before failing is kept: the retry continues the same task and session.
+    if (e.progressed && r.stage === "code" && role === "coder") r.continuation = { reason: verdict.kind === "limit" ? "límite de uso" : verdict.kind === "context" ? "sesión demasiado larga" : "fallo pasajero", at: now() };
+    if (verdict.kind === "context") {
+      // The session itself is the problem: the next attempt starts a fresh one with the full prompt.
+      for (const sessionKey of Object.keys(r.sessions ?? {})) if (sessionKey.startsWith(role + ":")) delete r.sessions[sessionKey];
+    }
+    if (!plan) {
+      r.status = "error";
+      r.error = this.giveUpText(verdict, attempt, e.message);
+      if (r.stage === "code") {
+        r.stage = "checks";
+        r.codeStarted = null;
+        delete r.continuation;
+        r.coderReport = `El codificador terminó con error (${clip(e.message, 200)}). Revisa los archivos parciales y el registro de errores antes de reintentar.`;
+      }
+      this.event({ role: "system", kind: "error", text: r.error });
+      this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "recovery", text: `Ronda ${r.round}, etapa ${entry.stage}: ${agentName(role)} falló (${verdict.kind}) y Automata se detuvo tras ${attempt} intento(s): ${clip(e.message, 160)}`, source: "automata", runId: r.id, round: r.round }));
+      return;
+    }
+    r.recovery.waits = (r.recovery.waits ?? 0) + 1;
+    r.status = "waiting";
+    r.waiting = { kind: verdict.kind, role, reason: clip(e.message, 400), resumeAt: new Date(plan.resumeAt).toISOString(), reliable: plan.reliable, attempt, maxAttempts: verdict.kind === "limit" ? MAX_LIMIT_WAITS : (r.settings.maxRetries ?? DEFAULT_SETTINGS.maxRetries), stage: r.stage, round: r.round, since: now() };
+    r.resumeAt = r.waiting.resumeAt;
+    const text = describeWait(r.waiting, r.settings.language);
+    this.event({ role: "system", kind: "wait", text: `${text}. Motivo: ${clip(e.message, 240)}`, waiting: r.waiting });
+    this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "recovery", text: `Ronda ${r.round}, etapa ${entry.stage}: ${text}. Motivo: ${clip(e.message, 160)}`, source: "automata", runId: r.id, round: r.round }));
+    this.scheduleWait(r);
+  }
+  giveUpText(verdict, attempt, message) {
+    const who = agentName(verdict.role);
+    if (verdict.kind === "limit") return `El límite de uso de ${who} no se liberó tras ${attempt} esperas. Revisa tu plan y pulsa Continuar cuando quieras reintentar. Último mensaje: ${clip(message, 300)}`;
+    if (verdict.kind === "transient") return `${who} falló ${attempt} veces seguidas por un motivo pasajero. Pulsa Continuar para reintentar. Último mensaje: ${clip(message, 300)}`;
+    if (verdict.kind === "malformed") return clip(message, 600);
+    return clip(message, 600);
+  }
+  clearWait() {
+    clearTimeout(this.waitTimer);
+    this.waitTimer = null;
+  }
+  // Checks every minute at most, so a PC that slept through the appointment resumes when it wakes.
+  scheduleWait(r) {
+    this.clearWait();
+    const tick = () => {
+      this.waitTimer = null;
+      if (r.status !== "waiting" || !r.waiting?.resumeAt) return;
+      const remaining = new Date(r.waiting.resumeAt).getTime() - Date.now();
+      if (remaining > 0 || this.busy) {
+        this.waitTimer = setTimeout(tick, Math.min(Math.max(remaining, 25), 6e4));
+        this.waitTimer.unref?.();
+        return;
+      }
+      void this.resumeNow(r, "auto");
+    };
+    tick();
+  }
+  async resumeNow(r, how) {
+    if (this.busy || !["waiting", "interrupted"].includes(r.status) || !this.settings.autoResume && how !== "manual") return;
+    if (this.beforeResume && how !== "manual") {
+      try {
+        await this.beforeResume(r);
+      } catch (error) {
+        // Accounts are not ready: try again in a few minutes without consuming attempts.
+        if (r.status === "waiting") {
+          r.waiting.resumeAt = new Date(Date.now() + 5 * 6e4).toISOString();
+          r.waiting.note = error.message;
+          r.resumeAt = r.waiting.resumeAt;
+          this.scheduleWait(r);
+        }
+        this.event({ role: "system", kind: "warning", text: `No se pudo reanudar solo: ${error.message}${r.status === "waiting" ? " Se volverá a intentar en 5 minutos." : " Pulsa Continuar cuando esté resuelto."}`, runId: r.id, projectId: r.projectId });
+        this.persist();
+        this.notify();
+        return;
+      }
+      if (this.busy || !["waiting", "interrupted"].includes(r.status)) return;
+    }
+    this.active = r;
+    r.recovery ??= { attempts: {}, log: [], waits: 0 };
+    r.recovery.log = [...r.recovery.log, { at: now(), kind: "resume", how, stage: r.stage, round: r.round }].slice(-60);
+    this.event({ role: "system", kind: "start", text: how === "startup" ? "Automata reanuda el trabajo interrumpido." : how === "manual" ? "Continuando ahora, sin esperar." : `Reanudando: ${agentName(r.waiting?.role)} vuelve a intentarlo.`, runId: r.id, projectId: r.projectId });
+    delete r.error;
+    this.launch();
+    this.persist();
+    this.notify();
   }
   // Memory helps the agents but must never stop the work: a failure is shown once and the run goes on.
   remember(action, fn) {
@@ -195,7 +400,8 @@ export class Coordinator extends EventEmitter {
     }
   }
   memoryBrief(projectId, options) {
-    return this.remember("leer", () => this.memory.brief(projectId, options))?.text ?? "";
+    const directory = this.projects.find((p) => p.id === projectId)?.directory ?? "";
+    return this.remember("leer", () => this.memory.brief(projectId, { ...options, directory }))?.text ?? "";
   }
   // Facts an agent listed under «PARA RECORDAR:» at the end of its report.
   rememberReport(projectId, text, meta) {
@@ -211,8 +417,13 @@ export class Coordinator extends EventEmitter {
     if (!p) throw new Error("Selecciona un proyecto.");
     const m = this.memory, id = Number(input.id);
     switch (input.action ?? "list") {
-      case "list": return { facts: m.listFacts(p.id, { status: ["active", "retired", "all"].includes(input.status) ? input.status : "active", q: input.q }), errors: m.listErrors(p.id, { q: input.q }), stats: m.stats(p.id) };
-      case "brief": return m.brief(p.id, { query: String(input.q ?? "") });
+      case "list": {
+        const facts = m.listFacts(p.id, { status: ["active", "retired", "all"].includes(input.status) ? input.status : "active", q: input.q });
+        const shallow = shallowNames(p.directory);
+        // Facts that mention files no longer in the project are flagged, never removed.
+        return { facts: facts.map((fact) => ({ ...fact, stale: staleMentions(fact.text, p.directory, { shallow }) })), errors: m.listErrors(p.id, { q: input.q }), stats: m.stats(p.id) };
+      }
+      case "brief": return m.brief(p.id, { query: String(input.q ?? ""), directory: p.directory });
       case "add": return { fact: m.addFact(p.id, { kind: input.kind, text: input.text, source: "user" }) };
       case "update": return { fact: m.updateFact(p.id, id, { text: input.text, kind: input.kind, by: "user" }) };
       case "retire": return { fact: m.setFactStatus(p.id, id, "retired", { reason: input.reason || "Retirado por el usuario", by: "user" }) };
@@ -245,44 +456,58 @@ export class Coordinator extends EventEmitter {
     const full = typeof prompts === "string" ? prompts : prompts.full;
     const short = typeof prompts === "string" ? prompts : prompts.short ?? prompts.full;
     const agent = { ...member, index, count: team.length, label: agentLabel(role, team, index), resume };
-    let watcher, projectChanged = false;
-    if (role === "auditor" && phase === "review" && r.settings.accessMode !== "limited") {
-      const storeRoot = path.resolve(this.store.directory).toLowerCase();
-      const projectRoot = path.resolve(r.project.directory).toLowerCase();
-      const nestedStore = storeRoot.startsWith(projectRoot + path.sep);
-      try {
-        watcher = fs.watch(r.project.directory, { recursive: true }, (_event, filename) => {
-          const relative = String(filename ?? "");
-          const target = path.resolve(r.project.directory, relative).toLowerCase();
-          if (nestedStore && (target === storeRoot || target.startsWith(storeRoot + path.sep)) || /^(?:\.git|node_modules|\.automata)(?:[\\/]|$)/.test(relative)) return;
-          projectChanged = true;
-        });
-        watcher.on("error", () => { projectChanged = true; });
-      } catch {
-        throw new Error("No se pudieron vigilar los cambios durante la auditoría con acceso completo.");
-      }
-    }
     let result;
-    // This call's own commands, so failed builds and tests (and their fixes) reach the project memory once.
-    const commands = role === "coder" ? [] : null;
-    try {
-      result = await this.agents.run({ role, prompt: resume ? short : full, fallbackPrompt: full, phase, directory: dir, project: r.project, settings: { ...r.settings }, agent, signal: this.controller.signal, emit: (e) => {
-      if (e.model) {
-        r.actualModels ??= {};
-        r.actualModels[role] = e.model;
+    // The agent finished this very operation before Automata closed: its answer is used as is.
+    const saved = r.inflight?.completed;
+    if (saved && r.inflight.role === role && r.inflight.phase === phase && r.inflight.index === index) {
+      r.inflight = null;
+      this.event({ role: "system", kind: "success", text: `${agentName(role)} ya había terminado esta operación antes del cierre; se usa su resultado sin repetirla.` });
+      result = saved;
+    } else {
+      r.inflight = { id: randomUUID(), role, phase, index, dir, round: r.round, at: now() };
+      this.persist();
+      let watcher, projectChanged = false;
+      if (role === "auditor" && phase === "review" && r.settings.accessMode !== "limited") {
+        const storeRoot = path.resolve(this.store.directory).toLowerCase();
+        const projectRoot = path.resolve(r.project.directory).toLowerCase();
+        const nestedStore = storeRoot.startsWith(projectRoot + path.sep);
+        try {
+          watcher = fs.watch(r.project.directory, { recursive: true }, (_event, filename) => {
+            const relative = String(filename ?? "");
+            const target = path.resolve(r.project.directory, relative).toLowerCase();
+            if (nestedStore && (target === storeRoot || target.startsWith(storeRoot + path.sep)) || /^(?:\.git|node_modules|\.automata)(?:[\\/]|$)/.test(relative)) return;
+            projectChanged = true;
+          });
+          watcher.on("error", () => { projectChanged = true; });
+        } catch {
+          throw new Error("No se pudieron vigilar los cambios durante la auditoría con acceso completo.");
+        }
       }
-      if (role === "coder") {
-        observe(r.watch ??= [], e);
-        observe(commands, e);
+      // This call's own commands, so failed builds and tests (and their fixes) reach the project memory once.
+      const commands = role === "coder" ? [] : null;
+      try {
+        result = await this.agents.run({ role, prompt: resume ? short : full, fallbackPrompt: full, phase, directory: dir, project: r.project, settings: { ...r.settings }, agent, attemptId: r.inflight.id, signal: this.controller.signal, emit: (e) => {
+        if (e.model) {
+          r.actualModels ??= {};
+          r.actualModels[role] = e.model;
+        }
+        if (role === "coder") {
+          observe(r.watch ??= [], e);
+          observe(commands, e);
+        }
+        this.event(team.length > 1 ? { ...e, agent: agent.label } : e);
+        } });
+        if (watcher) await new Promise(resolve => setTimeout(resolve, 50));
+      } catch (error) {
+        error.role ??= role;
+        throw error;
+      } finally {
+        watcher?.close();
+        this.recordCommands(r.projectId, commands, { runId: r.id, round: r.round, directory: r.project.directory });
       }
-      this.event(team.length > 1 ? { ...e, agent: agent.label } : e);
-      } });
-      if (watcher) await new Promise(resolve => setTimeout(resolve, 50));
-    } finally {
-      watcher?.close();
-      this.recordCommands(r.projectId, commands, { runId: r.id, round: r.round, directory: r.project.directory });
+      r.inflight = null;
+      if (projectChanged) result = { ...result, projectChanged: true };
     }
-    if (projectChanged) result = { ...result, projectChanged: true };
     if (result.usage) {
       const u = result.usage;
       r.tokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
@@ -297,11 +522,12 @@ export class Coordinator extends EventEmitter {
   gitNeedsApproval(mode, kind) {
     return mode === "ask-all" || mode === "ask-push" && (kind === "push" || kind === "merge");
   }
+  // One entry per decision and round: a review applied again after a restart does not queue it twice.
   queueGit(r, action) {
     r.gitQueue ??= [];
-    const same = (item) => item.status === "pending" && item.kind === action.kind && item.branch === action.branch && item.message === action.message && item.into === action.into;
+    const same = (item) => !["failed", "rejected"].includes(item.status) && item.round === r.round && item.kind === action.kind && item.branch === action.branch && item.message === action.message && item.into === action.into;
     if (r.gitQueue.some(same)) return null;
-    const item = { id: randomUUID(), ...action, status: "pending", at: (/* @__PURE__ */ new Date()).toISOString(), round: r.round };
+    const item = { id: randomUUID(), ...action, status: "pending", at: now(), round: r.round };
     r.gitQueue.push(item);
     return item;
   }
@@ -313,6 +539,9 @@ export class Coordinator extends EventEmitter {
       this.event({ role: "coder", kind: "tool", toolId, tool: { name: "Bash", command: step.command, git: true }, text: step.command, ...tag });
       this.event({ role: "coder", kind: "toolresult", toolId, text: step.output, error: step.code !== 0, ...tag });
     };
+    // Marked before running: if Automata dies now, the item is never repeated on its own.
+    item.startedAt = now();
+    this.persist();
     let result;
     try {
       if (item.kind === "branch") result = await this.git.branch(dir, item.branch, { onStep, signal });
@@ -333,7 +562,7 @@ export class Coordinator extends EventEmitter {
     item.status = result.ok ? "done" : "failed";
     item.summary = result.summary;
     item.error = result.error;
-    item.doneAt = (/* @__PURE__ */ new Date()).toISOString();
+    item.doneAt = now();
     if (result.ok && item.kind === "commit" && !result.noop) this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "progress", text: `${result.summary}: ${item.message}`, source: "automata", runId: r.id, round: item.round }));
     if (result.blocked?.length) this.event({ role: "system", kind: "warning", text: `Archivos sensibles excluidos del commit: ${result.blocked.join(", ")}`, ...tag });
     this.event({ role: "system", kind: result.ok ? "success" : "warning", text: result.ok ? result.summary : result.error, ...tag });
@@ -371,11 +600,11 @@ export class Coordinator extends EventEmitter {
     const r = this.runs.find((run) => run.id === runId);
     const item = r?.gitQueue?.find((entry) => entry.id === gitId);
     if (!item) throw new Error("No se encontró esa operación de Git.");
-    if (item.status !== "pending") throw new Error("Esa operación ya se resolvió.");
+    if (!["pending", "uncertain"].includes(item.status)) throw new Error("Esa operación ya se resolvió.");
     if (!["approve", "reject"].includes(decision)) throw new Error("Decisión no válida.");
     if (decision === "reject") {
       item.status = "rejected";
-      item.doneAt = (/* @__PURE__ */ new Date()).toISOString();
+      item.doneAt = now();
       this.event({ role: "system", kind: "warning", text: "Operación de Git rechazada.", runId: r.id, projectId: r.projectId });
       this.persist();
       this.notify();
@@ -386,6 +615,7 @@ export class Coordinator extends EventEmitter {
     if (item.kind !== "push" && this.busy) throw new Error("Espera a que termine la operación actual.");
     this.gitBusy = true;
     try {
+      item.status = "pending";
       await this.runGit(r, item);
     } finally {
       this.gitBusy = false;
@@ -403,11 +633,11 @@ export class Coordinator extends EventEmitter {
     const app = this.app.view();
     if (app?.status === "running" && app.projectId === r.projectId && app.command === run.command) return null;
     const pending = r.runOffers.find((offer) => offer.status === "pending");
-    if (pending && pending.command === run.command && !final) return null;
+    if (pending && pending.command === run.command && (!final || pending.final)) return null;
     // Mid-run the user is asked once per command; once the goal is done they are asked again.
     if (!final && r.runOffers.some((offer) => offer.command === run.command)) return null;
     if (pending) pending.status = "superseded";
-    const offer = { id: randomUUID(), command: run.command, url: run.url, note: run.note, final, status: "pending", round: r.round, at: (/* @__PURE__ */ new Date()).toISOString() };
+    const offer = { id: randomUUID(), command: run.command, url: run.url, note: run.note, final, status: "pending", round: r.round, at: now() };
     r.runOffers.push(offer);
     this.event({ role: "auditor", kind: "runoffer", text: final ? "Proyecto terminado. ¿Quieres correr la app?" : "La app ya se puede correr. ¿Quieres probarla?", offer: { command: offer.command, url: offer.url, note: offer.note } });
     return offer;
@@ -427,7 +657,7 @@ export class Coordinator extends EventEmitter {
       offer.status = "started";
       this.event({ role: "system", kind: "start", text: `Corriendo la app · ${offer.command}`, ...tag });
     }
-    offer.doneAt = (/* @__PURE__ */ new Date()).toISOString();
+    offer.doneAt = now();
     this.persist();
     this.notify();
     return offer;
@@ -438,6 +668,35 @@ export class Coordinator extends EventEmitter {
     else throw new Error("Acción desconocida.");
     this.notify();
     return this.app.view();
+  }
+  // One reviewer's turn. An invalid answer (bad JSON, approval without evidence…) is sent back to
+  // the same session with the reason, up to MAX_REVIEW_FIXES times; then the run stops with the error.
+  async review(role, phase, options, evidence, reviewDir, index, project) {
+    let fix = null;
+    for (let attempt = 1; ; attempt++) {
+      const fixText = fix ? `${fix.message}` : "";
+      const prompts = {
+        full: directorPrompt(project, this.active.settings, { ...options, evidence: evidence.full, fix: fixText }),
+        short: fix ? reviewFixPrompt(fixText, attempt - 1, MAX_REVIEW_FIXES) : directorPrompt(project, this.active.settings, { ...options, evidence: evidence.short, short: true })
+      };
+      try {
+        const result = await this.invoke(role, prompts, phase, reviewDir, index);
+        const review = validateReview(result.review, project, phase);
+        if (review.decision === "complete" && this.active.checks.some((c) => !c.passed)) throw invalidReview("El auditor intentó aprobar con verificaciones fallidas. Revisa la evidencia antes de continuar.");
+        return { result, review };
+      } catch (error) {
+        if (classifyError(error).kind !== "malformed") throw error;
+        const r = this.active;
+        r.recovery ??= { attempts: {}, log: [], waits: 0 };
+        r.recovery.log = [...r.recovery.log, { at: now(), kind: "malformed", role, stage: r.stage, round: r.round, attempt, message: clip(error.message, 300) }].slice(-60);
+        this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "recovery", text: `Ronda ${r.round}: la revisión del director no fue válida (${clip(error.message, 120)}); intento ${attempt} de ${MAX_REVIEW_FIXES}.`, source: "automata", runId: r.id, round: r.round }));
+        if (attempt >= MAX_REVIEW_FIXES) throw Object.assign(new Error(`El director no entregó una revisión válida en ${MAX_REVIEW_FIXES} intentos. Último motivo: ${error.message}`), { kind: "fatal", role });
+        this.event({ role: "system", kind: "warning", text: `Revisión no válida (${attempt}/${MAX_REVIEW_FIXES}): ${error.message} Se le pide al director que la corrija.` });
+        fix = error;
+        if (this.controller.signal.aborted) throw Object.assign(new Error("Detenido"), { name: "AbortError" });
+        if (this.pauseIfRequested()) throw Object.assign(new Error("Pausado"), { name: "AbortError", paused: true });
+      }
+    }
   }
   async loop() {
     const r = this.active, p = r.project, s = r.settings, root = this.store.runDir(r.id);
@@ -455,7 +714,7 @@ export class Coordinator extends EventEmitter {
           r.nextPrompt = fixPrompt(r.baseTask, failing);
           r.stage = "code";
           this.event({ role: "system", kind: "phase", text: `Verificaciones fallidas: el ejecutor corrige directamente (${r.autoFixes}/${MAX_AUTO_FIXES}).` });
-          r.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+          r.updatedAt = now();
           this.persist();
           this.notify();
           continue;
@@ -493,9 +752,8 @@ ${state}`;
           const reviewDir = i === 0 ? dir : path.join(dir, `reviewer-${i + 1}`);
           fs.mkdirSync(reviewDir, { recursive: true });
           const options = { phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo }, watch, memory };
-          const prompts = { full: directorPrompt(p, s, { ...options, evidence: evidenceFull }), short: directorPrompt(p, s, { ...options, evidence: state, short: true }) };
-          const result = await this.invoke("auditor", prompts, phase, reviewDir, i);
-          reviews.push(validateReview(result.review, p, phase));
+          const { result, review } = await this.review("auditor", phase, options, { full: evidenceFull, short: state }, reviewDir, i, p);
+          reviews.push(review);
           this.remember("guardar", () => this.memory.applyAgentMemory(p.id, reviews[i].memory, { source: "director", runId: r.id, round: r.round }));
           projectChanged ||= !!result.projectChanged;
           if (reviews[i].decision !== "complete" || projectChanged) break;
@@ -511,8 +769,18 @@ ${state}`;
           }
           this.event({ role: "system", kind: "warning", text: "El director cambió archivos. Se repetirán las verificaciones antes de aprobar." });
         }
-        if (review.decision === "complete" && r.checks.some((c) => !c.passed)) throw new Error("El auditor intentó aprobar con verificaciones fallidas. Revisa la evidencia antes de continuar.");
-        if (review.decision === "complete" && p.checks.length && (r.checksRound !== r.round || r.checks.length !== p.checks.length)) throw new Error("Faltan verificaciones de la ronda actual.");
+        if (review.decision === "complete" && p.checks.length && (r.checksRound !== r.round || r.checks.length !== p.checks.length)) {
+          // Not the director's fault: the round's checks have not run. Run them once and ask again.
+          if (r.checksRetried === r.round) throw new Error("Faltan verificaciones de la ronda actual.");
+          r.checksRetried = r.round;
+          this.event({ role: "system", kind: "warning", text: "Faltan verificaciones de la ronda actual. Se ejecutan antes de aceptar la aprobación." });
+          r.stage = "checks";
+          r.forceDirector = true;
+          r.updatedAt = now();
+          this.persist();
+          this.notify();
+          continue;
+        }
         review.git = normalizeGit(review.git);
         fs.writeFileSync(path.join(dir, "review.json"), JSON.stringify(review, null, 2));
         r.review = review;
@@ -520,17 +788,22 @@ ${state}`;
         // The director has seen it: the next review only gets what happens from here on.
         r.watch = (r.watch ?? []).slice(watched);
         this.event({ role: "auditor", kind: "review", text: review.summary, review });
+        // The decision is saved before acting on it: a crash while applying it never asks the director again.
+        r.stage = "apply";
+      } else if (r.stage === "apply") {
+        const review = r.review;
         if (review.decision !== "blocked") await this.applyGit(review);
         if (review.decision !== "blocked") this.offerRun(r, review);
         if (review.decision === "complete") {
           r.status = "complete";
           r.stage = "complete";
-          r.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+          r.finishedAt = now();
           this.event({ role: "system", kind: "complete", text: "Objetivo completado con evidencia para todos los criterios." });
           break;
         }
         if (review.decision === "blocked") {
           r.status = "blocked";
+          r.stage = "review";
           this.event({ role: "system", kind: "warning", text: "Se necesita tu intervención: " + review.summary });
           break;
         }
@@ -538,30 +811,61 @@ ${state}`;
         r.baseTask = review.nextPrompt;
         r.stage = "code";
       } else if (r.stage === "code") {
-        if (r.round >= s.maxRounds) {
-          r.status = "limit";
-          this.event({ role: "system", kind: "warning", text: `Se alcanzó el límite de ${s.maxRounds} rondas. El objetivo sigue pendiente.` });
-          break;
+        // A retry of the round that failed keeps its number, folder and session.
+        const retry = r.codeStarted != null && r.codeStarted === r.round;
+        const failingBefore = retry ? [] : r.checks.filter((c) => !c.passed);
+        if (!retry) {
+          if (r.round >= s.maxRounds) {
+            r.status = "limit";
+            this.event({ role: "system", kind: "warning", text: `Se alcanzó el límite de ${s.maxRounds} rondas. El objetivo sigue pendiente.` });
+            break;
+          }
+          r.round++;
+          r.checks = [];
+          r.checksRound = null;
+          r.codeStarted = r.round;
         }
-        const failingBefore = r.checks.filter((c) => !c.passed);
-        r.round++;
-        r.checks = [];
-        r.checksRound = null;
         const work = path.join(root, `round-${String(r.round).padStart(2, "0")}`);
         fs.mkdirSync(work, { recursive: true });
         // Coders take turns by round: round 1 uses the first, round 2 the second, and so on.
         const coders = teamOf(s, "coder"), turn = (r.round - 1) % coders.length;
         const teamInfo = coders.length > 1 ? { index: turn, count: coders.length } : null;
-        this.event({ role: "coder", kind: "phase", text: `Ronda ${r.round} · ${r.nextPrompt}`, ...coders.length > 1 ? { agent: agentLabel("coder", coders, turn) } : {} });
+        const continuation = r.continuation ?? null;
+        delete r.continuation;
+        const task = continuation ? continuationPrompt(r.nextPrompt, continuation) : r.nextPrompt;
+        this.event({ role: "coder", kind: "phase", text: `Ronda ${r.round} · ${continuation ? "Continúa la tarea interrumpida · " : ""}${r.nextPrompt}`, ...coders.length > 1 ? { agent: agentLabel("coder", coders, turn) } : {} });
         // A failure that already happened before comes with the solution that fixed it then.
         const memory = this.memoryBrief(p.id, { query: r.nextPrompt, failing: failingBefore });
         if (memory) fs.writeFileSync(path.join(work, "memory-code.txt"), memory);
-        const prompts = { full: coderPrompt(p, s, r.nextPrompt, r.baseline, teamInfo, false, memory), short: coderPrompt(p, s, r.nextPrompt, r.baseline, teamInfo, true, memory) };
-        const result = await this.invoke("coder", prompts, "code", work, turn);
+        const prompts = { full: coderPrompt(p, s, task, r.baseline, teamInfo, false, memory), short: coderPrompt(p, s, task, r.baseline, teamInfo, true, memory) };
+        this.persist();
+        let result;
+        try {
+          result = await this.invoke("coder", prompts, "code", work, turn);
+        } catch (error) {
+          const verdict = classifyError(error);
+          // Out of turns, or out of time after real work: the partial result goes to the checks and the
+          // director, which is cheaper and safer than starting the task over.
+          if (verdict.kind === "turns" || verdict.reason === "timeout" && error.progressed) {
+            const why = verdict.kind === "turns" ? "alcanzó el máximo de turnos" : "alcanzó el límite de tiempo de la llamada";
+            r.coderReport = `${String(error.lastMessage ?? "").trim() || "(sin reporte)"}\n\n[Automata] Claude ${why} antes de entregar el reporte final. El trabajo es parcial: las verificaciones y el director deciden cómo seguir.`;
+            fs.writeFileSync(path.join(work, "coder-report.md"), r.coderReport);
+            this.event({ role: "system", kind: "warning", text: `Claude ${why}. Se verifica el trabajo parcial y el director decide cómo seguir.` });
+            this.remember("guardar", () => this.memory.addFact(p.id, { kind: "recovery", text: `Ronda ${r.round}: Claude ${why}; el trabajo parcial pasó a verificación.`, source: "automata", runId: r.id, round: r.round }));
+            r.codeStarted = null;
+            r.stage = "checks";
+            r.updatedAt = now();
+            this.persist();
+            this.notify();
+            continue;
+          }
+          throw error;
+        }
         r.coderReport = result.text;
         fs.writeFileSync(path.join(work, "coder-report.md"), r.coderReport);
         this.event({ role: "coder", kind: "report", text: r.coderReport });
         this.rememberReport(p.id, r.coderReport, { source: "coder", runId: r.id, round: r.round });
+        r.codeStarted = null;
         r.stage = "checks";
       } else if (r.stage === "checks") {
         r.checks = await this.checks(p, dir, this.controller.signal, (e) => this.event(e));
@@ -572,7 +876,9 @@ ${state}`;
         if (recorded?.resolved.length) this.event({ role: "system", kind: "success", text: `Memoria: ${recorded.resolved.length === 1 ? "un error quedó registrado" : `${recorded.resolved.length} errores quedaron registrados`} con su solución verificada.` });
         r.stage = "review";
       } else break;
-      r.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      // A stage finished: consecutive-failure counters start over.
+      if (r.recovery) r.recovery.attempts = {};
+      r.updatedAt = now();
       this.persist();
       this.notify();
     }
@@ -587,30 +893,46 @@ ${state}`;
     if (runId !== undefined && runId !== this.active?.id && !this.busy) {
       const target = this.runs.find((run) => run.id === runId);
       if (!target) throw new Error("No hay un trabajo activo.");
+      if (this.active?.status === "waiting") throw new Error("Detén o continúa el trabajo que está esperando antes de usar otro.");
       this.active = target;
     }
     const r = this.active;
     if (!r) throw new Error("No hay un trabajo activo.");
     if (action === "pause") {
-      if (!LIVE.has(r.status)) throw new Error("No hay una ejecución que pausar.");
-      r.status = "pausing";
-      this.event({ role: "system", kind: "pause", text: "Pausa solicitada. Terminará la operación actual antes de detener el ciclo." });
+      if (r.status === "waiting") {
+        // Pause beats any retry: the appointment is dropped and nothing resumes until the user says so.
+        this.clearWait();
+        r.status = "paused";
+        r.resumeAt = null;
+        this.event({ role: "system", kind: "pause", text: "Espera cancelada. El trabajo queda en pausa hasta que pulses Continuar." });
+      } else {
+        if (!LIVE.has(r.status)) throw new Error("No hay una ejecución que pausar.");
+        r.status = "pausing";
+        this.event({ role: "system", kind: "pause", text: "Pausa solicitada. Terminará la operación actual antes de detener el ciclo." });
+      }
     } else if (action === "stop") {
+      this.clearWait();
       this.controller?.abort();
       r.status = "stopped";
+      r.resumeAt = null;
+      delete r.waiting;
       this.event({ role: "system", kind: "stop", text: "Trabajo detenido. Los archivos existentes se conservan." });
     } else if (action === "resume") {
       if (this.busy) throw new Error("Espera a que termine la operación actual.");
-      if (!["paused", "interrupted", "error", "blocked", "limit", "stopped"].includes(r.status)) throw new Error("Este trabajo no se puede continuar.");
+      if (!RESUMABLE.includes(r.status)) throw new Error("Este trabajo no se puede continuar.");
       if (r.status === "limit") {
         if (this.settings.maxRounds <= r.round) throw new Error("Aumenta el límite de rondas antes de continuar.");
         r.settings.maxRounds = this.settings.maxRounds;
       }
       if (r.status === "error" && r.stage === "code") {
         r.stage = "checks";
+        r.codeStarted = null;
         r.coderReport = "El codificador terminó con error. Revisa los archivos parciales y el registro de errores antes de reintentar.";
       }
+      // Continuar after an error starts the retry counters over: the user decided to try again.
+      if (r.recovery) r.recovery.attempts = {};
       delete r.error;
+      this.clearWait();
       this.launch();
     } else throw new Error("Acción desconocida.");
     this.persist();
@@ -623,7 +945,7 @@ ${state}`;
     text = String(text ?? "").trim();
     if (!text || text.length > 12e3) throw new Error("Escribe un mensaje de hasta 12 000 caracteres.");
     if (!["coder", "auditor", "both"].includes(target) || !["task", "question", "instruction"].includes(kind)) throw new Error("Destino o tipo de mensaje no válido.");
-    const message = { id: randomUUID(), projectId, target, text, kind, status: "queued", at: (/* @__PURE__ */ new Date()).toISOString() };
+    const message = { id: randomUUID(), projectId, target, text, kind, status: "queued", at: now() };
     this.messages.push(message);
     this.chatQueue.push({ message, project: p });
     this.persist();
@@ -642,7 +964,7 @@ ${state}`;
       while (this.chatQueue.length) {
         const { message, project } = this.chatQueue.shift();
         message.status = "processing";
-        message.startedAt = new Date().toISOString();
+        message.startedAt = now();
         this.persist();
         this.notify();
         if (message.kind === "instruction") {
@@ -665,18 +987,22 @@ ${message.text}`;
           // A task for the director is a hand-off: the director (read-only) decides what to change, then the executor writes it.
           const handoff = message.kind === "task" && message.target === "auditor";
           const roles = message.target === "both" ? ["coder", "auditor"] : handoff ? ["auditor", "coder"] : [message.target];
-          message.answers = [];
+          message.answers ??= [];
           for (const role of roles) {
+            // Already answered before an interruption: not asked again.
+            if (message.answers.some((answer) => answer.role === role && !answer.error)) continue;
             message.activeRole = role;
+            const dir = path.join(this.store.directory, "chats", message.id, role);
+            const phase = message.kind === "task" ? "task" : "chat";
+            message.inflight = { id: randomUUID(), role, phase, dir, at: now() };
             this.persist();
             this.notify();
             const commands = role === "coder" ? [] : null;
             try {
-              const dir = path.join(this.store.directory, "chats", message.id, role);
               fs.mkdirSync(dir, { recursive: true });
               message.settings = { ...this.settings };
               const memory = this.memoryBrief(project.id, { query: message.text });
-              const result = await this.agents.run({ role, phase: message.kind === "task" ? "task" : "chat", prompt: chatPrompt(project, role, message.text, this.runs.find((r) => r.projectId === project.id)?.review?.summary, message.settings, { kind: message.kind, previousAnswers: message.answers, memory }), project, settings: message.settings, directory: dir, signal: withinRun ? this.controller.signal : this.chatController.signal, emit: (e) => {
+              const result = await this.agents.run({ role, phase, prompt: chatPrompt(project, role, message.text, this.runs.find((r) => r.projectId === project.id)?.review?.summary, message.settings, { kind: message.kind, previousAnswers: message.answers, memory, interrupted: message.requeued > 0 }), project, settings: message.settings, directory: dir, attemptId: message.inflight.id, signal: withinRun ? this.controller.signal : this.chatController.signal, emit: (e) => {
                 // Work asked from the chat also goes in front of the director's eyes.
                 if (e.role === "coder" && this.active?.projectId === project.id && this.active.status !== "complete") observe(this.active.watch ??= [], e);
                 if (commands && e.role === "coder") observe(commands, e);
@@ -685,10 +1011,16 @@ ${message.text}`;
               message.answers.push({ role, text: result.text });
               this.rememberReport(project.id, result.text, { source: role === "coder" ? "coder" : "director", runId: null, round: null });
             } catch (e) {
+              if (this.closing) {
+                // Cut by the shutdown, not failed: it stays "processing" so the next start can pick it up.
+                this.recordCommands(project.id, commands, { runId: null, round: null, directory: project.directory });
+                return;
+              }
               message.answers.push({ role, text: e.message, error: true });
             } finally {
-              this.recordCommands(project.id, commands, { runId: null, round: null, directory: project.directory });
+              if (!this.closing) this.recordCommands(project.id, commands, { runId: null, round: null, directory: project.directory });
             }
+            message.inflight = null;
             delete message.activeRole;
             this.persist();
             this.notify();
@@ -704,7 +1036,7 @@ ${message.text}`;
             }
           }
         }
-        message.finishedAt = new Date().toISOString();
+        message.finishedAt = now();
         this.persist();
         this.notify();
       }
@@ -717,6 +1049,8 @@ ${message.text}`;
     }
   }
   async close() {
+    this.closing = true;
+    this.clearWait();
     this.controller?.abort();
     this.chatController?.abort();
     await this.app.stop().catch(() => {

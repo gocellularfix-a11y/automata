@@ -280,14 +280,29 @@ test("consultar a ambos publica la primera respuesta sin esperar la segunda y de
   assert.equal(c.busy, false);
 });
 
-test("una consulta en proceso al cerrar se muestra interrumpida sin reenviarla automáticamente", t => {
+test("una consulta en proceso al cerrar se reencola una sola vez; sin reanudación automática queda interrumpida", t => {
+  // P1: with autoResume (default) the message is queued again once, keeping its id and earlier answers.
   const dir = fixture(t), store = new Store(dir);
+  store.write("projects.json", [{ ...projectInput(dir), id: "p" }]);
   store.write("messages.json", [{ id: "old-chat", projectId: "p", target: "auditor", kind: "question", text: "Estado", status: "processing", activeRole: "auditor" }]);
   const c = new Coordinator(store);
-  assert.equal(c.messages[0].status, "interrupted");
-  assert.match(c.messages[0].error, /interrumpió/);
+  assert.equal(c.messages[0].status, "queued");
+  assert.equal(c.messages[0].requeued, 1);
   assert.equal(c.messages[0].activeRole, undefined);
-  assert.equal(c.chatQueue.length, 0);
+  assert.equal(c.chatQueue.length, 1);
+  // A second interruption of the same message is not retried again.
+  store.write("messages.json", [{ ...c.messages[0], status: "processing", activeRole: "auditor" }]);
+  const again = new Coordinator(store);
+  assert.equal(again.messages[0].status, "interrupted");
+  assert.match(again.messages[0].error, /interrumpió/);
+  assert.equal(again.chatQueue.length, 0);
+  // With autoResume off, nothing is resent: the message is shown as interrupted.
+  const off = new Store(fixture(t));
+  off.write("settings.json", { autoResume: false });
+  off.write("messages.json", [{ id: "old-chat", projectId: "p", target: "auditor", kind: "question", text: "Estado", status: "processing", activeRole: "auditor" }]);
+  const d = new Coordinator(off);
+  assert.equal(d.messages[0].status, "interrupted");
+  assert.equal(d.chatQueue.length, 0);
 });
 
 test("Windows resuelve el ejecutable nativo de Codex instalado por npm sin un lanzador intermedio", t => {

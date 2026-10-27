@@ -24,6 +24,8 @@ export async function createServer({ port = 4780, lan = false, demo = false, dat
     // Status checks and logins see the same accounts as the runs (the plan, without API keys).
     auth.agentEnv = (role) => agentEnv(coordinator.settings, role);
     codexModels.env = () => agentEnv(coordinator.settings, "auditor");
+    // A run that resumes on its own needs both accounts, exactly like pressing Continuar.
+    coordinator.beforeResume ??= demo ? null : () => auth.requireConnected();
   } catch (e) {
     release();
     throw e;
@@ -135,7 +137,9 @@ data: ${JSON.stringify(coordinator.snapshot())}
         if (url.pathname === "/api/capabilities" && req.method === "GET") {
           // The director list comes from Codex itself, so it only offers models the account accepts.
           const catalog = demo ? { source: "builtin", models: MODELS.auditor } : await codexModels.list({ force: url.searchParams.has("refresh") });
-          return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"] }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: { coder: MODELS.coder, auditor: catalog.models }, modelSource: catalog.source, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
+          // "Open with Windows" only makes sense for the packaged desktop app (a dev run would register electron.exe).
+          const loginItem = !!process.versions.electron && !process.defaultApp && process.platform === "win32";
+          return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"], autoResume: true, loginItem }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: { coder: MODELS.coder, auditor: catalog.models }, modelSource: catalog.source, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
         }
         if (url.pathname === "/api/pairing" && req.method === "GET") {
           if (!loopback(req.socket.remoteAddress)) return send(403, { error: "Abre la conexión de Android desde la PC." });
@@ -213,6 +217,8 @@ data: ${JSON.stringify(coordinator.snapshot())}
     for (const c of clients) c.write(": heartbeat\n\n");
   }, 15e3);
   heartbeat.unref();
+  // Only once the server listens: whatever the last session left unfinished continues (if allowed).
+  coordinator.startAutoResume();
   return { server, coordinator, auth, origin, token, store, async close() {
     clearInterval(heartbeat);
     await Promise.all([coordinator.close(), auth.close(), github.close()]);
@@ -223,8 +229,8 @@ data: ${JSON.stringify(coordinator.snapshot())}
   } };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2), at = args.indexOf("--port");
-  const app = await createServer({ port: at >= 0 ? Number(args[at + 1]) : 4780, lan: args.includes("--lan"), demo: args.includes("--demo") });
+  const args = process.argv.slice(2), at = args.indexOf("--port"), dataAt = args.indexOf("--data");
+  const app = await createServer({ port: at >= 0 ? Number(args[at + 1]) : 4780, lan: args.includes("--lan"), demo: args.includes("--demo"), ...dataAt >= 0 ? { dataDir: path.resolve(args[dataAt + 1]) } : {} });
   console.log(`Automata · ${app.origin}
 Abre la aplicación de Windows o conecta desde Android.
 Código de conexión local: ${app.token}`);

@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { createRequire } from "node:module";
 import { MODES, REVIEW_SCHEMA, agentEnv } from "./config.mjs";
 import { redactTokens, redactSecrets, redactJsonLine } from "./redact.mjs";
+import { classifyError } from "./recovery.mjs";
 export function findCodexNative(packageRoot, { platform = process.platform, arch = process.arch } = {}) {
   if (platform !== "win32" || !["x64", "arm64"].includes(arch)) return null;
   const target = arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
@@ -163,7 +164,9 @@ export function decodeEvents(role, raw) {
     return [];
   }
   if (role === "coder") {
-    if (e.type === "result") return [{ kind: "result", text: e.result ?? "", error: !!e.is_error, sessionId: e.session_id, usage: e.usage, cost: e.total_cost_usd }];
+    if (e.type === "result") return [{ kind: "result", text: e.result ?? "", error: !!e.is_error, subtype: e.subtype, numTurns: e.num_turns, errors: Array.isArray(e.errors) ? e.errors.map((item) => typeof item === "string" ? item : item?.message ?? JSON.stringify(item)).join("\n") : "", sessionId: e.session_id, usage: e.usage, cost: e.total_cost_usd }];
+    // Usage-limit notices travel as their own event; the text of the failure may say less.
+    if (e.type === "rate_limit_event" || e.type === "system" && e.subtype === "rate_limit_event") return [{ kind: "ratelimit", info: e.rate_limit_info ?? e }];
     if (e.type === "assistant") {
       const out = [];
       for (const block of e.message?.content ?? []) {
@@ -183,7 +186,7 @@ export function decodeEvents(role, raw) {
   } else {
     if (e.type === "thread.started") return [{ kind: "session", text: "Sesión de Codex iniciada", sessionId: e.thread_id }];
     if (e.type === "turn.completed") return [{ kind: "usage", usage: e.usage }];
-    if (e.type === "error" || e.type === "turn.failed") return [{ kind: "warning", text: e.message ?? e.error?.message ?? "El auditor reportó un error." }];
+    if (e.type === "error" || e.type === "turn.failed") return [{ kind: "warning", text: e.message ?? e.error?.message ?? "El auditor reportó un error.", failure: true, code: e.error?.type ?? e.error?.code ?? e.code ?? null, info: e.error ?? e }];
     if (e.type === "item.completed" && e.item?.type === "agent_message") return [{ kind: "message", text: e.item.text }];
     if (e.type === "item.started" && e.item?.type === "command_execution") {
       const tool = { name: "Bash", command: redact(clip(e.item.command, 2000)) };
@@ -206,20 +209,23 @@ export class CliAgents {
       return await this.attempt({ ...params, sessionId: agent.resume });
     } catch (error) {
       // A session that cannot be resumed is a speed optimisation failing, not a task failing:
-      // start over with the full prompt, unless the resumed run already did work.
-      if (error.name === "AbortError" || error.progressed || /límite de tiempo/.test(error.message)) throw error;
+      // start over with the full prompt, unless the resumed run already did work. A usage limit
+      // would hit the new session too, so it goes straight to the coordinator's waiting policy.
+      if (error.name === "AbortError" || error.progressed || /límite de tiempo/.test(error.message) || classifyError(error).kind === "limit") throw error;
       emit?.({ role: params.role, kind: "warning", text: "No se pudo retomar la sesión anterior; se inicia una nueva." });
       return this.attempt({ ...params, prompt: fallbackPrompt ?? prompt, sessionId: null });
     }
   }
-  async attempt({ role, prompt, project, settings, phase, directory, signal, emit, agent, sessionId }) {
+  async attempt({ role, prompt, project, settings, phase, directory, signal, emit, agent, sessionId, attemptId = null }) {
     // A team member brings its own model and reasoning level; callers without one use the role's primary.
     const model = agent?.model ?? settings[role === "auditor" ? "auditorModel" : "coderModel"];
     const effort = agent?.effort ?? settings[role === "auditor" ? "auditorEffort" : "coderEffort"];
     const executable = findAgent(role);
-    if (!executable) throw new Error(`${role === "coder" ? "Claude Code" : "Codex CLI"} no está instalado. Instálalo o configura AUTOMATA_CLAUDE / AUTOMATA_CODEX.`);
+    if (!executable) throw Object.assign(new Error(`${role === "coder" ? "Claude Code" : "Codex CLI"} no está instalado. Instálalo o configura AUTOMATA_CLAUDE / AUTOMATA_CODEX.`), { kind: "fatal", role });
     fs.writeFileSync(path.join(directory, `${phase}-prompt.txt`), prompt, { mode: 384 });
-    let result = null, lastMessage = "", newSessionId = null, usage = null, progressed = false;
+    let result = null, lastMessage = "", newSessionId = null, usage = null, progressed = false, rateLimit = null, lastFailure = null;
+    // What the coordinator needs to decide whether a failure is a limit, a passing error or real.
+    const hints = (error) => Object.assign(error, { role, agent: true, progressed, lastMessage: lastMessage.slice(-2e3), rateLimit, detail: lastFailure?.text ?? "", failureCode: lastFailure?.code ?? null, subtype: result?.subtype ?? null });
     const outputFile = path.join(directory, `${phase}-response.json`);
     const conversation = ["chat", "task"].includes(phase);
     let args;
@@ -238,6 +244,8 @@ export class CliAgents {
       if (effort !== "default") args.push("--effort", effort);
     }
     const rawFile = path.join(directory, `${phase}-${role}.jsonl`);
+    // Retries append to the same log; this line marks where each attempt starts.
+    if (attemptId) fs.appendFileSync(rawFile, JSON.stringify({ automata: "attempt", id: attemptId, at: new Date().toISOString(), resumed: !!sessionId }) + "\n");
     let executed;
     try {
       executed = await runProcess(executable.command, [...executable.args, ...args], {
@@ -256,34 +264,49 @@ export class CliAgents {
           for (const e of decodeEvents(role, line)) {
             if (PROGRESS.has(e.kind)) progressed = true;
             if (e.kind === "result") result = e;
+            if (e.kind === "ratelimit") rateLimit = e.info;
+            if (e.failure) lastFailure = { text: e.text, code: e.code, info: e.info };
             if (e.sessionId) newSessionId = e.sessionId;
             if (e.usage) usage = e.usage;
             if (e.kind === "message") lastMessage = e.text;
-            if (e.kind !== "result" && (e.text || e.kind === "toolresult")) emit({ role, ...e, text: redactSecrets(e.text ?? "") });
+            if (e.kind !== "result" && e.kind !== "ratelimit" && (e.text || e.kind === "toolresult")) emit({ role, ...e, text: redactSecrets(e.text ?? "") });
           }
         }
       });
     } catch (error) {
-      error.progressed = progressed;
+      throw hints(error);
+    }
+    if (executed.code !== 0 || result?.error) {
+      const said = [result?.text, result?.errors, lastFailure?.text, executed.stderr].map((part) => String(part ?? "").trim()).filter(Boolean);
+      const message = said[0] || `El agente terminó con código ${executed.code}.`;
+      const detail = said.slice(1).join("\n");
+      const error = hints(Object.assign(new Error(redactSecrets(message).slice(-8e3)), { exitCode: executed.code }));
+      if (detail) error.detail = redactSecrets(detail).slice(-4e3);
+      if (lastFailure?.code === "usage_limit_exceeded" || lastFailure?.code === "rate_limit_exceeded") error.rateLimit = { status: "rejected", ...lastFailure.info ?? {} };
       throw error;
     }
-    if (executed.code !== 0 || result?.error) throw Object.assign(new Error(redactSecrets(result?.text || executed.stderr || `El agente terminó con código ${executed.code}.`).slice(-8e3)), { progressed });
     const sessionOut = newSessionId ?? sessionId ?? null;
+    // Written only when the attempt succeeded: after a crash, the coordinator reads it instead of
+    // asking the agent to do the same work again.
+    const keep = (payload) => {
+      if (attemptId) fs.writeFileSync(path.join(directory, `${phase}-result.json`), JSON.stringify({ attemptId, at: new Date().toISOString(), ...payload }), { mode: 384 });
+      return payload;
+    };
     if (role === "coder") {
-      if (!result?.text?.trim()) throw Object.assign(new Error("Claude terminó sin reporte final."), { progressed });
+      if (!result?.text?.trim()) throw hints(Object.assign(new Error("Claude terminó sin reporte final."), { kind: progressed ? "turns" : "malformed" }));
       fs.writeFileSync(outputFile, JSON.stringify(result));
-      return { text: redactSecrets(result.text), sessionId: sessionOut, resumed: !!sessionId, usage, cost: result.cost ?? null };
+      return keep({ text: redactSecrets(result.text), sessionId: sessionOut, resumed: !!sessionId, usage, cost: result.cost ?? null });
     }
     const text = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, "utf8").trim() : lastMessage;
-    if (!text) throw Object.assign(new Error("Codex terminó sin respuesta."), { progressed });
-    if (conversation) return { text: redactSecrets(text), sessionId: sessionOut, resumed: !!sessionId, usage };
+    if (!text) throw hints(Object.assign(new Error("Codex terminó sin respuesta."), { kind: "malformed" }));
+    if (conversation) return keep({ text: redactSecrets(text), sessionId: sessionOut, resumed: !!sessionId, usage });
     let review;
     try {
       review = JSON.parse(text);
     } catch {
-      throw Object.assign(new Error("Codex no entregó el JSON de auditoría esperado."), { progressed });
+      throw hints(Object.assign(new Error("Codex no entregó el JSON de auditoría esperado."), { kind: "malformed" }));
     }
-    return { text: review.summary, review, sessionId: sessionOut, resumed: !!sessionId, usage };
+    return keep({ text: review.summary, review, sessionId: sessionOut, resumed: !!sessionId, usage });
   }
 }
 export async function gitEvidence(directory) {

@@ -7,15 +7,16 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { redactSecrets, isSensitiveFile, sanitizeFtsQuery, allocateBudget, estimateTokens } from "./redact.mjs";
 
-export const MEMORY_KINDS = ["decision", "env", "progress", "pending", "gotcha", "note"];
+// recovery: interruptions, retries and waits, written by Automata itself (never by the agents).
+export const MEMORY_KINDS = ["decision", "env", "progress", "pending", "gotcha", "note", "recovery"];
 export const MEMORY_BUDGET_TOKENS = 1500;
-const LABELS = { decision: "Decisión", env: "Entorno", progress: "Avance", pending: "Pendiente", gotcha: "Trampa conocida", note: "Nota" };
+const LABELS = { decision: "Decisión", env: "Entorno", progress: "Avance", pending: "Pendiente", gotcha: "Trampa conocida", note: "Nota", recovery: "Recuperación" };
 const TAGS = { entorno: "env", env: "env", "decisión": "decision", decision: "decision", pendiente: "pending", pending: "pending", trampa: "gotcha", gotcha: "gotcha", nota: "note", note: "note", avance: "progress", progress: "progress" };
 const SCHEMA_VERSION = 1;
 const PROJECT_ID = /^[a-zA-Z0-9-]{1,64}$/;
 const MAX_TEXT = 400;
 // Facts that pile up: only the most recent ones stay active.
-const KEEP_ACTIVE = { progress: 20, note: 60 };
+const KEEP_ACTIVE = { progress: 20, note: 60, recovery: 30 };
 const now = () => new Date().toISOString();
 const clip = (text, max) => text.length > max ? text.slice(0, max - 1) + "…" : text;
 const clean = (text, max = MAX_TEXT) => clip(redactSecrets(String(text ?? "")).replace(/\s+/g, " ").trim(), max);
@@ -99,6 +100,43 @@ export function changedFiles(log, directory) {
     files.add((rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel : item.path).replaceAll("\\", "/"));
   }
   return [...files];
+}
+// Files a fact mentions that no longer exist in the project: a hint that the fact may be stale.
+// Relative paths with a folder are checked where they point; bare names only at the project root,
+// and only flagged when a file by that name is nowhere in the first two levels (cheap and conservative).
+// Nothing is retired automatically: the panel shows the warning and the prompts carry it.
+const FILE_MENTION = /(?<![\w@:/\\.-])((?:[A-Za-z]:[\\/])?(?:[\w.-]+[\\/])+[\w.-]+\.[a-z0-9]{1,8}|[\w-]+\.(?:mjs|cjs|js|ts|tsx|jsx|json|md|py|java|kt|kts|rs|go|cs|html|css|scss|yml|yaml|toml|ps1|sh|sql|gradle|xml|txt|csv|ini|cfg|env|lock))(?![\w/\\-])/gi;
+const NOT_FILES = /^(?:e\.g|i\.e|etc|vs|npm|node|git|http|https|www)\./i;
+export function staleMentions(text, directory, { exists = (file) => fs.existsSync(file), shallow = null } = {}) {
+  if (!directory || !text) return [];
+  const missing = [];
+  for (const match of String(text).matchAll(FILE_MENTION)) {
+    const token = match[1].replace(/[.,;:]+$/, "");
+    if (NOT_FILES.test(token) || /^\d/.test(token) || missing.includes(token)) continue;
+    if (path.isAbsolute(token)) {
+      if (!exists(token)) missing.push(token);
+      continue;
+    }
+    const target = path.resolve(directory, token);
+    if (!target.toLowerCase().startsWith(path.resolve(directory).toLowerCase())) continue;
+    if (exists(target)) continue;
+    if (/[\\/]/.test(token)) missing.push(token);
+    else if (!(shallow ?? shallowNames(directory)).has(token.toLowerCase())) missing.push(token);
+  }
+  return missing;
+}
+// File names in the project root and its first level of folders, lower-cased.
+export function shallowNames(directory) {
+  const names = new Set();
+  try {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      names.add(entry.name.toLowerCase());
+      if (entry.isDirectory() && !/^(?:node_modules|\.git|dist|build|\.automata)$/.test(entry.name)) {
+        try { for (const child of fs.readdirSync(path.join(directory, entry.name))) names.add(child.toLowerCase()); } catch {}
+      }
+    }
+  } catch {}
+  return names;
 }
 // Plain words from free text, for an OR query over the FTS index.
 function relevanceQuery(text) {
@@ -364,16 +402,21 @@ export class MemoryStore {
 
   // ---- What goes into a prompt ----
   // Only what is relevant to `query` and to the failing checks, within budgetTokens.
-  brief(projectId, { query = "", failing = [], budgetTokens = MEMORY_BUDGET_TOKENS } = {}) {
+  brief(projectId, { query = "", failing = [], budgetTokens = MEMORY_BUDGET_TOKENS, directory = "" } = {}) {
     if (!fs.existsSync(this.file(projectId))) return { text: "", tokens: 0, facts: [], errors: [] };
     const solutions = this.knownSolutions(projectId, failing);
+    const shallow = directory ? shallowNames(directory) : null;
     return this.#use(projectId, false, (db) => {
       const terms = relevanceQuery(query);
       const relevant = new Set(terms ? db.prepare("SELECT rowid FROM facts_fts WHERE facts_fts MATCH ? ORDER BY bm25(facts_fts) LIMIT 40").all(terms).map((row) => row.rowid) : []);
       const active = db.prepare("SELECT * FROM facts WHERE status = 'active' ORDER BY updated_at DESC, id DESC LIMIT 400").all();
       const byKind = (kind, limit) => active.filter((f) => f.kind === kind).sort((a, b) => Number(relevant.has(b.id)) - Number(relevant.has(a.id))).slice(0, limit);
       const usedFacts = [], usedErrors = [];
-      const factLine = (fact) => { usedFacts.push(fact.id); return `- [#${fact.id}] ${fact.text}`; };
+      const factLine = (fact) => {
+        usedFacts.push(fact.id);
+        const stale = directory ? staleMentions(fact.text, directory, { shallow }) : [];
+        return `- [#${fact.id}] ${fact.text}${stale.length ? ` (⚠ ya no existe: ${stale.join(", ")})` : ""}`;
+      };
       const files = (solution) => solution.files.length ? solution.files.join(", ") : "sin archivos registrados";
       const solutionLine = (error) => {
         usedErrors.push(error.id);
@@ -392,7 +435,8 @@ export class MemoryStore {
         { id: "gotcha", minTokens: 30, content: section("TRAMPAS CONOCIDAS (ya comprobadas; no las vuelvas a investigar):", byKind("gotcha", 10).map(factLine)) },
         { id: "resolved", minTokens: 40, content: section("ERRORES QUE YA SE RESOLVIERON ANTES:", resolved.map((e) => solutionLine({ ...e, exact: false }).replace(" (parecido)", ""))) },
         { id: "progress", minTokens: 30, content: section("AVANCES RECIENTES:", byKind("progress", 4).map(factLine)) },
-        { id: "note", minTokens: 20, content: section("NOTAS:", byKind("note", 8).map(factLine)) }
+        { id: "note", minTokens: 20, content: section("NOTAS:", byKind("note", 8).map(factLine)) },
+        { id: "recovery", minTokens: 20, content: section("INTERRUPCIONES RECIENTES (ya resueltas por Automata; no requieren acción):", byKind("recovery", 3).map(factLine)) }
       ];
       const kept = allocateBudget(sections, budgetTokens).filter((s) => s.content);
       const text = kept.map((s) => s.content).join("\n");
