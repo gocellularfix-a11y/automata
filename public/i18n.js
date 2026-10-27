@@ -241,6 +241,8 @@
     "Límite de uso de": "Usage limit of", "sin hora confiable": "no reliable reset time", "Sesión de": "Session of", "demasiado larga": "too long", "Fallo pasajero de": "Passing failure of", "sigue a las": "resumes at", "intento": "attempt",
     "Espera a que": "Waiting until", "pueda continuar": "can continue", "Puedes continuar ahora, pausar o detener.": "You can continue now, pause or stop.", "Motivo:": "Reason:",
     "Resultado incierto": "Uncertain result", "Repetir": "Retry", "Descartar": "Discard",
+    "Guardar los cambios pendientes antes de terminar:": "Save the pending changes before finishing:", "No se pudo guardar": "Could not save", "Reintentar": "Try again", "Dejar sin guardar": "Leave unsaved",
+    "La propuesta citaba criterios de forma distinta a la lista; Automata los enlazó sin pedirla de nuevo (": "The proposal quoted criteria differently from the list; Automata linked them without asking again (",
     "Automata se cerró mientras se ejecutaba. Comprueba el resultado en el repositorio antes de repetirla.": "Automata closed while it was running. Check the result in the repository before repeating it.",
     "Reintentos por fallo pasajero": "Retries after a passing failure", "Ante un límite de uso, Automata espera a la hora de restablecimiento y sigue sola.": "On a usage limit, Automata waits for the reset time and goes on by itself.",
     "Reanudar solo al abrir Automata": "Resume on its own when Automata opens", "Un trabajo interrumpido o en espera continúa sin pulsar Continuar. Pausar y Detener siempre mandan.": "An interrupted or waiting run continues without pressing Continue. Pause and Stop always win.",

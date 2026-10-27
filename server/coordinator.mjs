@@ -822,7 +822,10 @@ export class Coordinator extends EventEmitter {
     }
     return result;
   }
-  gitNeedsApproval(mode, kind) {
+  // A project created from an idea (P3) is for someone who cannot judge a publication: push and merge always wait
+  // for them, whatever the Git mode says. Saving versions locally never does (unless the mode asks for everything).
+  gitNeedsApproval(mode, kind, project = null) {
+    if (project?.proposalId && (kind === "push" || kind === "merge")) return true;
     return mode === "ask-all" || mode === "ask-push" && (kind === "push" || kind === "merge");
   }
   // One entry per decision and round: a review applied again after a restart does not queue it twice.
@@ -866,6 +869,14 @@ export class Coordinator extends EventEmitter {
     item.summary = result.summary;
     item.error = result.error;
     item.doneAt = now();
+    if (item.kind === "commit") {
+      // The director sees the last failure until a commit works again; it is not asked for the same commit blindly.
+      if (result.ok) delete r.gitProblem;
+      else {
+        r.gitProblem = { at: now(), round: item.round, error: clip(result.error, 240), gate: !!item.gate };
+        this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "recovery", text: `Ronda ${item.round}: no se pudo guardar un commit (${clip(result.error, 160)}); los cambios siguen sin guardar.`, source: "automata", runId: r.id, round: item.round }));
+      }
+    }
     if (result.ok && item.kind === "commit" && !result.noop) this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "progress", text: `${result.summary}: ${item.message}`, source: "automata", runId: r.id, round: item.round }));
     if (result.blocked?.length) this.event({ role: "system", kind: "warning", text: `Archivos sensibles excluidos del commit: ${result.blocked.join(", ")}`, ...tag });
     this.event({ role: "system", kind: result.ok ? "success" : "warning", text: result.ok ? result.summary : result.error, ...tag });
@@ -890,7 +901,7 @@ export class Coordinator extends EventEmitter {
     for (const action of actions) {
       const item = this.queueGit(r, action);
       if (!item) continue;
-      if (this.gitNeedsApproval(mode, item.kind)) {
+      if (this.gitNeedsApproval(mode, item.kind, r.project)) {
         this.event({ role: "auditor", kind: "approval", text: "Aprobación pendiente", gitId: item.id, git: gitView(item) });
         continue;
       }
@@ -899,16 +910,81 @@ export class Coordinator extends EventEmitter {
     this.persist();
     this.notify();
   }
+  // Completing needs the folder's changes saved or an explicit decision to leave them. Returns true when the run
+  // may finish; otherwise the run waits (blocked) for the person, with a commit to approve or to decline.
+  async settleChanges(r, review) {
+    if (this.demo || (r.settings.gitMode ?? "ask-push") === "off") return true;
+    const dir = r.project.directory, tag = { runId: r.id, projectId: r.projectId };
+    const info = await this.git.inspect(dir);
+    if (!info.repo || !info.dirty) return true;
+    const { sensitive, savable } = await this.git.pending(dir);
+    const list = (names) => names.slice(0, 6).join(", ") + (names.length > 6 ? ` y ${names.length - 6} más` : "");
+    if (!savable.length) {
+      // Only files Automata never commits (keys, .env…): that is a decision already, shown here.
+      if (sensitive.length) this.event({ role: "system", kind: "warning", text: `Quedan sin guardar archivos sensibles que Automata nunca confirma: ${list(sensitive)}.`, ...tag });
+      return true;
+    }
+    const gates = (r.gitQueue ?? []).filter((item) => item.gate);
+    const last = gates.at(-1);
+    if (last && last.round === r.round) {
+      if (last.status === "rejected") return true;
+      if (["pending", "uncertain"].includes(last.status)) return this.holdForChanges(r, last, savable, "pending");
+      if (last.status === "failed") return this.holdForChanges(r, last, savable, "failed");
+      // Saved, and something is still unsaved: one more try, then it is shown and the work ends.
+      if (last.status === "done" && gates.filter((item) => item.status === "done").length >= 2) {
+        this.event({ role: "system", kind: "warning", text: `Se guardó el trabajo, pero siguen sin guardar: ${list(savable)}. Revisa la carpeta.`, ...tag });
+        return true;
+      }
+    }
+    // A commit already waiting for the person's approval is the question: it is not asked twice.
+    const asked = (r.gitQueue ?? []).find((item) => item.kind === "commit" && !item.gate && item.round === r.round && ["pending", "uncertain"].includes(item.status));
+    if (asked) {
+      asked.gate = true;
+      return this.holdForChanges(r, asked, savable, "pending");
+    }
+    const given = review.git?.message?.trim();
+    const item = { id: randomUUID(), kind: "commit", message: given || `chore: guardar los cambios pendientes de ${r.project.name}`.slice(0, 200), gate: true, status: "pending", at: now(), round: r.round };
+    (r.gitQueue ??= []).push(item);
+    return this.holdForChanges(r, item, savable, "pending");
+  }
+  holdForChanges(r, item, savable, why) {
+    const tag = { runId: r.id, projectId: r.projectId };
+    const problem = why === "failed" ? item.error : r.gitProblem?.error;
+    r.status = "blocked";
+    r.stage = "apply";
+    const names = savable.slice(0, 6).join(", ") + (savable.length > 6 ? ` y ${savable.length - 6} más` : "");
+    const text = why === "failed"
+      ? `No se pudo guardar el trabajo: ${item.error ?? "error de Git"}. Hay ${savable.length} archivo(s) sin guardar (${names}). Reintenta el commit cuando lo hayas resuelto, o deja los cambios sin guardar.`
+      : `El objetivo está cumplido, pero hay ${savable.length} archivo(s) sin guardar en Git (${names})${problem ? `; el último intento falló: ${problem}` : ""}. Aprueba el commit local para conservarlos, o déjalos sin guardar.`;
+    if (!item.announced) {
+      item.announced = true;
+      this.event({ role: "system", kind: "warning", text: "Se necesita tu intervención: " + text, ...tag });
+      this.event({ role: "auditor", kind: "approval", text: "Aprobación pendiente", gitId: item.id, git: gitView(item), ...tag });
+    }
+    this.persist();
+    this.notify();
+    return false;
+  }
+  // The person answered about the unsaved changes: the work can finish now (the loop checks again).
+  finishAfterChanges(r) {
+    if (this.busy || r.status !== "blocked" || r.stage !== "apply" || r.review?.decision !== "complete") return;
+    this.active = r;
+    this.launch();
+  }
   async resolveGit(runId, gitId, decision) {
     const r = this.runs.find((run) => run.id === runId);
     const item = r?.gitQueue?.find((entry) => entry.id === gitId);
     if (!item) throw new Error("No se encontró esa operación de Git.");
-    if (!["pending", "uncertain"].includes(item.status)) throw new Error("Esa operación ya se resolvió.");
+    if (!["pending", "uncertain"].includes(item.status) && !(item.gate && item.status === "failed")) throw new Error("Esa operación ya se resolvió.");
     if (!["approve", "reject"].includes(decision)) throw new Error("Decisión no válida.");
     if (decision === "reject") {
       item.status = "rejected";
       item.doneAt = now();
-      this.event({ role: "system", kind: "warning", text: "Operación de Git rechazada.", runId: r.id, projectId: r.projectId });
+      this.event({ role: "system", kind: "warning", text: item.gate ? "Decidiste dejar los cambios sin guardar en Git. El trabajo termina así y queda anotado." : "Operación de Git rechazada.", runId: r.id, projectId: r.projectId });
+      if (item.gate) {
+        this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "decision", text: "Al terminar, la persona decidió dejar los últimos cambios sin guardar en Git.", source: "user", runId: r.id, round: item.round }));
+        this.finishAfterChanges(r);
+      }
       this.persist();
       this.notify();
       return item;
@@ -917,14 +993,17 @@ export class Coordinator extends EventEmitter {
     // Pushing is safe while the executor works; committing, switching and merging are not.
     if (item.kind !== "push" && this.busy) throw new Error("Espera a que termine la operación actual.");
     this.gitBusy = true;
+    let ok = false;
     try {
       item.status = "pending";
-      await this.runGit(r, item);
+      ok = await this.runGit(r, item);
     } finally {
       this.gitBusy = false;
       this.persist();
       this.notify();
     }
+    if (item.gate && ok) this.finishAfterChanges(r);
+    else if (item.gate) this.event({ role: "system", kind: "warning", text: `El commit falló: ${item.error ?? "error de Git"}. Los cambios siguen sin guardar; puedes reintentar o dejarlos sin guardar.`, runId: r.id, projectId: r.projectId });
     return item;
   }
   // The director said the app can be opened: ask the user instead of running anything on our own.
@@ -985,6 +1064,8 @@ export class Coordinator extends EventEmitter {
       try {
         const result = await this.invoke(role, prompts, phase, reviewDir, index, { allowRefresh: !fix });
         const review = validateReview(result.review, project, phase);
+        // Approving a repository with unsaved changes and no commit: asked once; the apply stage has the last word.
+        if (review.decision === "complete" && attempt === 1 && !this.demo && options.git?.mode !== "off" && options.git?.info?.repo && options.git.info.dirty && !normalizeGit(review.git).commit) throw invalidReview("Marcas el objetivo completo pero hay cambios sin confirmar en Git y no pediste el commit. Entrega la revisión de nuevo con git.commit=true y un mensaje convencional (feat:, fix:, test:, docs:) para que la persona conserve la versión; si no corresponde guardarlos, dilo en summary.");
         if (review.decision === "complete" && this.active.checks.some((c) => !c.passed)) throw invalidReview("El auditor intentó aprobar con verificaciones fallidas. Revisa la evidencia antes de continuar.");
         // The plan is the last check: a decision that breaks it rolls back whole and comes back here.
         const planResult = this.applyPlanDecision(review, phase, index, project);
@@ -1061,7 +1142,7 @@ ${state}`;
         for (let i = 0; i < reviewers; i++) {
           const reviewDir = i === 0 ? dir : path.join(dir, `reviewer-${i + 1}`);
           fs.mkdirSync(reviewDir, { recursive: true });
-          const options = { planExists: phase === "plan" && !!planText, phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo }, watch, memory, plan: planText, requests };
+          const options = { planExists: phase === "plan" && !!planText, phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo, problem: r.gitProblem?.error ?? "" }, watch, memory, plan: planText, requests };
           const { result, review, taskId: assigned } = await this.review("auditor", phase, options, { full: evidenceFull, short: state }, reviewDir, i, p);
           reviews.push(review);
           if (assigned) taskId = assigned;
@@ -1110,6 +1191,8 @@ ${state}`;
       } else if (r.stage === "apply") {
         const review = r.review;
         if (review.decision !== "blocked") await this.applyGit(review);
+        // The work does not end with changes nobody decided about.
+        if (review.decision === "complete" && !await this.settleChanges(r, review)) break;
         if (review.decision !== "blocked") this.offerRun(r, review);
         if (review.decision === "complete") {
           r.status = "complete";

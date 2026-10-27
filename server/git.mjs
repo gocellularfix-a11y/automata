@@ -57,6 +57,13 @@ export class GitOps {
     const root = top.stdout.trim();
     return { repo: true, root, nested: !samePath(root, dir), branch: branch.stdout.trim(), dirty: status.stdout.trim().length > 0, remote: remote.code === 0 ? remote.stdout.trim() : "", hasCommits: head.code === 0 };
   }
+  // The files with changes that no commit has saved yet (this folder only), and which of them Automata never commits.
+  async pending(dir) {
+    const status = await this.git(dir, ["status", "--porcelain", "--", "."]);
+    const files = status.code !== 0 ? [] : status.stdout.split(/\r?\n/).filter((line) => line.trim()).map((line) => line.slice(3).replace(/^.* -> /, "").replace(/^"|"$/g, ""));
+    const sensitive = files.filter(isSensitivePath);
+    return { files, sensitive, savable: files.filter((file) => !sensitive.includes(file)) };
+  }
   // Every operation returns { ok, summary | error, steps } so callers can show the exact commands.
   async commit(dir, message, options = {}) {
     const steps = [], onStep = (step) => { steps.push(step); options.onStep?.(step); }, o = { ...options, onStep };

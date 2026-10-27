@@ -24,16 +24,20 @@ async function settled(c) {
   if (c.busy) await new Promise((r) => setTimeout(r, 5));
 }
 // A Git that records what the coordinator asks it to do.
-function fakeGit({ repo = true, failOn = null } = {}) {
+function fakeGit({ repo = true, failOn = null, dirty = true } = {}) {
   const calls = [], steps = (command) => [{ command, code: 0, output: "ok" }];
   const answer = (kind, command, summary) => async (_dir, ...rest) => {
     calls.push([kind, ...rest.filter((value) => typeof value === "string")]);
     for (const step of steps(command)) rest.at(-1)?.onStep?.(step);
-    return failOn === kind ? { ok: false, error: `falló ${kind}`, steps: [] } : { ok: true, summary, steps: steps(command) };
+    if (failOn === kind) return { ok: false, error: `falló ${kind}`, steps: [] };
+    // A saved commit leaves nothing pending.
+    if (kind === "commit") dirty = false;
+    return { ok: true, summary, steps: steps(command) };
   };
   return {
     calls,
-    inspect: async () => { calls.push(["inspect"]); return repo ? { repo: true, root: "x", nested: false, branch: "main", dirty: true, remote: "https://github.com/a/b", hasCommits: true } : { repo: false }; },
+    inspect: async () => { calls.push(["inspect"]); return repo ? { repo: true, root: "x", nested: false, branch: "main", dirty, remote: "https://github.com/a/b", hasCommits: true } : { repo: false }; },
+    pending: async () => ({ files: dirty ? ["src/app.mjs"] : [], sensitive: [], savable: dirty ? ["src/app.mjs"] : [] }),
     branch: answer("branch", "git switch -c feature/x", "Rama nueva feature/x"),
     commit: answer("commit", "git commit -m x", "Commit abc1234"),
     push: answer("push", "git push -u origin main", "Push de main"),
@@ -46,7 +50,7 @@ test("las sesiones se retoman con prompts cortos, por agente, y se desactivan co
   for (const reuse of [true, false]) {
     const dir = fixture(), seen = [];
     let counter = 0, reviews = 0;
-    const c = new Coordinator(new Store(path.join(dir, "data")), { git: fakeGit(), evidence: async () => "", checks: async () => [], agents: { async run(a) {
+    const c = new Coordinator(new Store(path.join(dir, "data")), { git: fakeGit({ dirty: false }), evidence: async () => "", checks: async () => [], agents: { async run(a) {
       seen.push({ role: a.role, phase: a.phase, index: a.agent.index, resume: a.agent.resume, short: /Seguimos en la misma sesión/.test(a.prompt), fallback: /Seguimos en la misma sesión/.test(a.fallbackPrompt) });
       const sessionId = `s${++counter}`;
       if (a.role === "coder") return { text: "Implementado", sessionId };
@@ -74,7 +78,7 @@ test("las sesiones se retoman con prompts cortos, por agente, y se desactivan co
 test("si fallan las verificaciones el ejecutor corrige sin pasar por el director, con un tope", async (t) => {
   const dir = fixture(), calls = [], coderPrompts = [];
   let checks = 0;
-  const c = new Coordinator(new Store(path.join(dir, "data")), { git: fakeGit(), evidence: async () => "", checks: async () => (++checks === 1 ? [{ command: "npm test", passed: false, code: 1, output: "1 test falló: boom" }] : [{ command: "npm test", passed: true, code: 0, output: "ok" }]), agents: { async run(a) {
+  const c = new Coordinator(new Store(path.join(dir, "data")), { git: fakeGit({ dirty: false }), evidence: async () => "", checks: async () => (++checks === 1 ? [{ command: "npm test", passed: false, code: 1, output: "1 test falló: boom" }] : [{ command: "npm test", passed: true, code: 0, output: "ok" }]), agents: { async run(a) {
     calls.push(`${a.role}:${a.phase}`);
     if (a.role === "coder") {
       coderPrompts.push(a.prompt);
@@ -100,7 +104,7 @@ test("la corrección directa tiene un tope de intentos y se puede desactivar", a
   const reviews = ["auditor:review", "auditor:review", "auditor:review"];
   for (const [fastFix, expected] of [[true, ["auditor:plan", "coder:code", "coder:code", "coder:code", "coder:code", ...reviews]], [false, ["auditor:plan", "coder:code", ...reviews]]]) {
     const dir = fixture(), calls = [];
-    const c = new Coordinator(new Store(path.join(dir, "data")), { git: fakeGit(), evidence: async () => "", checks: async () => [{ command: "x", passed: false, code: 1, output: "rojo" }], agents: { async run(a) {
+    const c = new Coordinator(new Store(path.join(dir, "data")), { git: fakeGit({ dirty: false }), evidence: async () => "", checks: async () => [{ command: "x", passed: false, code: 1, output: "rojo" }], agents: { async run(a) {
       calls.push(`${a.role}:${a.phase}`);
       return a.role === "coder" ? { text: "Implementado" } : { review: review(a.phase === "review" ? "complete" : "continue") };
     } } });
@@ -169,12 +173,19 @@ test("con aprobación total incluso los commits esperan, y si un paso falla no s
   const c = await runWithGit(t, { mode: "ask-all", git: asking, decisions: [plan(), step("complete", { commit: true, message: "feat: x", push: true })] });
   assert.deepEqual(gitCalls(asking), []);
   assert.deepEqual(c.active.gitQueue.map((item) => `${item.kind}:${item.status}`), ["commit:pending", "push:pending"]);
+  // The commit waiting for approval is what keeps the work from finishing with changes unsaved.
+  assert.equal(c.active.status, "blocked");
+  assert.equal(c.active.gitQueue[0].gate, true);
   const failing = fakeGit({ failOn: "commit" });
   const f = await runWithGit(t, { mode: "auto", git: failing, decisions: [plan(), step("complete", { commit: true, message: "feat: x", push: true })] });
-  assert.equal(f.active.status, "complete");
+  // The commit failed: the work does not end as if it were saved; a new commit waits for the person, with the reason.
+  assert.equal(f.active.status, "blocked");
   assert.deepEqual(gitCalls(failing), ["commit:feat: x"]);
   assert.equal(f.active.gitQueue[0].status, "failed");
   assert.match(f.active.gitQueue[0].error, /falló commit/);
+  assert.equal(f.active.gitQueue[1].gate, true);
+  assert.equal(f.active.gitQueue[1].status, "pending");
+  assert.match(f.active.gitProblem.error, /falló commit/);
   assert.ok(f.events.some((e) => e.kind === "warning" && /falló commit/.test(e.text)));
 });
 

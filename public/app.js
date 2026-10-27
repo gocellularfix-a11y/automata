@@ -146,6 +146,7 @@ function termEntry(e, result) {
 // ───────── Git: what the director decided, awaiting the user's OK ─────────
 const gitKinds = { commit: "COMMIT", push: "PUSH", merge: "MERGE", branch: "RAMA" };
 function gitText(g) {
+  if (g.kind === "commit" && g.gate) return `${t("Guardar los cambios pendientes antes de terminar:")} «${g.message}»`;
   if (g.kind === "commit") return `${t("Commit:")} «${g.message}»`;
   if (g.kind === "push") return t("Push de la rama actual a origin");
   if (g.kind === "merge") return `${t("Merge de la rama actual en")} «${g.into}»${g.push ? " " + t("y push") : ""}`;
@@ -155,7 +156,7 @@ function approvalEntry(e) {
   return `<article class="activity-entry approval"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t("APROBACIÓN")}</span><time>${entryTime(e)}</time></div><p data-user-content>${esc(gitText(e.git))}</p></article>`;
 }
 // Pending: waiting for the OK. Uncertain: it was running when Automata closed; only the user may repeat it.
-const pendingGit = () => state.runs.filter((r) => r.projectId === selected).flatMap((r) => (r.gitQueue ?? []).filter((item) => item.status === "pending" || item.status === "uncertain").map((item) => ({ ...item, runId: r.id })));
+const pendingGit = () => state.runs.filter((r) => r.projectId === selected).flatMap((r) => (r.gitQueue ?? []).filter((item) => item.status === "pending" || item.status === "uncertain" || item.gate && item.status === "failed").map((item) => ({ ...item, runId: r.id })));
 // ───────── The app: the director asks before running it, then it can be watched and stopped ─────────
 const pendingRuns = () => state.runs.filter((r) => r.projectId === selected).flatMap((r) => (r.runOffers ?? []).filter((offer) => offer.status === "pending").map((offer) => ({ ...offer, runId: r.id })));
 let appOutputOpen = false;
@@ -182,9 +183,11 @@ function renderGitBar() {
   }
   const output = $("#gitItems .app-output"), pinned = !output || output.scrollHeight - output.scrollTop - output.clientHeight < 30;
   $("#gitItems").innerHTML = (app ? appRow(app) : "") + offers.map(runOfferRow).join("") + items.map((item) => {
-    const uncertain = item.status === "uncertain";
-    const text = uncertain ? `⚠ ${t("Resultado incierto")} · ${gitText(item)}` : gitText(item);
-    return `<div class="git-item${uncertain ? " uncertain" : ""}" data-run="${esc(item.runId)}" data-git="${esc(item.id)}"><span class="git-kind">${esc(t(gitKinds[item.kind] ?? "GIT"))}</span><span class="git-text" data-user-content title="${esc(uncertain ? `${text}. ${t(item.error ?? "")}` : text)}">${esc(text)}</span><span class="git-actions"><button type="button" class="button small primary" data-decision="approve">${t(uncertain ? "Repetir" : "Aprobar")}</button><button type="button" class="button small quiet" data-decision="reject">${t(uncertain ? "Descartar" : "Rechazar")}</button></span></div>`;
+    const uncertain = item.status === "uncertain", failed = item.status === "failed";
+    const text = failed ? `⚠ ${t("No se pudo guardar")} · ${item.error ?? ""}` : uncertain ? `⚠ ${t("Resultado incierto")} · ${gitText(item)}` : gitText(item);
+    // Unsaved changes at the end of the work: save them, or decide to leave them (never both silently).
+    const labels = item.gate ? [failed || uncertain ? "Reintentar" : "Guardar", "Dejar sin guardar"] : [uncertain ? "Repetir" : "Aprobar", uncertain ? "Descartar" : "Rechazar"];
+    return `<div class="git-item${uncertain || failed ? " uncertain" : ""}" data-run="${esc(item.runId)}" data-git="${esc(item.id)}"><span class="git-kind">${esc(t(gitKinds[item.kind] ?? "GIT"))}</span><span class="git-text" data-user-content title="${esc(uncertain ? `${text}. ${t(item.error ?? "")}` : text)}">${esc(text)}</span><span class="git-actions"><button type="button" class="button small primary" data-decision="approve">${t(labels[0])}</button><button type="button" class="button small quiet" data-decision="reject">${t(labels[1])}</button></span></div>`;
   }).join("");
   const next = $("#gitItems .app-output");
   if (next) next.scrollTop = pinned ? next.scrollHeight : output.scrollTop;
