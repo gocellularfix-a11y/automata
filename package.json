@@ -10,7 +10,7 @@
     "start": "node scripts/desktop.mjs",
     "server": "node server/index.mjs",
     "demo": "node scripts/desktop.mjs --demo",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --import ./test/setup.mjs --test test/*.test.mjs",
     "smoke": "node scripts/smoke.mjs",
     "build:windows": "node scripts/build-windows.mjs",
     "build:android": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1"

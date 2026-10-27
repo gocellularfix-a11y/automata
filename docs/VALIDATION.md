@@ -38,6 +38,10 @@ Fecha: 2026-10-26. Las pruebas con proveedores simulados no equivalen a validar 
 - Instrucciones en cola que no omiten las verificaciones.
 - Token y origen exigidos por la API.
 
+## Estabilización de P3 (27 oct 2026)
+
+`npm test`: **180 aprobadas** (26 nuevas: `usage`, `proposals` con propuestas reales de Codex, `git-gate` con repositorio y hook reales, `processes` con procesos reales). Las pruebas no dependen de la RAM del equipo (`test/setup.mjs`). Ciclo real con agentes: llegó a la ronda 11 (6 de 8 tareas, 5 commits locales) y lo detuvo Claude Code por memoria crítica del sistema; no se completó. Las pruebas de interfaz en Chrome no se volvieron a ejecutar. Detalle y cifras en `P3_STABILIZATION_REPORT.md`.
+
 ## De una idea a un proyecto (P3, 27 oct 2026)
 
 `node --test test/*.test.mjs`: **154 aprobadas** (las 145 de P2 más 9 de `test/ideas.test.mjs`). Cambió una expectativa: el historial del plan incluye ahora la fila de reordenamiento. Una prueba de P1 que comparaba tiempos de reloj se volvió determinista (compara las esperas planificadas).
