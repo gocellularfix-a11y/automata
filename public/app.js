@@ -536,6 +536,91 @@ $("#historyButton").addEventListener("click", () => {
   $("#listContent").innerHTML = state.runs.map((r) => `<article class="run-item"><strong>${esc(r.project.name)} · ${esc(stateNames[r.status])}</strong><p>${new Date(r.createdAt).toLocaleString(i18n.language)} · ${r.round} rondas · ${esc(modelName("coder", r.settings.coderModel))} + ${esc(modelName("auditor", r.settings.auditorModel))}</p><p>${esc(r.review?.summary ?? r.error ?? "Pendiente de auditoría.")}</p></article>`).join("") || '<div class="list-empty">Tu historial aparecerá aquí después del primer trabajo.</div>';
   showDialog("#listDialog");
 });
+// ---- Project memory: what Claude and Codex remember between sessions ----
+const memoryKinds = { decision: "Decisiones", env: "Entorno", gotcha: "Trampas conocidas", pending: "Pendientes", progress: "Avances", note: "Notas" };
+const memorySources = { director: "Codex", coder: "Claude", user: "Tú", automata: "Automata" };
+const errorStates = { open: "Abierto", resolved: "Resuelto", retired: "Retirado" };
+let memoryTimer;
+const memoryCall = (body) => api("memory", { method: "POST", body: { projectId: project()?.id, ...body } });
+const shortDate = (iso) => iso ? new Date(iso).toLocaleDateString(i18n.language, { day: "numeric", month: "short" }) : "";
+function memoryFactHtml(f) {
+  const meta = [`#${f.id}`, t(memorySources[f.source] ?? f.source), f.round != null ? `${t("Ronda")} ${f.round}` : "", shortDate(f.updated_at)].filter(Boolean);
+  const action = f.status === "retired" ? `<button type="button" class="button quiet compact" data-restore="${f.id}">${esc(t("Restaurar"))}</button>` : `<button type="button" class="button quiet compact" data-edit="${f.id}">${esc(t("Corregir"))}</button><button type="button" class="button quiet compact" data-retire="${f.id}">${esc(t("Retirar"))}</button>`;
+  return `<article class="memory-item${f.status === "retired" ? " retired" : ""}" data-fact="${f.id}"><div class="memory-text" data-user-content>${esc(f.text)}</div><div class="memory-meta">${meta.map((m) => `<span>${esc(m)}</span>`).join("")}${f.status === "retired" && f.retired_reason ? `<span data-user-content>${esc(f.retired_reason)}</span>` : ""}</div><div class="memory-actions">${action}</div></article>`;
+}
+function memoryErrorHtml(e) {
+  const s = e.solutions?.[0];
+  const solution = s ? `<p class="memory-solution" data-user-content>${esc(`${t("Se resolvió en la ronda")} ${s.round ?? "?"}${s.files.length ? ` · ${s.files.join(", ")}` : ""}${s.summary ? ` · ${s.summary}` : ""}`)}</p>` : "";
+  const action = e.status === "retired" ? `<button type="button" class="button quiet compact" data-error="${e.id}" data-status="${e.solutions?.length ? "resolved" : "open"}">${esc(t("Restaurar"))}</button>` : `<button type="button" class="button quiet compact" data-error="${e.id}" data-status="retired">${esc(t("Retirar"))}</button>`;
+  return `<article class="memory-item error-item${e.status === "retired" ? " retired" : ""}"><div class="memory-meta"><span class="memory-state ${esc(e.status)}">${esc(t(errorStates[e.status] ?? e.status))}</span><span>E${e.id}</span><span>${esc(t(e.origin === "check" ? "Verificación" : "Comando"))}</span><span>${e.occurrences}×</span><span>${esc(shortDate(e.last_seen_at))}</span></div><code class="memory-command" data-user-content>${esc(e.command)}</code><p class="memory-text" data-user-content>${esc(e.excerpt)}</p>${solution}<div class="memory-actions">${action}</div></article>`;
+}
+function renderMemory({ facts, errors, stats }) {
+  const status = $("#memoryStatus").value;
+  $("#memoryStats").innerHTML = [[stats.facts, "recuerdos activos"], [stats.resolved, "errores resueltos"], [stats.open, "errores abiertos"], [stats.retired, "retirados"]].map(([n, label]) => `<span><strong>${n}</strong> ${esc(t(label))}</span>`).join("");
+  const groups = Object.keys(memoryKinds).map((kind) => [kind, facts.filter((f) => f.kind === kind)]).filter(([, list]) => list.length);
+  const shownErrors = errors.filter((e) => status === "all" || (status === "retired" ? e.status === "retired" : e.status !== "retired"));
+  $("#memoryContent").innerHTML = groups.map(([kind, list]) => `<h4>${esc(t(memoryKinds[kind]))}</h4>${list.map(memoryFactHtml).join("")}`).join("")
+    + (shownErrors.length ? `<h4>${esc(t("Errores y soluciones"))}</h4>${shownErrors.map(memoryErrorHtml).join("")}` : "")
+    || `<div class="list-empty">${esc(t($("#memorySearch").value.trim() ? "Nada coincide con tu búsqueda." : "Todavía no hay recuerdos. Se llenan solos con cada ronda, o agrega uno abajo."))}</div>`;
+}
+async function loadMemory() {
+  if (!project()) return;
+  try {
+    renderMemory(await memoryCall({ action: "list", status: $("#memoryStatus").value, q: $("#memorySearch").value.trim() }));
+  } catch (e) {
+    $("#memoryContent").innerHTML = `<div class="list-empty form-error">${esc(t(e.message))}</div>`;
+  }
+}
+async function memoryUpdate(body, done) {
+  try {
+    await memoryCall(body);
+    if (done) toast(done);
+    await loadMemory();
+  } catch (e) { toast(e.message); }
+}
+function openMemory() {
+  const p = project();
+  if (!p) return toast("Selecciona un proyecto.");
+  $("#memoryTitle").textContent = p.name;
+  $("#memorySearch").value = "";
+  $("#memoryContent").innerHTML = "";
+  showDialog("#memoryDialog");
+  void loadMemory();
+}
+$("#memoryButton").addEventListener("click", openMemory);
+$("#memoryStatus").addEventListener("change", () => void loadMemory());
+$("#memorySearch").addEventListener("input", () => {
+  clearTimeout(memoryTimer);
+  memoryTimer = setTimeout(() => void loadMemory(), 250);
+});
+$("#memoryForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  try {
+    await memoryCall({ action: "add", kind: data.kind, text: data.text });
+    e.target.reset();
+    toast("Recuerdo guardado.");
+    await loadMemory();
+  } catch (error) { toast(error.message); }
+});
+$("#memoryContent").addEventListener("click", (e) => {
+  const button = e.target.closest("button");
+  if (!button) return;
+  if (button.dataset.retire) return void memoryUpdate({ action: "retire", id: Number(button.dataset.retire) }, "Recuerdo retirado. Ya no se enviará a los agentes.");
+  if (button.dataset.restore) return void memoryUpdate({ action: "restore", id: Number(button.dataset.restore) }, "Recuerdo restaurado.");
+  if (button.dataset.error) return void memoryUpdate({ action: "errorStatus", id: Number(button.dataset.error), status: button.dataset.status });
+  if (button.dataset.save) {
+    const item = button.closest("[data-fact]");
+    return void memoryUpdate({ action: "update", id: Number(button.dataset.save), text: item.querySelector("input").value }, "Recuerdo corregido.");
+  }
+  if (button.dataset.cancel) return void loadMemory();
+  if (button.dataset.edit) {
+    const item = button.closest("[data-fact]"), text = item.querySelector(".memory-text").textContent;
+    item.querySelector(".memory-text").innerHTML = `<input maxlength="400" aria-label="${esc(t("Corregir recuerdo"))}" value="${esc(text)}">`;
+    item.querySelector(".memory-actions").innerHTML = `<button type="button" class="button primary compact" data-save="${button.dataset.edit}">${esc(t("Guardar"))}</button><button type="button" class="button quiet compact" data-cancel="1">${esc(t("Cancelar"))}</button>`;
+    item.querySelector("input").focus();
+  }
+});
 document.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => void saveSettings({ mode: b.dataset.mode })));
 $("#accessMode").addEventListener("change", event => void saveSettings({ accessMode: event.target.value }));
 for (const role of ["coder", "auditor"]) {

@@ -26,7 +26,8 @@
   <symbol id="i-send" viewBox="0 0 24 24"><path d="m4 4 17 8-17 8 3-8zm3 8h14"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 7 3-3a5 5 0 0 1 7 7l-3 3m-3 3-3 3a5 5 0 0 1-7-7l3-3m1 6 8-8"/></symbol>
   <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2.2"/><circle cx="6" cy="19" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 7.2v9.6M18 10.2c0 4-6 3-11 7"/></symbol>
-  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 5.2a3.2 3.2 0 0 1 0 5.6M18 14.4c1.8.8 3 2.6 3 5.6"/></symbol>
+  <symbol id="i-memory" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7" ry="2.8"/><path d="M5 5.5v6.2c0 1.6 3.1 2.8 7 2.8s7-1.2 7-2.8V5.5M5 11.7v6.5c0 1.6 3.1 2.8 7 2.8s7-1.2 7-2.8v-6.5"/></symbol>
+<symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 5.2a3.2 3.2 0 0 1 0 5.6M18 14.4c1.8.8 3 2.6 3 5.6"/></symbol>
 </defs></svg>
 <div class="app">
   <aside class="rail">
@@ -35,6 +36,7 @@
       <button class="rail-button selected" id="workspaceButton" title="Espacio de trabajo" aria-label="Espacio de trabajo"><svg><use href="#i-grid"/></svg></button>
       <button class="rail-button" id="projectsButton" title="Proyectos" aria-label="Proyectos"><svg><use href="#i-folder"/></svg></button>
       <button class="rail-button" id="historyButton" title="Historial de rondas" aria-label="Historial"><svg><use href="#i-history"/></svg></button>
+      <button class="rail-button" id="memoryButton" title="Memoria del proyecto" aria-label="Memoria del proyecto"><svg><use href="#i-memory"/></svg></button>
       <button class="rail-button" id="teamButton" title="Equipo de agentes" aria-label="Equipo de agentes"><svg><use href="#i-users"/></svg></button>
     </div>
     <div class="rail-bottom"><button class="rail-button" id="phoneButton" title="Conectar Android" aria-label="Conectar Android"><svg><use href="#i-phone"/></svg></button><button class="rail-button" id="settingsButton" title="Preferencias" aria-label="Preferencias"><svg><use href="#i-settings"/></svg></button><div class="avatar" title="Tu espacio local">TÚ</div></div>
@@ -113,6 +115,14 @@
   <p class="note">Los cambios se aplican al siguiente trabajo. Cada agente adicional consume su propio uso de modelo.</p>
   <div class="modal-actions"><span id="teamError" class="form-error" role="alert"></span><button type="button" class="button quiet" data-close>Cancelar</button><button class="button primary" type="submit">Guardar equipo<svg><use href="#i-arrow"/></svg></button></div>
 </form></dialog>
+<dialog id="memoryDialog" class="modal memory-modal" aria-labelledby="memoryTitle">
+  <div class="modal-heading"><div><div class="eyebrow">MEMORIA DEL PROYECTO</div><h2 id="memoryTitle" data-user-content>Lo que tu equipo recuerda.</h2><p>Claude y Codex reciben lo relevante al empezar cada sesión. Corrige o retira lo que no sea cierto.</p></div><button type="button" class="icon-button" data-close aria-label="Cerrar"><svg><use href="#i-close"/></svg></button></div>
+  <div class="memory-toolbar"><input id="memorySearch" type="search" placeholder="Buscar en la memoria…" aria-label="Buscar en la memoria"><select id="memoryStatus" aria-label="Qué mostrar"><option value="active">Activos</option><option value="retired">Retirados</option><option value="all">Todos</option></select></div>
+  <div class="memory-stats" id="memoryStats"></div>
+  <div id="memoryContent"></div>
+  <form id="memoryForm" class="memory-add"><select name="kind" aria-label="Tipo de recuerdo"><option value="decision">Decisión</option><option value="env">Entorno</option><option value="pending">Pendiente</option><option value="gotcha">Trampa conocida</option><option value="note" selected>Nota</option></select><input name="text" placeholder="Algo que tu equipo deba recordar…" required minlength="3" maxlength="400" aria-label="Nuevo recuerdo"><button class="button primary compact" type="submit">Agregar</button></form>
+  <p class="memory-foot">Solo se guardan resúmenes; el historial completo de cada ronda sigue en la carpeta del trabajo. Las credenciales se omiten antes de guardar.</p>
+</dialog>
 <dialog id="connectionDialog" class="modal"><div class="modal-heading"><div><div class="eyebrow">CONTIGO, DONDE ESTÉS</div><h2>Conecta tu espacio.</h2><p>Tu PC ejecuta. Tu teléfono te mantiene al mando.</p></div><button class="icon-button" data-close aria-label="Cerrar"><svg><use href="#i-close"/></svg></button></div><div id="pairingInfo"></div><form id="connectionForm"><label>Dirección del coordinador<input name="origin" type="url" placeholder="http://192.168.1.10:4780" required></label><label>Código de acceso<input name="token" type="password" placeholder="El código que muestra Automata en tu PC" required autocomplete="off"></label><div class="modal-actions"><button class="button primary" type="submit">Conectar<svg><use href="#i-link"/></svg></button></div></form></dialog>
 <dialog id="accountsDialog" class="modal accounts-modal" aria-labelledby="accountsTitle">
   <div class="modal-heading"><div><div class="eyebrow">DOS PERSPECTIVAS. UN MISMO OBJETIVO.</div><h2 id="accountsTitle">Conecta tu equipo.</h2><p>Tu cuenta de Claude para construir. ChatGPT para dirigir.</p></div><button class="icon-button" data-close aria-label="Cerrar"><svg><use href="#i-close"/></svg></button></div>
