@@ -68,8 +68,11 @@ function entropy(text) {
   for (const n of counts.values()) bits -= (n / text.length) * Math.log2(n / text.length);
   return bits;
 }
-// Random keys look like noise: mixed letters and digits with high entropy. Hex hashes (≤ 4 bits) are kept.
-const looksRandom = (run) => /[0-9]/.test(run) && /[a-z]/.test(run) && /[A-Z]/.test(run) && entropy(run) > 4.3;
+// Random keys look like noise: mixed letters and digits with high entropy. Hex hashes (≤ 4 bits) are kept,
+// and so are the CLI's own identifiers (message, tool-call and request ids), which are not secrets and
+// keep tool calls and their results linked in the raw logs.
+const KNOWN_ID = /^(?:toolu|srvtoolu|msg|req|msgbatch|call|item|thread|resp|rs|fc|ws|chatcmpl)_/;
+const looksRandom = (run) => !KNOWN_ID.test(run) && /[0-9]/.test(run) && /[a-z]/.test(run) && /[A-Z]/.test(run) && entropy(run) > 4.3;
 
 // Safe on raw CLI JSON lines: replaces token shapes only.
 export function redactTokens(text) {

@@ -277,6 +277,7 @@ select option { background: #15171b; color: var(--ink); }
 .run-state.paused, .run-state.limit, .run-state.interrupted, .run-state.waiting { color: var(--warn); border-color: #eab96840; background: #eab96810; }
 .run-state.paused::before, .run-state.limit::before, .run-state.interrupted::before, .run-state.waiting::before { background: var(--warn); }
 .run-state.waiting::before { box-shadow: 0 0 0 0 #eab96866; animation: ping 2.4s infinite; }
+.memory-stale { color: var(--warn); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .git-item.uncertain { border-color: #f2816f40; }
 .git-item.uncertain .git-kind { color: var(--err); background: #f2816f1a; border-color: #f2816f47; }
 .run-state.complete { color: var(--gold); border-color: #e8d5a640; background: #e8d5a610; }

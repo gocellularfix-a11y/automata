@@ -38,6 +38,16 @@ Fecha: 2026-10-26. Las pruebas con proveedores simulados no equivalen a validar 
 - Instrucciones en cola que no omiten las verificaciones.
 - Token y origen exigidos por la API.
 
+## Recuperación autónoma (P1, 27 oct 2026)
+
+`node --test test/*.test.mjs`: **133 aprobadas** (las 115 anteriores más 18 de `test/recovery.test.mjs`). Dos pruebas anteriores cambiaron de expectativa a propósito: un mensaje del chat interrumpido se reencola una vez (antes quedaba interrumpido) y una aprobación con verificaciones fallidas se le devuelve al director hasta tres veces (antes era un error directo).
+
+Con agentes y CLI simulados: clasificación de errores reales de ambas CLI (límite con hora en texto, `rate_limit_event`, error `usage_limit_exceeded` de Codex, turnos agotados, flujo cortado), espera con hora y reanudación desde la misma etapa, continuación de la ronda sin repetir la tarea, espera progresiva hasta `maxRetries`, tres correcciones del director, cierre y reapertura con resultado recuperado, Detener y Pausar durante la espera, cuentas no listas al reanudar, chat reencolado con respuestas conservadas, Git incierto, etapa `apply` sin repetir el commit, validación de ajustes y API, y marcado de recuerdos con archivos borrados.
+
+`node scripts/smoke-waiting.mjs`: **12 de 12** en Chrome. Muestra el motivo, el agente y la hora; Continuar ahora, Pausar y Detener disponibles; traducción al inglés; pausa que cancela la cita; final sin repetir la ronda; teléfono sin desbordamiento.
+
+El ciclo real con Claude y Codex, con una interrupción forzada, está documentado en `P1_RECOVERY_REPORT.md`. Los límites de cuota reales no se pudieron provocar: sus mensajes se tomaron de las cadenas de las CLI instaladas y la política tiene un respaldo genérico.
+
 ## Prueba de interfaz
 
 Chrome a 1480×1020 y 390×844: dos paneles de escritorio, pestañas móviles, cambio de modelos y esfuerzos, preferencias, ciclo completo de demostración, consulta al auditor, creación de un proyecto real sin iniciar AI, ausencia de desbordamiento horizontal y ausencia de solicitudes externas de la interfaz.

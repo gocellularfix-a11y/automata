@@ -170,6 +170,7 @@
     "El director propuso acciones de Git, pero esta carpeta no es un repositorio.": "The director proposed Git actions, but this folder is not a repository.",
     "No se pudo retomar la sesión anterior; se inicia una nueva.": "The previous session could not be resumed; starting a new one.",
     "Sin cambios para confirmar.": "No changes to commit.",
+    "Recuperaciones": "Recoveries", "Recuperación": "Recovery", "Menciona archivos que ya no existen:": "Mentions files that no longer exist:",
     "Esperando para continuar": "Waiting to continue", "ESPERA": "WAIT", "Continuar ahora": "Continue now", "En espera": "On hold",
     "Límite de uso de": "Usage limit of", "sin hora confiable": "no reliable reset time", "Sesión de": "Session of", "demasiado larga": "too long", "Fallo pasajero de": "Passing failure of", "sigue a las": "resumes at", "intento": "attempt",
     "Espera a que": "Waiting until", "pueda continuar": "can continue", "Puedes continuar ahora, pausar o detener.": "You can continue now, pause or stop.", "Motivo:": "Reason:",

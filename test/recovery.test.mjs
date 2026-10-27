@@ -13,6 +13,7 @@ import { Coordinator } from "../server/coordinator.mjs";
 import { CliAgents } from "../server/agents.mjs";
 import { createServer } from "../server/index.mjs";
 import { staleMentions } from "../server/memory.mjs";
+import { redactSecrets } from "../server/redact.mjs";
 const temporaryDirectories = [];
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "automata-test-"));
@@ -597,6 +598,13 @@ test("la configuración valida autoResume, maxRetries e inicio con Windows, y la
   const saved = await fetch(app.origin + "/api/settings", { method: "PUT", headers, body: JSON.stringify({ ...app.coordinator.settings, autoResume: false, maxRetries: 2 }) });
   assert.equal((await saved.json()).maxRetries, 2);
   assert.equal(app.coordinator.settings.autoResume, false);
+});
+
+test("los identificadores de las CLI no se confunden con secretos, pero una clave de la misma forma sí se oculta", () => {
+  const line = JSON.stringify({ type: "user", message: { content: [{ tool_use_id: "toolu_01GSpbcSgkWBsEfbk3CSDRCQ9Xy2Lm", id: "msg_011CgRrYqJ87t9bVKmtdkxZgAb12Cd", type: "tool_result" }] } });
+  assert.equal(redactSecrets(line), line, "los ids de herramientas y mensajes siguen enteros");
+  assert.doesNotMatch(redactSecrets("key: Ab3dEf7gHi9jKl2mNo5pQr8sTu1vWx4yZa6b"), /Ab3dEf7gHi9jKl2mNo5pQr8sTu1vWx4yZa6b/);
+  assert.doesNotMatch(redactSecrets("sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"), /sk-ant/);
 });
 
 test("la memoria marca los recuerdos que mencionan archivos borrados sin retirarlos, y los prompts llevan el aviso", async (t) => {

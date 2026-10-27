@@ -14,7 +14,7 @@ Flutter no estaba instalado. Se implementó una interfaz compartida con Electron
 
 ## Máquina de estados
 
-`plan → code → checks → review → code… → complete | blocked | limit`
+`plan → code → checks → review → apply → code… → complete | blocked | limit`, con `waiting` como estado transitorio ante un límite de uso o un fallo pasajero (ver «Recuperación autónoma»).
 
 Solo un proceso de agente se ejecuta a la vez. El director inicial y el auditor son Codex. Las consultas a ambos se serializan. Pausar espera el final de la operación actual; detener cancela el proceso activo. Una interrupción del codificador se recupera verificando y auditando el trabajo parcial.
 
@@ -150,6 +150,32 @@ Fuentes: [permisos de Claude Code](https://code.claude.com/docs/en/permissions) 
 Desde esta versión, el registro original de cada llamada (`*.jsonl`) también se limpia línea por línea sin romper el JSON, igual que los eventos, los reportes y la salida de las verificaciones. La redacción, el saneamiento FTS y el reparto de presupuesto están adaptados de local-mem (MIT); el aviso está en `server/redact.mjs` y en `THIRD_PARTY_NOTICES.md`.
 
 **Tolerancia a fallos.** Si la memoria falla (disco lleno, archivo dañado), se muestra un aviso una vez y el trabajo continúa sin ella.
+
+## Recuperación autónoma (P1)
+
+**Clasificación.** `server/recovery.mjs` convierte cualquier fallo de una llamada a Claude o Codex en un veredicto: `limit` (límite de uso o de tasa, con la hora de restablecimiento si la CLI la dio en el texto, en `rate_limit_event` o en el error de Codex), `transient` (red, 5xx, sobrecarga, flujo cortado, tiempo de llamada agotado, proceso que termina sin explicación), `context` (la sesión creció demasiado: se abre una nueva con el prompt completo), `malformed` (JSON inválido, respuesta vacía o una revisión que no cumple las reglas de aprobación), `turns` (Claude agotó sus turnos), `fatal` (cuentas, instalación, modelo inexistente, errores internos) y `aborted`. El adaptador (`agents.mjs`) añade al error lo que hace falta para decidir: `role`, `exitCode`, `subtype` del resultado, `rateLimit`, el último mensaje y si el agente llegó a trabajar (`progressed`).
+
+**Política de espera** (`planWait`), siempre acotada:
+- límite con hora confiable: esperar hasta esa hora más un minuto; una hora pasada o a más de 24 h no se confía;
+- límite sin hora: 5, 15, 30 y luego 60 minutos, hasta 8 esperas por etapa (unas 6 h);
+- fallo pasajero: 30 s, 2, 5 y 10 min, hasta `maxRetries` por etapa (4 por defecto, 0 a 10);
+- tope global de 40 esperas por trabajo. Al superar un tope el trabajo queda en `error` con el motivo y espera a la persona.
+
+**Estado `waiting`.** El trabajo guarda `waiting` (`kind`, `role`, `reason`, `resumeAt`, `reliable`, `attempt`, `maxAttempts`, etapa y ronda) y `resumeAt`. Un temporizador comprueba cada minuto como máximo, así que una PC que durmió reanuda al despertar. La etapa pendiente no cambia: al reanudar se repite solo esa etapa. Si Claude ya había trabajado, la ronda conserva su número y su sesión, y la tarea llega con la nota de continuar sin repetir lo hecho. **Pausar** durante la espera cancela la cita y deja el trabajo en pausa; **Detener** lo detiene; **Continuar ahora** salta la espera. Un trabajo detenido o pausado a propósito nunca se reanuda solo.
+
+**Revisión inválida.** El director recibe hasta `MAX_REVIEW_FIXES` (3) peticiones de corrección en la misma sesión, con el motivo exacto (JSON inválido, sin siguiente tarea, aprobación sin evidencia, aprobación con verificaciones fallidas…). A la tercera fallida el trabajo queda en `error`. Si faltan las verificaciones de la ronda, no es culpa del director: se ejecutan una vez y se le vuelve a preguntar.
+
+**Turnos y tiempo.** Si Claude agota sus turnos o el tiempo de la llamada después de hacer trabajo, el reporte parcial (su último mensaje más una nota de Automata) pasa a las verificaciones y al director, en vez de repetir la tarea.
+
+**No repetir lo que ya se hizo.** Cada llamada a un agente tiene un `attemptId` guardado en `run.inflight` (o `message.inflight` en el chat). El adaptador escribe `<fase>-result.json` con ese id solo cuando la llamada terminó bien. Al abrir Automata, una operación que estaba en vuelo y cuyo resultado existe se reutiliza sin volver a llamar al agente. La revisión del director se guarda y la etapa pasa a `apply` **antes** de ejecutar Git u ofrecer correr la app, así un cierre en medio de esa aplicación no vuelve a pedir la revisión; la cola de Git descarta decisiones repetidas de la misma ronda. Una operación de Git que estaba ejecutándose al cerrar queda como `uncertain`: nunca se repite sola; la barra del director ofrece **Repetir** o **Descartar**. Lo mismo vale para cualquier acción externa: nada con resultado incierto se reintenta automáticamente.
+
+**Al abrir Automata** (`restoreRuns`, `restoreMessages`, `startAutoResume`): un trabajo que estaba corriendo, en espera o cortado por el cierre de la app (`interruptedBy: "close"`, distinto de Detener) se marca y, si `autoResume` está activo, continúa solo al poco de arrancar el servidor, después de comprobar las cuentas igual que **Continuar**. Si las cuentas no están listas, espera 5 minutos más sin gastar intentos. Un mensaje del chat que estaba en proceso se reencola una sola vez, conservando las respuestas que ya tenía; una segunda interrupción lo deja marcado para la persona. Con `autoResume` desactivado todo queda como «Interrumpido» hasta pulsar Continuar.
+
+**Memoria.** Cada interrupción, espera, reintento, corrección del director y rendición queda como recuerdo de tipo `recovery` (lo escribe Automata, nunca los agentes), visible en el panel Memoria y, en tres líneas como máximo, al final del bloque de memoria de los prompts. Además, los recuerdos que mencionan archivos que ya no existen en el proyecto se marcan (`stale`) en el panel y en los prompts («⚠ ya no existe»), sin retirarlos: la decisión es de la persona o del director.
+
+**Escritorio.** `autoStart` (desactivado por defecto) registra o quita Automata en el inicio de sesión de Windows con `app.setLoginItemSettings`, solo en la app empaquetada y solo cuando la persona cambia la opción. No se toca ninguna otra configuración global.
+
+**Auditoría de registros.** `node scripts/audit-secrets.mjs [carpeta de datos] [--quarantine]` revisa los registros históricos (`*.jsonl`, prompts, reportes, eventos, mensajes y las bases de memoria) en busca de secretos. Sin opciones solo informa. Con `--quarantine` mueve cada original a `quarantine/<fecha>/` con permisos de solo dueño, verifica que la copia redactada siga siendo JSON válido y deja un manifiesto con el SHA-256 de ambas versiones.
 
 ## Idiomas y configuración (0.4.0)
 

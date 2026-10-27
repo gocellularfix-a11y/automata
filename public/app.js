@@ -557,7 +557,7 @@ $("#historyButton").addEventListener("click", () => {
   showDialog("#listDialog");
 });
 // ---- Project memory: what Claude and Codex remember between sessions ----
-const memoryKinds = { decision: "Decisiones", env: "Entorno", gotcha: "Trampas conocidas", pending: "Pendientes", progress: "Avances", note: "Notas" };
+const memoryKinds = { decision: "Decisiones", env: "Entorno", gotcha: "Trampas conocidas", pending: "Pendientes", progress: "Avances", note: "Notas", recovery: "Recuperaciones" };
 const memorySources = { director: "Codex", coder: "Claude", user: "Tú", automata: "Automata" };
 const errorStates = { open: "Abierto", resolved: "Resuelto", retired: "Retirado" };
 let memoryTimer;
@@ -566,7 +566,9 @@ const shortDate = (iso) => iso ? new Date(iso).toLocaleDateString(i18n.language,
 function memoryFactHtml(f) {
   const meta = [`#${f.id}`, t(memorySources[f.source] ?? f.source), f.round != null ? `${t("Ronda")} ${f.round}` : "", shortDate(f.updated_at)].filter(Boolean);
   const action = f.status === "retired" ? `<button type="button" class="button quiet compact" data-restore="${f.id}">${esc(t("Restaurar"))}</button>` : `<button type="button" class="button quiet compact" data-edit="${f.id}">${esc(t("Corregir"))}</button><button type="button" class="button quiet compact" data-retire="${f.id}">${esc(t("Retirar"))}</button>`;
-  return `<article class="memory-item${f.status === "retired" ? " retired" : ""}" data-fact="${f.id}"><div class="memory-text" data-user-content>${esc(f.text)}</div><div class="memory-meta">${meta.map((m) => `<span>${esc(m)}</span>`).join("")}${f.status === "retired" && f.retired_reason ? `<span data-user-content>${esc(f.retired_reason)}</span>` : ""}</div><div class="memory-actions">${action}</div></article>`;
+  // Files the fact mentions that are gone: shown as a hint, never retired on its own.
+  const stale = f.stale?.length ? `<span class="memory-stale" data-user-content title="${esc(f.stale.join(", "))}">⚠ ${esc(t("Menciona archivos que ya no existen:"))} ${esc(f.stale.join(", "))}</span>` : "";
+  return `<article class="memory-item${f.status === "retired" ? " retired" : ""}" data-fact="${f.id}"><div class="memory-text" data-user-content>${esc(f.text)}</div><div class="memory-meta">${meta.map((m) => `<span>${esc(m)}</span>`).join("")}${f.status === "retired" && f.retired_reason ? `<span data-user-content>${esc(f.retired_reason)}</span>` : ""}${stale}</div><div class="memory-actions">${action}</div></article>`;
 }
 function memoryErrorHtml(e) {
   const s = e.solutions?.[0];
