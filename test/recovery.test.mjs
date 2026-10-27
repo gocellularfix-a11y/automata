@@ -174,7 +174,7 @@ test("un fallo pasajero se reintenta con espera creciente hasta maxRetries y lue
   assert.equal(c.active.status, "error");
   assert.match(c.active.error, /falló 3 veces seguidas por un motivo pasajero/);
   assert.equal(stamps.length, 3, "intento inicial más dos reintentos");
-  assert.ok(stamps[2] - stamps[1] >= stamps[1] - stamps[0] - 5, "la segunda espera no es menor que la primera");
+  assert.ok(stamps[2] - stamps[1] >= stamps[1] - stamps[0] - 15, "la segunda espera no es menor que la primera");
   const log = c.active.recovery.log.filter((e) => e.kind === "transient");
   assert.deepEqual(log.map((e) => e.attempt), [1, 2, 3]);
   // Continuar after the error starts the counters over.

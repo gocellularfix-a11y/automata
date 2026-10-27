@@ -9,6 +9,8 @@ import { directorPrompt, coderPrompt, chatPrompt, reviewFixPrompt, continuationP
 import { observe, digest } from "./watch.mjs";
 import { AppRunner } from "./apprun.mjs";
 import { MemoryStore, parseRemember, changedFiles, staleMentions, shallowNames } from "./memory.mjs";
+import { PlanStore, invalidPlan } from "./plan.mjs";
+import { isCasual, casualAnswer } from "./chat.mjs";
 import { classifyError, planWait, describeWait, agentName, DEFAULT_BACKOFF, MAX_REVIEW_FIXES, MAX_LIMIT_WAITS } from "./recovery.mjs";
 const LIVE = /* @__PURE__ */ new Set(["running", "pausing"]);
 // Statuses the user can continue from. "waiting" continues on its own; Continuar just skips the wait.
@@ -49,6 +51,9 @@ export class Coordinator extends EventEmitter {
     this.demo = demo;
     // One SQLite file per project, next to the rest of Automata's data and outside the project folder.
     this.memory = memory ?? new MemoryStore(path.join(store.directory, "memory"));
+    // The project plan lives in the same file as the memory (P2).
+    this.plan = new PlanStore(this.memory);
+    this.planStats = {};
     this.agents = agents ?? (demo ? new DemoAgents() : new CliAgents());
     this.checks = checks;
     this.evidence = evidence;
@@ -186,8 +191,30 @@ export class Coordinator extends EventEmitter {
     this.eventsTimer = null;
     for (const [name, data] of Object.entries({ projects: this.projects, settings: this.settings, runs: this.runs, events: this.events.slice(-700), messages: this.messages.slice(-200) })) this.store.write(`${name}.json`, data);
   }
+  // Plan counts per project, cached until the plan changes (the snapshot is built often).
+  planStatsFor(projectId) {
+    if (!this.planStats[projectId]) {
+      const p = this.projects.find((project) => project.id === projectId);
+      this.planStats[projectId] = this.remember("leer", () => this.plan.stats(projectId, p?.criteria ?? [])) ?? { total: 0, active: 0, done: 0, byCriterion: [] };
+    }
+    return this.planStats[projectId];
+  }
+  planChanged(projectId) {
+    delete this.planStats[projectId];
+  }
+  // Context and output per agent for the whole run, from the per-call log.
+  usageSummary(r) {
+    const summary = { coder: { calls: 0, context: 0, output: 0 }, auditor: { calls: 0, context: 0, output: 0 }, refreshes: (r.sessionLog ?? []).length };
+    for (const item of r.usageLog ?? []) {
+      const s = summary[item.role] ?? (summary[item.role] = { calls: 0, context: 0, output: 0 });
+      s.calls++;
+      s.context += item.context;
+      s.output += item.output;
+    }
+    return summary;
+  }
   snapshot() {
-    return { projects: this.projects, settings: this.settings, runs: this.runs.map(({ baseline, coderReport, nextPrompt, sessions, watch, inflight, continuation, ...r }) => ({ ...r, watched: watch?.length ?? 0 })), activeId: this.active?.id ?? null, events: this.events.slice(-250), messages: this.messages.slice(-100).map(({ inflight, ...m }) => m), demo: this.demo, busy: this.busy, app: this.app.view() };
+    return { projects: this.projects, settings: this.settings, runs: this.runs.map((run) => { const { baseline, coderReport, nextPrompt, sessions, watch, inflight, continuation, usageLog, ...r } = run; return { ...r, watched: watch?.length ?? 0, usage: this.usageSummary(run) }; }), activeId: this.active?.id ?? null, events: this.events.slice(-250), messages: this.messages.slice(-100).map(({ inflight, ...m }) => m), demo: this.demo, busy: this.busy, app: this.app.view(), plans: Object.fromEntries(this.projects.map((p) => [p.id, this.planStatsFor(p.id)])) };
   }
   notify() {
     this.emit("state", this.snapshot());
@@ -433,6 +460,77 @@ export class Coordinator extends EventEmitter {
       default: throw new Error("Acción de memoria no válida.");
     }
   }
+  // The Plan panel and POST /api/plan: the user adds, edits, reorders, drops and restores tasks.
+  // Nothing is deleted; every change keeps its history. A rule broken here is the user's error, not the director's.
+  planAction(input = {}) {
+    const p = this.projects.find((project) => project.id === input.projectId);
+    if (!p) throw new Error("Selecciona un proyecto.");
+    const id = Number(input.id), by = "user", criteria = p.criteria;
+    const run = this.runs.find((r) => r.projectId === p.id && r.status !== "complete");
+    const meta = { by, runId: run?.id ?? null, round: run?.round ?? null, criteria };
+    const done = () => {
+      this.planChanged(p.id);
+      this.notify();
+      return { tasks: this.plan.list(p.id), stats: this.planStatsFor(p.id) };
+    };
+    try {
+      switch (input.action ?? "list") {
+        case "list": return { tasks: this.plan.list(p.id), stats: this.planStatsFor(p.id), currentTaskId: this.runs.find((r) => r.projectId === p.id)?.taskId ?? null };
+        case "history": return { history: this.plan.history(p.id, id) };
+        case "add": {
+          const task = this.plan.addUserTask(p.id, { title: input.title, detail: input.detail ?? "", criterion: input.criterion ?? "", ...meta });
+          return { ...done(), task };
+        }
+        case "update": {
+          this.plan.apply(p.id, { update: [{ id, status: input.status ?? null, evidence: input.evidence ?? null, note: input.note ?? null, title: input.title ?? null, detail: input.detail ?? null, criterion: input.criterion ?? null, dependsOn: Array.isArray(input.dependsOn) ? input.dependsOn : null }] }, meta);
+          return done();
+        }
+        case "drop": {
+          this.plan.apply(p.id, { update: [{ id, status: "dropped", note: input.note || "Descartada por el usuario" }] }, meta);
+          return done();
+        }
+        case "restore": {
+          this.plan.apply(p.id, { update: [{ id, status: "todo" }] }, meta);
+          return done();
+        }
+        case "reorder": {
+          if (!Array.isArray(input.ids)) throw new Error("Indica el orden de las tareas.");
+          this.plan.reorder(p.id, input.ids);
+          return done();
+        }
+        default: throw new Error("Acción del plan no válida.");
+      }
+    } catch (error) {
+      // The reason is for the person, in plain words; it is not a run failure.
+      throw new Error(error.message);
+    }
+  }
+  // The director's decision about the plan, validated as a whole and applied once per review (restart-safe).
+  applyPlanDecision(review, phase, index, project) {
+    const r = this.active;
+    let result;
+    try {
+      result = this.plan.apply(project.id, review.plan, { by: "director", runId: r.id, round: r.round, key: `${r.id}:${r.round}:${phase}:${index}`, criteria: project.criteria, requireCoverage: phase === "plan" && !!review.plan, decision: review.decision, task: review.task, requireTask: !!review.plan });
+    } catch (error) {
+      // A rule the director broke goes back to the director; a broken memory file must not stop the work.
+      if (error.plan) throw error;
+      this.remember("guardar", () => { throw error; });
+      return { added: [], updated: [], taskId: null, skipped: true };
+    }
+    this.planChanged(project.id);
+    if (result.added.length || result.updated.length) this.event({ role: "auditor", kind: "plan", text: `Plan: ${result.added.length ? `${result.added.length} tarea(s) nueva(s)` : ""}${result.added.length && result.updated.length ? ", " : ""}${result.updated.length ? `${result.updated.length} actualizada(s)` : ""}.`, plan: this.planStatsFor(project.id) });
+    return result;
+  }
+  // Chat sessions per project and agent: the next message continues the conversation.
+  resetChat(projectId, target = null) {
+    const p = this.projects.find((project) => project.id === projectId);
+    if (!p) throw new Error("Selecciona un proyecto.");
+    const roles = target === "coder" || target === "auditor" ? [target] : [null];
+    for (const role of roles) this.remember("reiniciar", () => this.memory.resetChatSession(p.id, role));
+    this.event({ role: "system", kind: "stop", text: target === "coder" ? "Conversación con Claude reiniciada." : target === "auditor" ? "Conversación con Codex reiniciada." : "Conversación reiniciada para ambos agentes.", runId: null, projectId: p.id });
+    this.notify();
+    return { ok: true };
+  }
   pauseIfRequested() {
     if (this.active.status !== "pausing") return false;
     this.active.status = "paused";
@@ -448,11 +546,23 @@ export class Coordinator extends EventEmitter {
     return !this.pauseIfRequested();
   }
   // prompts is a string or { full, short }: the short form is used when the agent's session is resumed.
-  async invoke(role, prompts, phase, dir, index = 0) {
+  // allowRefresh: this is a safe point (a stage start, not a retry) where a long session may be renewed.
+  async invoke(role, prompts, phase, dir, index = 0, { allowRefresh = true } = {}) {
     const r = this.active;
     const team = teamOf(r.settings, role), member = team[index] ?? team[0];
     const sessionKey = `${role}:${index}`;
-    const resume = r.settings.reuseSessions !== false ? r.sessions?.[sessionKey] ?? null : null;
+    let resume = r.settings.reuseSessions !== false ? r.sessions?.[sessionKey] ?? null : null;
+    // A session that has served sessionRefreshRounds rounds is replaced by a fresh one: the full prompt
+    // brings the plan and the memory, so nothing is lost and the context stops growing.
+    const refreshEvery = r.settings.sessionRefreshRounds ?? DEFAULT_SETTINGS.sessionRefreshRounds;
+    r.sessionRounds ??= {};
+    if (resume && allowRefresh && refreshEvery > 0 && r.round - (r.sessionRounds[sessionKey] ?? r.round) >= refreshEvery) {
+      const served = r.round - r.sessionRounds[sessionKey];
+      delete r.sessions[sessionKey];
+      resume = null;
+      r.sessionLog = [...r.sessionLog ?? [], { at: now(), role, index, round: r.round, served, reason: "rounds" }].slice(-100);
+      this.event({ role: "system", kind: "session", text: `Sesión de ${agentName(role)} renovada tras ${served} rondas: la nueva recibe el plan y la memoria en el prompt completo.` });
+    }
     const full = typeof prompts === "string" ? prompts : prompts.full;
     const short = typeof prompts === "string" ? prompts : prompts.short ?? prompts.full;
     const agent = { ...member, index, count: team.length, label: agentLabel(role, team, index), resume };
@@ -511,9 +621,14 @@ export class Coordinator extends EventEmitter {
     if (result.usage) {
       const u = result.usage;
       r.tokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
+      // Context = everything the model read this call (Claude counts the cache apart; Codex inside input_tokens).
+      const context = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+      r.usageLog = [...r.usageLog ?? [], { at: now(), round: r.round, role, phase, context, cached: u.cache_read_input_tokens ?? u.cached_input_tokens ?? 0, output: u.output_tokens ?? 0, resumed: !!resume }].slice(-300);
     }
     if (Number.isFinite(result.cost)) r.costUsd += result.cost;
     if (result.sessionId) {
+      // A call that did not resume started this session; its age is counted from this round.
+      if (!resume || !result.resumed && result.resumed !== undefined) r.sessionRounds[sessionKey] = r.round;
       (r.sessions ??= {})[sessionKey] = result.sessionId;
       r[`${role}SessionId`] = result.sessionId;
     }
@@ -680,10 +795,12 @@ export class Coordinator extends EventEmitter {
         short: fix ? reviewFixPrompt(fixText, attempt - 1, MAX_REVIEW_FIXES) : directorPrompt(project, this.active.settings, { ...options, evidence: evidence.short, short: true })
       };
       try {
-        const result = await this.invoke(role, prompts, phase, reviewDir, index);
+        const result = await this.invoke(role, prompts, phase, reviewDir, index, { allowRefresh: !fix });
         const review = validateReview(result.review, project, phase);
         if (review.decision === "complete" && this.active.checks.some((c) => !c.passed)) throw invalidReview("El auditor intentó aprobar con verificaciones fallidas. Revisa la evidencia antes de continuar.");
-        return { result, review };
+        // The plan is the last check: a decision that breaks it rolls back whole and comes back here.
+        const planResult = this.applyPlanDecision(review, phase, index, project);
+        return { result, review, taskId: planResult.taskId ?? null };
       } catch (error) {
         if (classifyError(error).kind !== "malformed") throw error;
         const r = this.active;
@@ -748,12 +865,18 @@ ${state}`;
         const memory = this.memoryBrief(p.id, { query: `${r.coderReport}\n${r.nextPrompt}\n${p.objective}`, failing });
         // One file per phase: the coder and the director of the same round each get their own.
         if (memory) fs.writeFileSync(path.join(dir, `memory-${phase}.txt`), memory);
+        // The plan as it stands, and what the user asked for in the chat since the last review.
+        const planText = this.remember("leer", () => this.plan.brief(p.id, { current: r.taskId ?? null }))?.text ?? "";
+        if (planText) fs.writeFileSync(path.join(dir, `plan-${phase}.txt`), planText);
+        const requests = this.remember("leer", () => this.memory.conversationBrief(p.id, { since: r.reviewedAt ?? r.createdAt, limit: 5, budgetTokens: 300, title: "" }))?.trim() ?? "";
+        let taskId = null;
         for (let i = 0; i < reviewers; i++) {
           const reviewDir = i === 0 ? dir : path.join(dir, `reviewer-${i + 1}`);
           fs.mkdirSync(reviewDir, { recursive: true });
-          const options = { phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo }, watch, memory };
-          const { result, review } = await this.review("auditor", phase, options, { full: evidenceFull, short: state }, reviewDir, i, p);
+          const options = { phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo }, watch, memory, plan: planText, requests };
+          const { result, review, taskId: assigned } = await this.review("auditor", phase, options, { full: evidenceFull, short: state }, reviewDir, i, p);
           reviews.push(review);
+          if (assigned) taskId = assigned;
           this.remember("guardar", () => this.memory.applyAgentMemory(p.id, reviews[i].memory, { source: "director", runId: r.id, round: r.round }));
           projectChanged ||= !!result.projectChanged;
           if (reviews[i].decision !== "complete" || projectChanged) break;
@@ -784,6 +907,8 @@ ${state}`;
         review.git = normalizeGit(review.git);
         fs.writeFileSync(path.join(dir, "review.json"), JSON.stringify(review, null, 2));
         r.review = review;
+        r.reviewedAt = now();
+        if (review.decision === "continue") r.taskId = taskId ?? r.taskId ?? null;
         this.remember("guardar", () => this.memory.recordReview(p.id, { review, runId: r.id, round: r.round, criteria: p.criteria }));
         // The director has seen it: the next review only gets what happens from here on.
         r.watch = (r.watch ?? []).slice(watched);
@@ -809,6 +934,8 @@ ${state}`;
         }
         r.nextPrompt = review.nextPrompt;
         r.baseTask = review.nextPrompt;
+        // The assigned task is "doing" from here until the director confirms it (idempotent: same state, no change).
+        if (r.taskId) this.remember("guardar", () => { this.plan.setStatus(p.id, r.taskId, "doing", { by: "automata", runId: r.id, round: r.round }); this.planChanged(p.id); });
         r.stage = "code";
       } else if (r.stage === "code") {
         // A retry of the round that failed keeps its number, folder and session.
@@ -837,11 +964,13 @@ ${state}`;
         // A failure that already happened before comes with the solution that fixed it then.
         const memory = this.memoryBrief(p.id, { query: r.nextPrompt, failing: failingBefore });
         if (memory) fs.writeFileSync(path.join(work, "memory-code.txt"), memory);
-        const prompts = { full: coderPrompt(p, s, task, r.baseline, teamInfo, false, memory), short: coderPrompt(p, s, task, r.baseline, teamInfo, true, memory) };
+        const planText = this.remember("leer", () => this.plan.brief(p.id, { current: r.taskId ?? null, forCoder: true }))?.text ?? "";
+        if (planText) fs.writeFileSync(path.join(work, "plan-code.txt"), planText);
+        const prompts = { full: coderPrompt(p, s, task, r.baseline, teamInfo, false, memory, planText), short: coderPrompt(p, s, task, r.baseline, teamInfo, true, memory, planText) };
         this.persist();
         let result;
         try {
-          result = await this.invoke("coder", prompts, "code", work, turn);
+          result = await this.invoke("coder", prompts, "code", work, turn, { allowRefresh: !continuation && !retry });
         } catch (error) {
           const verdict = classifyError(error);
           // Out of turns, or out of time after real work: the partial result goes to the checks and the
@@ -939,13 +1068,25 @@ ${state}`;
     this.notify();
     return r;
   }
-  async sendChat({ projectId, target, text, kind = "question" }) {
+  async sendChat({ projectId, target, text, kind = "question", reset = false }) {
     const p = this.projects.find((p2) => p2.id === projectId);
     if (!p) throw new Error("Selecciona un proyecto para conversar.");
     text = String(text ?? "").trim();
     if (!text || text.length > 12e3) throw new Error("Escribe un mensaje de hasta 12 000 caracteres.");
     if (!["coder", "auditor", "both"].includes(target) || !["task", "question", "instruction"].includes(kind)) throw new Error("Destino o tipo de mensaje no válido.");
+    if (reset) this.resetChat(projectId, target === "both" ? null : target);
     const message = { id: randomUUID(), projectId, target, text, kind, status: "queued", at: now() };
+    // "Buen trabajo" is not a request: Automata answers it itself, without running anything.
+    if (isCasual(text)) {
+      message.status = "answered";
+      message.casual = true;
+      message.answers = [{ role: "system", text: casualAnswer(this.settings.language) }];
+      message.finishedAt = now();
+      this.messages.push(message);
+      this.persist();
+      this.notify();
+      return message;
+    }
     this.messages.push(message);
     this.chatQueue.push({ message, project: p });
     this.persist();
@@ -980,8 +1121,13 @@ ${message.text}`;
             if (run.stage !== "checks") run.stage = "review";
             // The user is talking to the director: do not let the quick fix loop bypass them.
             run.forceDirector = true;
+            // And it enters the plan as a task of the user's: the director assigns it or drops it with a reason.
+            const task = this.remember("guardar", () => this.plan.addUserTask(project.id, { title: clip(message.text, 100), detail: message.text, by: "user", runId: run.id, round: run.round }));
+            this.planChanged(project.id);
+            this.remember("guardar", () => this.memory.recordExchange(project.id, { role: "auditor", kind: "instruction", messageId: message.id, request: message.text, answer: task ? `Entró al plan como T${task.id}.` : "Entregada al director." }));
             message.status = "delivered";
-            message.answer = "Instrucción entregada al director. Se revisará antes de la siguiente tarea.";
+            message.taskId = task?.id ?? null;
+            message.answer = task ? `Instrucción entregada al director y anotada en el plan como T${task.id}. Se revisará antes de la siguiente tarea.` : "Instrucción entregada al director. Se revisará antes de la siguiente tarea.";
           }
         } else {
           // A task for the director is a hand-off: the director (read-only) decides what to change, then the executor writes it.
@@ -1002,13 +1148,22 @@ ${message.text}`;
               fs.mkdirSync(dir, { recursive: true });
               message.settings = { ...this.settings };
               const memory = this.memoryBrief(project.id, { query: message.text });
-              const result = await this.agents.run({ role, phase, prompt: chatPrompt(project, role, message.text, this.runs.find((r) => r.projectId === project.id)?.review?.summary, message.settings, { kind: message.kind, previousAnswers: message.answers, memory, interrupted: message.requeued > 0 }), project, settings: message.settings, directory: dir, attemptId: message.inflight.id, signal: withinRun ? this.controller.signal : this.chatController.signal, emit: (e) => {
+              const planText = this.remember("leer", () => this.plan.brief(project.id, { current: this.runs.find((r) => r.projectId === project.id)?.taskId ?? null, forCoder: role === "coder" }))?.text ?? "";
+              // The conversation of this project and agent continues where it left off; a fresh one gets a summary instead.
+              const session = message.settings.reuseSessions !== false ? this.remember("leer", () => this.memory.chatSession(project.id, role))?.session_id ?? null : null;
+              const conversation = session ? "" : this.remember("leer", () => this.memory.conversationBrief(project.id, { limit: 5 })) ?? "";
+              const options = { kind: message.kind, previousAnswers: message.answers, memory, interrupted: message.requeued > 0, plan: planText };
+              const context = this.runs.find((r) => r.projectId === project.id)?.review?.summary;
+              const team = teamOf(message.settings, role);
+              const result = await this.agents.run({ role, phase, prompt: chatPrompt(project, role, message.text, context, message.settings, { ...options, conversation, short: !!session }), fallbackPrompt: chatPrompt(project, role, message.text, context, message.settings, { ...options, conversation: this.remember("leer", () => this.memory.conversationBrief(project.id, { limit: 5 })) ?? "" }), project, settings: message.settings, directory: dir, attemptId: message.inflight.id, agent: { ...team[0], index: 0, count: 1, label: agentLabel(role, team, 0), resume: session }, signal: withinRun ? this.controller.signal : this.chatController.signal, emit: (e) => {
                 // Work asked from the chat also goes in front of the director's eyes.
                 if (e.role === "coder" && this.active?.projectId === project.id && this.active.status !== "complete") observe(this.active.watch ??= [], e);
                 if (commands && e.role === "coder") observe(commands, e);
                 this.event({ ...e, projectId: project.id });
               } });
-              message.answers.push({ role, text: result.text });
+              message.answers.push({ role, text: result.text, resumed: !!result.resumed });
+              if (result.sessionId) this.remember("guardar", () => this.memory.setChatSession(project.id, role, result.sessionId));
+              this.remember("guardar", () => this.memory.recordExchange(project.id, { role, kind: message.kind, messageId: message.id, request: message.text, answer: result.text, files: changedFiles(commands, project.directory) }));
               this.rememberReport(project.id, result.text, { source: role === "coder" ? "coder" : "director", runId: null, round: null });
             } catch (e) {
               if (this.closing) {
@@ -1017,6 +1172,7 @@ ${message.text}`;
                 return;
               }
               message.answers.push({ role, text: e.message, error: true });
+              this.remember("guardar", () => this.memory.recordExchange(project.id, { role, kind: message.kind, messageId: message.id, request: message.text, answer: e.message, error: true }));
             } finally {
               if (!this.closing) this.recordCommands(project.id, commands, { runId: null, round: null, directory: project.directory });
             }
@@ -1027,6 +1183,14 @@ ${message.text}`;
             if (handoff && message.answers.at(-1)?.error) break;
           }
           message.status = message.answers.some((a) => a.error) ? "error" : "answered";
+          // A direct task that the executor carried out waits in the plan for the director to confirm it;
+          // one that failed stays open for the director to decide.
+          if (message.kind === "task" && message.answers.some((a) => a.role === "coder")) {
+            const coderAnswer = message.answers.find((a) => a.role === "coder");
+            const task = this.remember("guardar", () => this.plan.addUserTask(project.id, { title: clip(message.text, 100), detail: message.text, status: coderAnswer.error ? "todo" : "review", evidence: coderAnswer.error ? "" : clip(coderAnswer.text, 400), note: coderAnswer.error ? clip(`Falló: ${coderAnswer.text}`, 300) : "", by: "user", runId: this.active?.projectId === project.id ? this.active.id : null, round: this.active?.projectId === project.id ? this.active.round : null }));
+            this.planChanged(project.id);
+            message.taskId = task?.id ?? null;
+          }
           if (withinRun && message.kind === "task" && this.active?.projectId === project.id) {
             this.active.coderReport += `\n\nTAREA DIRECTA DEL USUARIO:\n${message.text}\nRESULTADO:\n${message.answers.map(answer => `${answer.role}: ${answer.text}`).join("\n")}`;
             if (this.active.stage === "review") {

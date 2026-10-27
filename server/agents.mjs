@@ -375,7 +375,7 @@ export async function runChecks(project, directory, signal, emit) {
   return results;
 }
 export class DemoAgents {
-  async run({ role, phase, project, emit, signal, settings = {} }) {
+  async run({ role, phase, project, emit, signal, settings = {}, prompt = "" }) {
     const en = settings.language === "en";
     await new Promise((resolve, reject) => {
       const timer = setTimeout(resolve, 500);
@@ -392,6 +392,10 @@ export class DemoAgents {
       return { text: (en ? "Demo: implemented a greeting and its test. Automata will run node --test to verify it. No AI was called." : "Demostración: implementé un saludo con su prueba. Automata ejecutará node --test para verificarlo. No se llamó a ninguna AI.") };
     }
     const complete = phase !== "plan";
-    return { review: { decision: complete ? "complete" : "continue", summary: complete ? (en ? "Demo complete: the greeting and its test were created. Actual checks ran separately." : "Demostración completada: el saludo y su prueba están creados. Las verificaciones reales se ejecutaron por separado.") : (en ? "Prepared a small task to try the complete workflow without using credits." : "Preparé una tarea pequeña para probar el ciclo completo sin consumir créditos."), nextPrompt: complete ? "" : (en ? "Create greet.mjs with a greeting and greet.test.mjs with a node:test test." : "Crea greet.mjs con un saludo y greet.test.mjs con una prueba de node:test."), findings: [], criteria: project.criteria.map((criterion) => ({ criterion, met: complete, evidence: complete ? (en ? "Sample greet.mjs and greet.test.mjs; node --test results." : "greet.mjs y greet.test.mjs del ejemplo; resultados de node --test.") : (en ? "Awaiting execution." : "Pendiente de ejecución.") })), run: complete ? { ready: true, command: `node --input-type=module -e "const { greet } = await import('./greet.mjs'); console.log(greet('compa'))"`, url: "", note: en ? "Prints the greeting in the console." : "Muestra el saludo en la consola." } : { ready: false, command: "", url: "", note: "" } } };
+    // The demo director keeps a one-task plan: added when planning, confirmed with evidence when approving
+    // (it reads the assigned task from its prompt, like a real director would).
+    const assigned = Number(/TAREA ASIGNADA: T(\d+)/.exec(prompt)?.[1] ?? 1);
+    const plan = complete ? { add: [], update: [{ id: assigned, status: "done", evidence: en ? "node --test passed." : "node --test aprobado.", note: "" }] } : { add: [{ title: en ? "Greeting with its test" : "Saludo con su prueba", detail: en ? "greet.mjs and greet.test.mjs" : "greet.mjs y greet.test.mjs", criterion: project.criteria[0] ?? "", dependsOn: [] }], update: [] };
+    return { review: { decision: complete ? "complete" : "continue", summary: complete ? (en ? "Demo complete: the greeting and its test were created. Actual checks ran separately." : "Demostración completada: el saludo y su prueba están creados. Las verificaciones reales se ejecutaron por separado.") : (en ? "Prepared a small task to try the complete workflow without using credits." : "Preparé una tarea pequeña para probar el ciclo completo sin consumir créditos."), nextPrompt: complete ? "" : (en ? "Create greet.mjs with a greeting and greet.test.mjs with a node:test test." : "Crea greet.mjs con un saludo y greet.test.mjs con una prueba de node:test."), task: complete ? "" : "N1", plan, findings: [], criteria: project.criteria.map((criterion) => ({ criterion, met: complete, evidence: complete ? (en ? "Sample greet.mjs and greet.test.mjs; node --test results." : "greet.mjs y greet.test.mjs del ejemplo; resultados de node --test.") : (en ? "Awaiting execution." : "Pendiente de ejecución.") })), run: complete ? { ready: true, command: `node --input-type=module -e "const { greet } = await import('./greet.mjs'); console.log(greet('compa'))"`, url: "", note: en ? "Prints the greeting in the console." : "Muestra el saludo en la consola." } : { ready: false, command: "", url: "", note: "" } } };
   }
 }

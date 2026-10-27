@@ -44,6 +44,12 @@ const language = (settings) => settings.language === "en" ? "English" : "Españo
 export const memorySection = (memory) => memory ? `MEMORIA DEL PROYECTO (Automata la conserva entre sesiones; es un resumen de rondas anteriores, no evidencia: confirma en el código lo que vayas a aprobar. Úsala para no repetir investigaciones ni errores ya resueltos):
 ${memory}` : "";
 const directorMemoryRule = "MEMORIA: en memory.add registra solo hechos duraderos y comprobados que convenga recordar en sesiones futuras (decisiones técnicas, datos del entorno, pendientes, trampas ya descartadas), una frase cada uno, sin secretos y sin repetir lo que ya está en la memoria. En memory.retire indica los #id de recuerdos que comprobaste falsos u obsoletos, con el motivo. Si no hay nada, deja las dos listas vacías.";
+// The plan is the director's persistent to-do list: Automata validates every change and sends back the reason if it is wrong.
+const directorPlanRule = (phase) => `PLAN (lo mantienes tú; Automata lo guarda entre sesiones y lo valida): ${phase === "plan" ? "descompón el objetivo en tareas concretas y verificables en plan.add, al menos una por cada criterio de aceptación (criterion con el texto exacto del criterio, o vacío para tareas de apoyo), con dependsOn cuando una tarea necesite otra terminada (\"T12\" para una existente, \"N1\" para la primera de esta lista). " : "actualiza en plan.update las tareas de la ronda: status=done con evidence comprobada en el código o las verificaciones; blocked o dropped con el motivo en note; agrega en plan.add solo lo que falte. Una tarea del usuario «por confirmar» se confirma done con evidencia o vuelve a todo. "}En task indica la tarea que asignas con nextPrompt (\"T12\" o \"N1\"); sus dependencias deben estar hechas. No se puede completar el objetivo con tareas ligadas a criterios sin hacer: descartar una tarea no cumple su criterio. Las tareas que ya están en el plan no se repiten en plan.add.`;
+// What Automata keeps of the plan, within its own budget (PLAN_BUDGET_TOKENS), separate from the memory's.
+export const planSection = (plan) => plan ? `${plan}` : "";
+// Chat exchanges since the director last reviewed: what the user asked for and what was answered.
+const requestsSection = (requests) => requests ? `PETICIONES DEL USUARIO DESDE TU ÚLTIMA REVISIÓN (por el chat; lo que Claude ya hizo está «por confirmar» en el plan):\n${requests}` : "";
 const rememberRule = "Si descubriste algo duradero que convenga recordar en sesiones futuras (un dato del entorno, una decisión técnica, una trampa ya descartada), termina con una sección «PARA RECORDAR:» con una línea por hecho, por ejemplo «- [entorno] Android compila con el JDK 21». Etiquetas: entorno, decisión, pendiente, trampa, nota. Sin secretos ni datos personales.";
 // The director's previous answer could not be accepted: the same session gets the reason and the rules again.
 export function reviewFixPrompt(error, attempt, max) {
@@ -57,17 +63,20 @@ export function continuationPrompt(task, { reason = "se interrumpió" } = {}) {
 TAREA:
 ${task}`;
 }
-export function directorPrompt(project, settings, { phase, report = "", evidence = "", history = "", team = null, git = null, short = false, watch = "", memory = "", fix = "" }) {
+export function directorPrompt(project, settings, { phase, report = "", evidence = "", history = "", team = null, git = null, short = false, watch = "", memory = "", fix = "", plan = "", requests = "" }) {
   const teamLine = team ? `
 EQUIPO: eres el revisor ${team.index + 1} de ${team.count}. Para completar el objetivo todos los revisores deben aprobar; evalúa de forma independiente y no asumas que otro revisor ya comprobó algo.` : "";
   const watched = phase === "review" && !!watch;
+  const economy = plan && phase === "review" ? " Con el plan, la bitácora y el diff ya sabes qué cambió: abre solo los archivos de la tarea revisada y los que necesites para confirmar un criterio; no releas el proyecto entero." : "";
   const closing = "Entrega el JSON solicitado. decision=continue: nextPrompt con una tarea concreta y verificable del tamaño elegido. decision=complete: evidencia para TODOS los criterios exactos, ninguna verificación fallida y ningún hallazgo critical/major pendiente. decision=blocked: explica qué información o condición externa falta. No inventes comprobaciones realizadas. Cada hallazgo debe incluir archivo y evidencia. Razona de forma independiente; preserva las limitaciones y los fallos." + (fix ? `\nRESPUESTA ANTERIOR RECHAZADA: ${fix}` : "");
   if (short) {
     // Same session as before: the rules, project and criteria from the first instruction still apply.
     return `Seguimos en la misma sesión como director y auditor independiente de Automata. Siguen vigentes tus reglas, el proyecto y los criterios de la primera instrucción (eres de solo lectura).
 IDIOMA DE RESPUESTA: ${language(settings)}. Usa ese idioma en summary, nextPrompt, findings y evidence; conserva las claves JSON y el texto exacto de cada criterion.${teamLine}
-FASE: ${phaseText(phase, watched)}
+FASE: ${phaseText(phase, watched)}${economy}
+${planSection(plan)}
 ${memorySection(memory)}
+${requestsSection(requests)}
 REPORTE DEL CODIFICADOR:
 ${report || "Todavía no hay ejecución."}
 ${watchSection(watch)}
@@ -75,14 +84,17 @@ EVIDENCIA RECOGIDA POR AUTOMATA:
 ${evidence}
 ${gitSection(git)}
 ${runSection}
+${directorPlanRule(phase)}
 ${directorMemoryRule}
 ${closing}`;
   }
   return `Eres el director y auditor independiente de Automata. ${directorRules}
 IDIOMA DE RESPUESTA: ${language(settings)}. Usa ese idioma en summary, nextPrompt, findings y evidence; conserva las claves JSON y el texto exacto de cada criterion.${teamLine}
 ${brief(project, settings)}
-FASE: ${phaseText(phase, watched)}
+FASE: ${phaseText(phase, watched)}${economy}
+${planSection(plan)}
 ${memorySection(memory)}
+${requestsSection(requests)}
 ${history ? "CONTEXTO DE LA RONDA ANTERIOR:\n" + history : ""}
 REPORTE DEL CODIFICADOR:
 ${report || "Todavía no hay ejecución."}
@@ -91,15 +103,17 @@ EVIDENCIA RECOGIDA POR AUTOMATA:
 ${evidence}
 ${gitSection(git)}
 ${runSection}
+${directorPlanRule(phase)}
 ${directorMemoryRule}
 ${closing}`;
 }
-export function coderPrompt(project, settings, task, baseline, team = null, short = false, memory = "") {
+export function coderPrompt(project, settings, task, baseline, team = null, short = false, memory = "", plan = "") {
   const teamLine = team ? ` (codificador ${team.index + 1} de ${team.count}; los codificadores se turnan por ronda, así que revisa el trabajo previo en lugar de duplicarlo)` : "";
   const report = `Al terminar entrega un reporte en ${language(settings)} con: cambios y archivos, comprobaciones realmente ejecutadas y resultados, fallos o limitaciones, trabajo pendiente y, si la app ya se puede abrir, el comando para correrla. No declares completado el objetivo global: eso lo decide la auditoría independiente. ${rememberRule}`;
   const noGit = "No hagas commit, push ni merge por tu cuenta: el director decide cuándo y Automata lo ejecuta.";
   if (short) {
     return `Seguimos en la misma sesión como codificador de Automata${teamLine}. Siguen vigentes el proyecto, los criterios y tus reglas de la primera instrucción.
+${planSection(plan)}
 ${memorySection(memory)}
 TAREA DEL DIRECTOR:
 ${task}
@@ -109,14 +123,29 @@ Implementa la tarea hasta dejarla revisable. ${noGit} ${report}`;
 ${brief(project, settings)}
 CAMBIOS QUE YA EXISTIAN AL INICIAR:
 ${baseline}
+${planSection(plan)}
 ${memorySection(memory)}
 TAREA DEL DIRECTOR:
 ${task}
 Implementa la tarea hasta dejarla revisable. ${noGit} Trabaja dentro de los permisos disponibles; si una herramienta requiere permiso no disponible, informa el bloqueo sin simular éxito. ${report}`;
 }
-export function chatPrompt(project, role, text, context, settings = {}, { kind = "task", previousAnswers = [], memory = "", interrupted = false } = {}) {
+export function chatPrompt(project, role, text, context, settings = {}, { kind = "task", previousAnswers = [], memory = "", interrupted = false, plan = "", conversation = "", short = false } = {}) {
   const director = role === "auditor";
   const readOnly = kind === "question";
+  const interruptedNote = interrupted ? "NOTA: un intento anterior de esta misma petición se interrumpió al cerrar Automata. Revisa lo que ya quedó hecho en el proyecto y no lo repitas; continúa desde ahí." : "";
+  if (short) {
+    // Same conversation as before: rules and project are known; only what changed since then travels.
+    const mode = readOnly ? "CONSULTA DE SOLO LECTURA: no edites archivos ni cambies nada." : director ? "TAREA PARA EL EJECUTOR: decide en solo lectura qué debe hacer Claude, con pasos concretos." : "TAREA DE IMPLEMENTACIÓN AUTORIZADA: ejecútala y deja resultados revisables.";
+    const previous = previousAnswers.length ? (director ? "RESULTADOS DEL AGENTE ANTERIOR:\n" : "INSTRUCCIONES DEL DIRECTOR (ejecútalas tú):\n") + previousAnswers.map((answer) => `${answer.role}: ${answer.text}`).join("\n") : "";
+    return `Seguimos en la misma conversación de este proyecto como ${director ? "Codex, el director" : "Claude, el codificador"} de Automata. ${mode}
+${planSection(plan)}
+${memorySection(memory)}
+${previous}
+${interruptedNote}
+PETICIÓN DEL USUARIO:
+${text}
+Responde en ${language(settings)}. ${rememberRule}`;
+  }
   const headline = director
     ? readOnly
       ? "CONSULTA DE SOLO LECTURA."
@@ -137,9 +166,11 @@ CARPETA DE TRABAJO: ${project.directory}
 OBJETIVO: ${project.objective}
 ESTADO RECIENTE:
 ${context || "Todavía no hay ejecución."}
+${planSection(plan)}
 ${memorySection(memory)}
+${conversation}
 ${previous}
-${interrupted ? "NOTA: un intento anterior de esta misma petición se interrumpió al cerrar Automata. Revisa lo que ya quedó hecho en el proyecto y no lo repitas; continúa desde ahí." : ""}
+${interruptedNote}
 PETICIÓN DEL USUARIO:
 ${text}
 Responde en ${language(settings)} con ${closing}. ${rememberRule}`;

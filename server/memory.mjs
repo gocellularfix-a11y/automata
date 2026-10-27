@@ -12,7 +12,8 @@ export const MEMORY_KINDS = ["decision", "env", "progress", "pending", "gotcha",
 export const MEMORY_BUDGET_TOKENS = 1500;
 const LABELS = { decision: "Decisión", env: "Entorno", progress: "Avance", pending: "Pendiente", gotcha: "Trampa conocida", note: "Nota", recovery: "Recuperación" };
 const TAGS = { entorno: "env", env: "env", "decisión": "decision", decision: "decision", pendiente: "pending", pending: "pending", trampa: "gotcha", gotcha: "gotcha", nota: "note", note: "note", avance: "progress", progress: "progress" };
-const SCHEMA_VERSION = 1;
+// 2: the project plan (tasks with history and dependencies) and the conversation memory (P2).
+const SCHEMA_VERSION = 2;
 const PROJECT_ID = /^[a-zA-Z0-9-]{1,64}$/;
 const MAX_TEXT = 400;
 // Facts that pile up: only the most recent ones stay active.
@@ -48,6 +49,26 @@ CREATE TRIGGER IF NOT EXISTS errors_ai AFTER INSERT ON errors BEGIN INSERT INTO 
 CREATE TRIGGER IF NOT EXISTS errors_au AFTER UPDATE OF excerpt ON errors BEGIN
   INSERT INTO errors_fts(errors_fts, rowid, command, excerpt) VALUES ('delete', old.id, old.command, old.excerpt);
   INSERT INTO errors_fts(rowid, command, excerpt) VALUES (new.id, new.command, new.excerpt); END;`;
+// Version 2. Tasks belong to the project, not to a run; every change keeps a history row; plan_applied
+// makes a director's decision idempotent across restarts; conversations keep a short record of each
+// chat exchange and chat_sessions the resumable CLI session per agent.
+const SCHEMA_V2 = `
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY, title TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', criterion TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'todo', depends_on TEXT NOT NULL DEFAULT '[]', position INTEGER NOT NULL,
+  evidence TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', source TEXT NOT NULL,
+  created_run TEXT, created_round INTEGER, closed_run TEXT, closed_round INTEGER,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status, position);
+CREATE TABLE IF NOT EXISTS task_history (
+  id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), action TEXT NOT NULL, before TEXT, after TEXT,
+  by TEXT NOT NULL, run_id TEXT, round INTEGER, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS plan_applied (key TEXT PRIMARY KEY, at TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS conversations (
+  id INTEGER PRIMARY KEY, role TEXT NOT NULL, kind TEXT NOT NULL, message_id TEXT, request TEXT NOT NULL, answer TEXT NOT NULL,
+  files TEXT NOT NULL DEFAULT '[]', error INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  role TEXT PRIMARY KEY, session_id TEXT NOT NULL, started_at TEXT NOT NULL, turns INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);`;
 
 // ---- Error signatures ---------------------------------------------------------------------------
 const ERROR_LINE = /(\berror\b|\bfail(?:ed|ure|s)?\b|✖|\bnot ok\b|exception|assert|cannot find|not found|no se (?:pudo|encontr)|fall[óo]|is not (?:recognized|defined|a function)|undefined|\bENOENT\b|\bEACCES\b|denied|refused|BUILD FAILED)/i;
@@ -165,6 +186,7 @@ export class MemoryStore {
         db.exec("BEGIN");
         try {
           db.exec(SCHEMA);
+          db.exec(SCHEMA_V2);
           db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('project', ?)").run(projectId);
           db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
           db.exec("COMMIT");
@@ -193,6 +215,58 @@ export class MemoryStore {
         throw error;
       }
     });
+  }
+  // The same file and rules for other stores of the project (the plan): one operation, one open.
+  // fn gets null when reading a project that has no memory file yet.
+  open(projectId, { write = false } = {}, fn) {
+    return this.#use(projectId, write, fn);
+  }
+  transaction(projectId, fn) {
+    return this.#tx(projectId, fn);
+  }
+
+  // ---- Conversation memory: one resumable session per agent, and a short record of each exchange ----
+  chatSession(projectId, role) {
+    return this.#use(projectId, false, (db) => db ? db.prepare("SELECT * FROM chat_sessions WHERE role = ?").get(role) ?? null : null);
+  }
+  setChatSession(projectId, role, sessionId) {
+    return this.#tx(projectId, (db) => {
+      const current = db.prepare("SELECT * FROM chat_sessions WHERE role = ?").get(role);
+      const at = now();
+      if (current && current.session_id === sessionId) db.prepare("UPDATE chat_sessions SET turns = turns + 1, updated_at = ? WHERE role = ?").run(at, role);
+      else db.prepare("INSERT OR REPLACE INTO chat_sessions (role, session_id, started_at, turns, updated_at) VALUES (?, ?, ?, 1, ?)").run(role, String(sessionId), at, at);
+      return db.prepare("SELECT * FROM chat_sessions WHERE role = ?").get(role);
+    });
+  }
+  resetChatSession(projectId, role = null) {
+    if (!fs.existsSync(this.file(projectId))) return 0;
+    return this.#tx(projectId, (db) => role ? db.prepare("DELETE FROM chat_sessions WHERE role = ?").run(role).changes : db.prepare("DELETE FROM chat_sessions").run().changes);
+  }
+  recordExchange(projectId, { role, kind, messageId = null, request, answer, files = [], error = false }) {
+    return this.#tx(projectId, (db) => {
+      const { lastInsertRowid } = db.prepare("INSERT INTO conversations (role, kind, message_id, request, answer, files, error, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(role, kind, messageId, clean(request, 600), clean(answer, 900), JSON.stringify((files ?? []).filter((f) => !isSensitiveFile(f)).slice(0, 12)), error ? 1 : 0, now());
+      // Only the recent conversation is kept in full; older rows are summaries nobody reads twice.
+      db.prepare("DELETE FROM conversations WHERE id NOT IN (SELECT id FROM conversations ORDER BY id DESC LIMIT 200)").run();
+      return Number(lastInsertRowid);
+    });
+  }
+  recentExchanges(projectId, { role = null, since = null, limit = 5 } = {}) {
+    return this.#use(projectId, false, (db) => {
+      if (!db) return [];
+      const where = [], params = [];
+      if (role) { where.push("role = ?"); params.push(role); }
+      if (since) { where.push("at > ?"); params.push(since); }
+      return db.prepare(`SELECT * FROM conversations ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY id DESC LIMIT ?`).all(...params, Math.min(Number(limit) || 5, 50)).reverse().map((row) => ({ ...row, files: JSON.parse(row.files), error: !!row.error }));
+    });
+  }
+  // What a fresh chat session needs to know about the recent conversation, within its own small budget.
+  conversationBrief(projectId, { role = null, since = null, budgetTokens = 400, limit = 5, title = "CONVERSACIÓN RECIENTE EN ESTE PROYECTO (resumen; no es evidencia):" } = {}) {
+    const rows = this.recentExchanges(projectId, { role, since, limit });
+    if (!rows.length) return "";
+    const kinds = { question: "consulta", task: "trabajo", instruction: "instrucción" };
+    const lines = rows.map((row) => `- [${kinds[row.kind] ?? row.kind} · ${row.role === "coder" ? "Claude" : "Codex"} · ${row.at.slice(0, 16).replace("T", " ")}] Tú: ${clip(row.request, 160)} → ${row.error ? "falló: " : ""}${clip(row.answer, 220)}`);
+    const [kept] = allocateBudget([{ id: "chat", minTokens: 30, content: `${title}\n${lines.join("\n")}` }], budgetTokens);
+    return kept.content ?? "";
   }
 
   // ---- Facts ----

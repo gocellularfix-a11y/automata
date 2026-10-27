@@ -25,7 +25,9 @@ const TEAM_KEYS = { coder: "extraCoders", auditor: "extraAuditors" };
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:[\]-]{0,99}$/;
 // autoResume: interrupted or waiting runs continue on their own when Automata opens again.
 // maxRetries: passing failures retried per stage before asking the user. autoStart: open with Windows (desktop only).
-export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true, autoResume: true, maxRetries: 4, autoStart: false };
+// sessionRefreshRounds: a resumed CLI session is replaced by a fresh one (with the full prompt, plan and
+// memory) after this many rounds; 0 keeps sessions for the whole run.
+export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true, autoResume: true, maxRetries: 4, autoStart: false, sessionRefreshRounds: 8 };
 // Identifiers that earlier versions offered but Codex does not accept, and what they meant.
 export const RENAMED_MODELS = { "gpt-6.1-sol": "gpt-6-sol" };
 // planOnly: Claude and Codex use the user's subscription login, as in the terminal. API keys found in
@@ -73,7 +75,7 @@ export function validateSettings(value = {}) {
     s.projectsRoot = root;
   } else s.projectsRoot = "";
   for (const k of ["reuseSessions", "fastFix", "planOnly", "autoResume", "autoStart"]) if (typeof s[k] !== "boolean") throw new Error(`${k}: usa verdadero o falso.`);
-  for (const [k, min, max] of [["maxRounds", 1, 50], ["timeoutMinutes", 1, 120], ["maxRetries", 0, 10]]) {
+  for (const [k, min, max] of [["maxRounds", 1, 50], ["timeoutMinutes", 1, 120], ["maxRetries", 0, 10], ["sessionRefreshRounds", 0, 50]]) {
     s[k] = Number(s[k]);
     if (!Number.isInteger(s[k]) || s[k] < min || s[k] > max) throw new Error(`${k}: usa un número entre ${min} y ${max}.`);
   }
@@ -111,11 +113,13 @@ export function validateProject(input, { checkDirectory = true } = {}) {
 export const REVIEW_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["decision", "summary", "nextPrompt", "findings", "criteria", "git", "run", "memory"],
+  required: ["decision", "summary", "nextPrompt", "task", "findings", "criteria", "git", "run", "memory", "plan"],
   properties: {
     decision: { type: "string", enum: ["continue", "complete", "blocked"] },
     summary: { type: "string" },
     nextPrompt: { type: "string" },
+    // The plan task nextPrompt works on: "T12" (existing) or "N1" (first task added in this review). Empty when not continuing.
+    task: { type: "string" },
     findings: { type: "array", items: { type: "object", additionalProperties: false, required: ["severity", "file", "description", "evidence"], properties: { severity: { type: "string", enum: ["critical", "major", "minor", "info"] }, file: { type: "string" }, description: { type: "string" }, evidence: { type: "string" } } } },
     criteria: { type: "array", items: { type: "object", additionalProperties: false, required: ["criterion", "met", "evidence"], properties: { criterion: { type: "string" }, met: { type: "boolean" }, evidence: { type: "string" } } } },
     // What the director decides about Git. The executor (not the director) carries it out; empty values mean "do nothing".
@@ -126,6 +130,12 @@ export const REVIEW_SCHEMA = {
     memory: { type: "object", additionalProperties: false, required: ["add", "retire"], properties: {
       add: { type: "array", items: { type: "object", additionalProperties: false, required: ["kind", "text"], properties: { kind: { type: "string", enum: ["decision", "env", "pending", "gotcha", "note"] }, text: { type: "string" } } } },
       retire: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "reason"], properties: { id: { type: "integer" }, reason: { type: "string" } } } }
+    } },
+    // The project plan the director keeps (plan.mjs): tasks to add, with dependencies on existing ("T12") or
+    // new ("N1") tasks, and status changes with evidence (done) or a note (blocked, dropped).
+    plan: { type: "object", additionalProperties: false, required: ["add", "update"], properties: {
+      add: { type: "array", items: { type: "object", additionalProperties: false, required: ["title", "detail", "criterion", "dependsOn"], properties: { title: { type: "string" }, detail: { type: "string" }, criterion: { type: "string" }, dependsOn: { type: "array", items: { type: "string" } } } } },
+      update: { type: "array", items: { type: "object", additionalProperties: false, required: ["id", "status", "evidence", "note"], properties: { id: { type: "integer" }, status: { type: "string", enum: ["todo", "doing", "review", "done", "blocked", "dropped", ""] }, evidence: { type: "string" }, note: { type: "string" } } } }
     } }
   }
 };
@@ -157,6 +167,8 @@ export function combineReviews(reviews, labels) {
     git: reviews[0].git,
     run: reviews[0].run,
     memory: normalizeMemory({ add: reviews.flatMap((review) => review.memory?.add ?? []), retire: reviews.flatMap((review) => review.memory?.retire ?? []) }),
+    task: "",
+    plan: reviews[0].plan,
     findings: reviews.flatMap((review, i) => review.findings.map((f) => ({ ...f, description: `[${labels[i]}] ${f.description}` }))),
     criteria: reviews[0].criteria.map((c) => ({
       criterion: c.criterion,
@@ -182,5 +194,8 @@ export function validateReview(r, project, phase = "review") {
   }
   r.run = normalizeRun(r.run);
   r.memory = normalizeMemory(r.memory);
+  r.task = String(r.task ?? "").trim().toUpperCase();
+  // Reviews without a plan field (simulated agents, older reviews) leave the plan untouched.
+  r.plan = r.plan && typeof r.plan === "object" ? { add: Array.isArray(r.plan.add) ? r.plan.add : [], update: (Array.isArray(r.plan.update) ? r.plan.update : []).map((item) => ({ ...item, status: item?.status || null, evidence: item?.evidence ? item.evidence : null, note: item?.note ? item.note : null })) } : null;
   return r;
 }

@@ -139,7 +139,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
           const catalog = demo ? { source: "builtin", models: MODELS.auditor } : await codexModels.list({ force: url.searchParams.has("refresh") });
           // "Open with Windows" only makes sense for the packaged desktop app (a dev run would register electron.exe).
           const loginItem = !!process.versions.electron && !process.defaultApp && process.platform === "win32";
-          return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"], autoResume: true, loginItem }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: { coder: MODELS.coder, auditor: catalog.models }, modelSource: catalog.source, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
+          return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"], autoResume: true, loginItem, plan: true, conversations: true }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: { coder: MODELS.coder, auditor: catalog.models }, modelSource: catalog.source, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
         }
         if (url.pathname === "/api/pairing" && req.method === "GET") {
           if (!loopback(req.socket.remoteAddress)) return send(403, { error: "Abre la conexión de Android desde la PC." });
@@ -183,8 +183,10 @@ data: ${JSON.stringify(coordinator.snapshot())}
           return send(200, await coordinator.appControl(data.action));
         }
         if (url.pathname === "/api/memory" && req.method === "POST") return send(200, coordinator.memoryAction(await body()));
+        if (url.pathname === "/api/plan" && req.method === "POST") return send(200, coordinator.planAction(await body()));
         if (url.pathname === "/api/chat" && req.method === "POST") {
           const data = await body();
+          if (data.action === "reset") return send(200, coordinator.resetChat(data.projectId, data.target));
           if (["question", "task"].includes(data.kind ?? "question")) await auth.requireConnected(data.target === "both" ? ["coder", "auditor"] : [data.target]);
           return send(202, await coordinator.sendChat(data));
         }
