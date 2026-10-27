@@ -191,6 +191,18 @@ Desde esta versión, el registro original de cada llamada (`*.jsonl`) también s
 
 **Panel Plan** (`POST /api/plan`): ver por estado, agregar (ligada a un criterio o libre), corregir, reordenar, descartar con motivo y restaurar, con historial. El contador «PLAN hechas/activas» acompaña a la ronda.
 
+## De una idea a un proyecto (P3)
+
+**Carpetas seguras** (`server/safety.mjs`). Claude trabaja con permisos sobre la carpeta del proyecto, así que la carpeta tiene que ser solo suya. Se rechazan, al registrar y otra vez al iniciar (también proyectos registrados antes de esta regla): la raíz del disco; Automata o una carpeta que la contenga; los datos de Automata; Windows, Archivos de programa, `AppData`, `ProgramData` y carpetas privadas (`.ssh`, `.claude`, `.codex`…) con todo su contenido; el usuario entero y sus carpetas principales (Escritorio, Documentos, Descargas…) como tales, aunque una subcarpeta sí vale; la carpeta de proyectos misma; y cualquier carpeta que contenga otros repositorios Git hasta tres niveles (sin contar `node_modules`). Las subcarpetas de la carpeta temporal se permiten. La demostración no aplica estas reglas porque su proyecto vive dentro de los datos de Automata.
+
+**Propuesta.** «Nueva idea» envía la frase al director en una fase `define`: Codex de solo lectura, en una carpeta vacía de borrador, con el esquema `PROPOSAL_SCHEMA` (nombre, resumen, objetivo, funciones, criterios, verificaciones, plataforma, plan con dependencias `N1…`, riesgos y preguntas). `validateProposal` exige al menos 3 criterios, una verificación, un plan de 3 tareas o más que cubra cada criterio con su texto exacto y dependencias válidas; lo inválido vuelve al director hasta 3 veces. La persona puede ajustar (la propuesta anterior viaja con el pedido) o descartar. Un mensaje casual no inicia nada. Mientras se prepara, el coordinador está ocupado (una sola operación de agente a la vez).
+
+**Una sola aprobación.** «Crear y empezar» crea la carpeta con `git init` y un commit inicial (`github.createNew`, sin repositorio remoto), registra el proyecto con las reglas de carpeta, siembra el plan aprobado (`plan.apply` con la clave `proposal:<id>`), guarda en la memoria la plataforma y las limitaciones aceptadas, e inicia el trabajo. Las restricciones del proyecto prohíben publicar, comprar, crear cuentas, push y merge, y afirmar calidad comercial. Push y merge siguen pasando por la barra de aprobaciones (`ask-push`). Al planificar sobre un plan existente, el director recibe la instrucción de no repetirlo.
+
+**Archivos para Claude.** La revisión trae `files`: hasta 12 rutas relativas que Claude debe abrir primero (normalizadas: nada absoluto, nada con `..`). El prompt de Claude las lista como «ARCHIVOS RELEVANTES PARA ESTA TAREA». `usageLog` registra cuántas recibió cada llamada.
+
+**Experiencia.** La propuesta se muestra en lenguaje sencillo (qué hará, cómo se comprobará, dónde se usará, pasos con sus dependencias, qué tener en cuenta, dónde se guardará); los comandos quedan en «Detalles técnicos». La línea de estado dice qué se está construyendo y cuántas tareas faltan. Las tareas directas del chat se confirman o se devuelven desde el panel Plan. Reordenar tareas deja historial.
+
 ## Idiomas y configuración (0.4.0)
 
 `settings.language` acepta `es` o `en`. El coordinador persiste la elección y la comparte por eventos con Windows y Android. Los prompts solicitan las próximas respuestas en ese idioma y conservan literalmente los criterios de aceptación. Las llamadas ya iniciadas conservan su snapshot. La interfaz recuerda el idioma localmente incluso antes de conectarse; el coordinador es la fuente de la preferencia al establecer conexión.

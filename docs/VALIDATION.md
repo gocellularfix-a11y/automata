@@ -38,6 +38,14 @@ Fecha: 2026-10-26. Las pruebas con proveedores simulados no equivalen a validar 
 - Instrucciones en cola que no omiten las verificaciones.
 - Token y origen exigidos por la API.
 
+## De una idea a un proyecto (P3, 27 oct 2026)
+
+`node --test test/*.test.mjs`: **153 aprobadas** (las 145 de P2 más 8 de `test/ideas.test.mjs`). Cambió una expectativa: el historial del plan incluye ahora la fila de reordenamiento. Una prueba de P1 que comparaba tiempos de reloj se volvió determinista (compara las esperas planificadas).
+
+Pruebas nuevas: reglas de carpetas (raíz, Automata, sus datos, sistema, usuario, carpeta de proyectos, repositorios anidados, `node_modules`, `.git` propio), rechazo al registrar y al iniciar, validación de la propuesta, flujo completo con corrección, ajuste, aceptación, plan sembrado, archivos para Claude y memoria, propuesta que falla por límite o cierre, confirmación de tareas directas y reordenamiento con historial, API de ideas con carpeta real y Git, rechazo en demostración, y la CLI simulada en la fase `define`.
+
+Interfaz en Chrome: `smoke-ideas` **27 de 27**; `smoke-plan` 18/18, `smoke-waiting` 12/12, `smoke-memory` 13/13, `smoke` 13/13, `smoke-chat`, `smoke-access`, `smoke-github` y `smoke-settings` aprobadas. Las pruebas antiguas creaban sus proyectos dentro de `artifacts/` (dentro de Automata), que ahora se rechaza: se movieron a carpetas temporales. `smoke-settings` estaba rota desde el rediseño anterior a P1 y se actualizó.
+
 ## Plan persistente y memoria conversacional (P2, 27 oct 2026)
 
 `node --test test/*.test.mjs`: **145 aprobadas** (las 133 de P1 más 5 de `test/plan.test.mjs` y 7 de `test/plan-flow.test.mjs`). Ninguna prueba anterior cambió de expectativa.
