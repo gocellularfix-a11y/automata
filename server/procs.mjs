@@ -33,6 +33,16 @@ export async function listProcesses() {
   }
 }
 
+// The process with this id and everything that hangs from it, in a process table.
+export function descendantsOf(table, root) {
+  const found = table.filter((p) => p.pid === root), seen = new Set([root]), queue = [root];
+  while (queue.length) {
+    const parent = queue.shift();
+    for (const p of table) if (p.ppid === parent && !seen.has(p.pid)) { seen.add(p.pid); found.push(p); queue.push(p.pid); }
+  }
+  return found;
+}
+
 async function killPid(pid) {
   if (!Number.isInteger(pid) || pid <= 4 || pid === process.pid) return false;
   try {

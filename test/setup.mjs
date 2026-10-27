@@ -1,4 +1,6 @@
-// Loaded before every test file (npm test): the tests must not depend on how much memory the PC has right now.
-// The memory guard has its own tests (processes.test.mjs), which pass their own limits.
+// Loaded before every test file (npm test): the tests must not depend on how much memory the PC has right now,
+// nor read what its processes use. The memory guard and the budget have their own tests (processes.test.mjs,
+// memory-budget.test.mjs), which pass their own limits and readings.
 process.env.AUTOMATA_MIN_FREE_MB = "0";
 process.env.AUTOMATA_MIN_COMMIT_MB = "0";
+process.env.AUTOMATA_RAM_BUDGET_MB = "0";

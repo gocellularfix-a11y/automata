@@ -49,7 +49,7 @@ function completedAttempt(inflight) {
   }
 }
 export class Coordinator extends EventEmitter {
-  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app, memory, backoff, beforeResume = null, resumeDelayMs = 1500, resources } = {}) {
+  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app, memory, backoff, beforeResume = null, resumeDelayMs = 1500, resources, monitorMs = 20000 } = {}) {
     super();
     this.store = store;
     this.demo = demo;
@@ -72,6 +72,9 @@ export class Coordinator extends EventEmitter {
     this.waitTimer = null;
     // Looks at the PC's memory before something heavy starts (resources.mjs); the demo calls no agents.
     this.resources = resources === undefined ? (demo ? null : sharedChecker) : resources;
+    // While a run works, memory is read every so often (run.memory keeps the peaks); it only supervises.
+    this.monitorMs = monitorMs;
+    this.monitorTimer = null;
     // App output can arrive many times per second; the UI only needs a refresh now and then.
     this.app.on("change", () => {
       const st = this.app.state;
@@ -457,7 +460,9 @@ export class Coordinator extends EventEmitter {
     delete this.active.waiting;
     this.active.resumeAt = null;
     this.notify();
+    this.startMonitor();
     this.pending = this.loop().catch((e) => this.recover(e)).finally(async () => {
+      this.stopMonitor();
       this.busy = false;
       this.controller = null;
       this.active.updatedAt = now();
@@ -828,10 +833,58 @@ export class Coordinator extends EventEmitter {
   }
   // Before opening an agent (or starting a proposal or a run): enough free memory, or a clear reason to wait.
   // Inside a run the error is a passing failure, so the run waits and tries again by itself.
-  async requireResources() {
-    if (!this.resources) return;
-    const check = await this.resources();
+  async requireResources({ force = false } = {}) {
+    if (!this.resources) return null;
+    const check = await this.resources({ budgetMB: this.settings.ramBudgetMB, force });
+    this.noteMemory(check);
     if (!check.ok) throw Object.assign(new Error(check.message), { kind: "transient", reason: "memory", memory: check.memory });
+    return check;
+  }
+  // What was measured goes in the run: system free memory, commit headroom and what Automata's own processes use,
+  // each with its extreme. Crossing into "near" or "over" the budget is said once; nothing is closed because of it.
+  noteMemory(check) {
+    const r = this.active, m = check?.memory;
+    if (!r || !m || !LIVE.has(r.status)) return;
+    const x = r.memory ??= { budgetMB: 0, samples: 0, state: "off", peakUsedMB: 0, peakPrivateMB: 0, peakClaudeMB: 0, peakCodexMB: 0, peakProcesses: 0, minFreeMB: null, minCommitFreeMB: null, overSamples: 0 };
+    const low = (a, b) => b == null ? a : a == null ? b : Math.min(a, b);
+    x.samples++;
+    x.budgetMB = check.budget.budgetMB;
+    x.lastAt = now();
+    x.lastFreeMB = m.freeMB;
+    x.lastCommitFreeMB = m.commitFreeMB;
+    x.totalMB = m.totalMB;
+    x.minFreeMB = low(x.minFreeMB, m.freeMB);
+    x.minCommitFreeMB = low(x.minCommitFreeMB, m.commitFreeMB);
+    if (m.tree) {
+      x.lastUsedMB = m.tree.usedMB;
+      x.peakUsedMB = Math.max(x.peakUsedMB, m.tree.usedMB);
+      x.peakPrivateMB = Math.max(x.peakPrivateMB, m.tree.privateMB);
+      x.peakClaudeMB = Math.max(x.peakClaudeMB, m.tree.claudeMB);
+      x.peakCodexMB = Math.max(x.peakCodexMB, m.tree.codexMB);
+      x.peakProcesses = Math.max(x.peakProcesses, m.tree.processes);
+    }
+    const state = check.budget.state;
+    if (state === "over") x.overSamples++;
+    if (state !== x.state && (state === "over" || state === "near")) {
+      this.event({ role: "system", kind: "warning", text: state === "over"
+        ? `Automata y sus procesos usan ${m.tree.usedMB} MB, por encima de su presupuesto de ${check.budget.budgetMB} MB. No se inician procesos nuevos hasta que baje; los que ya están en marcha no se cierran (el presupuesto se supervisa, no se impone).`
+        : `Automata y sus procesos usan ${m.tree.usedMB} MB de su presupuesto de ${check.budget.budgetMB} MB: solo se iniciará otro proceso si cabe.`, runId: r.id, projectId: r.projectId });
+    }
+    x.state = state;
+  }
+  startMonitor() {
+    if (!this.resources || this.monitorTimer || !(this.settings.ramBudgetMB > 0) || !(this.monitorMs > 0)) return;
+    let reading = false;
+    this.monitorTimer = setInterval(async () => {
+      if (reading) return;
+      reading = true;
+      try { await this.resources({ budgetMB: this.settings.ramBudgetMB, force: true }).then((check) => this.noteMemory(check)); } catch {} finally { reading = false; }
+    }, this.monitorMs);
+    this.monitorTimer.unref?.();
+  }
+  stopMonitor() {
+    clearInterval(this.monitorTimer);
+    this.monitorTimer = null;
   }
   // A project created from an idea (P3) is for someone who cannot judge a publication: push and merge always wait
   // for them, whatever the Git mode says. Saving versions locally never does (unless the mode asks for everything).
@@ -1285,6 +1338,8 @@ ${state}`;
         r.codeStarted = null;
         r.stage = "checks";
       } else if (r.stage === "checks") {
+        // The checks start processes too (tests, builds): the same look at memory as before an agent.
+        await this.requireResources();
         r.checks = await this.checks(p, dir, this.controller.signal, (e) => this.event(e));
         r.checksRound = r.round;
         // Failing checks become open errors; a check that passes again resolves them with what changed.
@@ -1502,6 +1557,7 @@ ${message.text}`;
   }
   async close() {
     this.closing = true;
+    this.stopMonitor();
     this.clearWait();
     this.controller?.abort();
     this.chatController?.abort();

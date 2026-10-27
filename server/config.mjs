@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { directoryProblem } from "./safety.mjs";
+import { defaultBudget } from "./resources.mjs";
 export const MODES = {
   small: { label: "Pequeño", description: "Un cambio concreto por ronda. Audita antes de avanzar.", turns: 20 },
   medium: { label: "Mediano", description: "Una funcionalidad acotada por ronda, con sus verificaciones.", turns: 45 },
@@ -29,7 +30,10 @@ const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:[\]-]{0,99}$/;
 // coderRefreshRounds / auditorRefreshRounds: a resumed CLI session is replaced by a fresh one (with the full
 // prompt, plan and memory) after this many rounds, separately for Claude and for Codex; 0 keeps that agent's
 // sessions for the whole run. Codex re-reads more of the project each round, so it renews sooner.
-export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true, autoResume: true, maxRetries: 4, autoStart: false, coderRefreshRounds: 8, auditorRefreshRounds: 3 };
+export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true, autoResume: true, maxRetries: 4, autoStart: false, coderRefreshRounds: 8, auditorRefreshRounds: 3, ramBudgetMB: defaultBudget() };
+// ramBudgetMB: the most RAM Automata's own processes (itself, Claude, Codex, checks, the app) may use together; 30 GiB
+// unless AUTOMATA_RAM_BUDGET_MB says otherwise before the first save. 0 turns the budget and its measurement off.
+// It is supervision (resources.mjs): nothing running is closed because of it.
 // Settings saved before the renewal was set per agent had one number for both: a value the user chose
 // (anything but the old default of 8) still applies to both.
 const LEGACY_REFRESH_DEFAULT = 8;
@@ -81,9 +85,10 @@ export function validateSettings(value = {}) {
     s.projectsRoot = root;
   } else s.projectsRoot = "";
   for (const k of ["reuseSessions", "fastFix", "planOnly", "autoResume", "autoStart"]) if (typeof s[k] !== "boolean") throw new Error(`${k}: usa verdadero o falso.`);
-  for (const [k, min, max] of [["maxRounds", 1, 50], ["timeoutMinutes", 1, 120], ["maxRetries", 0, 10], ["coderRefreshRounds", 0, 50], ["auditorRefreshRounds", 0, 50]]) {
+  for (const [k, min, max] of [["maxRounds", 1, 50], ["timeoutMinutes", 1, 120], ["maxRetries", 0, 10], ["coderRefreshRounds", 0, 50], ["auditorRefreshRounds", 0, 50], ["ramBudgetMB", 0, 1048576]]) {
     s[k] = Number(s[k]);
     if (!Number.isInteger(s[k]) || s[k] < min || s[k] > max) throw new Error(`${k}: usa un número entre ${min} y ${max}.`);
+    if (k === "ramBudgetMB" && s[k] > 0 && s[k] < 2048) throw new Error("ramBudgetMB: usa 0 (sin presupuesto) o un número entre 2048 y 1048576.");
   }
   return Object.fromEntries(Object.keys(DEFAULT_SETTINGS).map((k) => [k, s[k]]));
 }

@@ -26,7 +26,7 @@ test("la comprobación de memoria distingue la memoria libre del margen del sist
   assert.equal(assess(ok, { freeMB: 1536, commitMB: 2048 }).ok, true);
   const noRam = assess({ ...ok, freeMB: 900 }, { freeMB: 1536, commitMB: 2048 });
   assert.equal(noRam.ok, false);
-  assert.match(noRam.message, /quedan 900 MB de memoria libre y se necesitan al menos 1536 MB/);
+  assert.match(noRam.message, /quedan 900 MB de memoria libre en el sistema y se necesitan al menos 1536 MB/);
   // Free RAM and no headroom is a different problem, and a different message.
   const noCommit = assess({ ...ok, commitFreeMB: 1200 }, { freeMB: 1536, commitMB: 2048 });
   assert.match(noCommit.message, /solo puede asignar 1200 MB más \(memoria virtual\)/);
@@ -190,7 +190,7 @@ test("al abrir Automata se cierran los huérfanos de la sesión anterior, y con 
   const post = async (route, body) => { const response = await fetch(app.origin + "/api/" + route, { method: "POST", headers, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() }; };
   const refused = await post("ideas", { action: "propose", idea: "Quiero una aplicación para administrar el inventario de mi tienda" });
   assert.equal(refused.status, 422);
-  assert.match(refused.body.error, /Poca memoria en esta PC: quedan 300 MB de memoria libre/);
+  assert.match(refused.body.error, /Poca memoria para empezar algo nuevo: quedan 300 MB de memoria libre/);
   assert.equal(app.coordinator.proposals.length, 0, "no se creó ninguna propuesta");
   assert.equal((await post("start", { projectId: "x" })).status, 422);
   free = 9000;
