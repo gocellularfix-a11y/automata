@@ -4,7 +4,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const icon = (name) => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const effortNames = { default: "Predeterminado", low: "Bajo", medium: "Medio", high: "Alto", xhigh: "Extra alto", max: "Máximo", ultra: "Ultra" };
 const stateNames = { running: "Trabajando", pausing: "Pausando", paused: "En pausa", stopped: "Detenido", complete: "Completado", blocked: "Necesita tu atención", error: "Error de ejecución", interrupted: "Sesión interrumpida", limit: "Límite de rondas", waiting: "Esperando para continuar" };
-const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", tool: "ACTIVIDAD", session: "SESIÓN", message: "MENSAJE", warning: "ATENCIÓN", error: "ERROR", check: "VERIFICACIÓN", success: "VERIFICADO", start: "INICIO", pause: "PAUSA", stop: "DETENIDO", complete: "COMPLETADO", approval: "APROBACIÓN", runoffer: "APP", wait: "ESPERA" };
+const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", tool: "ACTIVIDAD", session: "SESIÓN", message: "MENSAJE", warning: "ATENCIÓN", error: "ERROR", check: "VERIFICACIÓN", success: "VERIFICADO", start: "INICIO", pause: "PAUSA", stop: "DETENIDO", complete: "COMPLETADO", approval: "APROBACIÓN", runoffer: "APP", wait: "ESPERA", plan: "PLAN" };
 // Why Automata waits, which agent is affected and when it will try again (mirrors describeWait on the server).
 function waitText(w) {
   const who = w.role === "coder" ? "Claude" : "Codex";
@@ -238,10 +238,11 @@ function entry(e, result) {
   if (e.kind === "approval" && e.git) return approvalEntry(e);
   const time = new Date(e.at).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" });
   const review = e.review;
-  return `<article class="activity-entry ${esc(e.kind)}"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t(kindNames[e.kind] ?? "ACTIVIDAD")}</span>${e.agent ? `<span class="entry-agent">${esc(e.agent)}</span>` : ""}<time>${time}</time></div>${e.kind === "report" ? `<pre>${esc(e.text)}</pre>` : `<p>${esc(["phase", "start", "pause", "stop", "check", "success", "warning", "complete", "runoffer"].includes(e.kind) ? t(e.text) : e.text)}</p>`}${e.offer ? `<pre data-user-content>$ ${esc(e.offer.command)}${e.offer.note ? "\n" + esc(e.offer.note) : ""}</pre>` : ""}${review ? `${review.findings.map((f) => `<div class="finding"><strong>${esc(f.severity.toUpperCase())} · ${esc(f.file)}</strong>${esc(f.description)}<br>${esc(f.evidence)}</div>`).join("")}<div class="criteria-list">${review.criteria.map((c) => `<div class="criterion ${c.met ? "met" : ""}">${icon(c.met ? "check" : "shield")}<span>${esc(c.criterion)}<br><small>${esc(c.evidence)}</small></span></div>`).join("")}</div>` : ""}</article>`;
+  return `<article class="activity-entry ${esc(e.kind)}"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t(kindNames[e.kind] ?? "ACTIVIDAD")}</span>${e.agent ? `<span class="entry-agent">${esc(e.agent)}</span>` : ""}<time>${time}</time></div>${e.kind === "report" ? `<pre>${esc(e.text)}</pre>` : `<p>${esc(["phase", "start", "pause", "stop", "check", "success", "warning", "complete", "runoffer", "wait", "session", "plan", "error"].includes(e.kind) ? t(e.text) : e.text)}</p>`}${e.offer ? `<pre data-user-content>$ ${esc(e.offer.command)}${e.offer.note ? "\n" + esc(e.offer.note) : ""}</pre>` : ""}${review ? `${review.findings.map((f) => `<div class="finding"><strong>${esc(f.severity.toUpperCase())} · ${esc(f.file)}</strong>${esc(f.description)}<br>${esc(f.evidence)}</div>`).join("")}<div class="criteria-list">${review.criteria.map((c) => `<div class="criterion ${c.met ? "met" : ""}">${icon(c.met ? "check" : "shield")}<span>${esc(c.criterion)}<br><small>${esc(c.evidence)}</small></span></div>`).join("")}</div>` : ""}</article>`;
 }
 function chatEntry(m, role) {
-  const a = m.answers?.find((a2) => a2.role === role);
+  // A casual message is answered by Automata itself, shown in the panel it was sent to.
+  const a = m.answers?.find((a2) => a2.role === role) ?? (m.casual ? m.answers?.[0] : null);
   const name = role === "coder" ? "Claude" : "Codex";
   const pending = m.status === "processing" ? m.activeRole === role ? `${name} está ${m.kind === "task" ? "trabajando en tu petición" : "respondiendo"}…` : `Esperando el turno de ${name}…` : m.status === "interrupted" ? "Consulta interrumpida. Puedes enviarla de nuevo." : state.busy ? "En cola · el equipo termina una operación en curso." : "Consulta pendiente · se retoma al continuar el trabajo o enviar otra consulta.";
   return `<article class="activity-entry user" data-message-id="${esc(m.id)}"><div class="activity-meta">${t("TÚ · " + (m.kind === "instruction" ? "INSTRUCCIÓN" : m.kind === "task" ? "TRABAJO" : "CONSULTA"))}<time>${new Date(m.at).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })}</time></div><p>${esc(m.text)}</p>${a ? `<p class="chat-answer${a.error ? " form-error" : ""}">${esc(a.text)}</p>` : m.answer ? `<p class="chat-answer">${esc(m.answer)}</p>` : m.error ? `<p class="chat-answer form-error">${esc(m.error)}</p>` : `<p class="chat-answer pending-msg">${esc(t(pending))}</p>`}</article>`;
@@ -374,6 +375,8 @@ function render() {
   const stages = { plan: 1, code: 2, checks: 3, review: 4, complete: 4 };
   document.querySelectorAll(".workflow-line>span").forEach((el, i) => el.classList.toggle("current", i === (stages[r?.stage] ?? 0)));
   $("#roundCount").textContent = r ? `RONDA ${String(r.round).padStart(2, "0")} / ${r.settings.maxRounds}` : "RONDA —";
+  const planStats = state.plans?.[selected];
+  $("#planCount").textContent = planStats?.active ? `PLAN ${planStats.done}/${planStats.active}` : "PLAN —";
   $("#tokenCount").textContent = r?.tokens ? `TOKENS ${Intl.NumberFormat(i18n.language, { notation: "compact" }).format(r.tokens)}` : "TOKENS —";
   const replying = state.messages.find(message => message.projectId === selected && message.status === "processing");
   $("#bottomStatus").textContent = state.demo && !waiting ? "Demostración local · no llama a las AI ni consume créditos." : replying ? `${replying.activeRole === "coder" ? "Claude" : "Codex"} está ${replying.kind === "task" ? "trabajando en tu petición" : "respondiendo a tu consulta"}…` : waiting ? `${waitText(r.waiting ?? {})} · ${t("Puedes continuar ahora, pausar o detener.")} ${t("Motivo:")} ${String(r.waiting?.reason ?? "").slice(0, 160)}` : r?.error ?? (active ? "Tu equipo está trabajando. Puedes dejarle un mensaje." : r?.status === "complete" ? "Objetivo completado. Revisa la evidencia en el panel del auditor." : "Tu siguiente proyecto empieza aquí.");
@@ -610,6 +613,99 @@ function openMemory() {
   void loadMemory();
 }
 $("#memoryButton").addEventListener("click", openMemory);
+// ───────── Plan: the director's tasks, with the user's own additions ─────────
+const taskStates = { todo: "Pendiente", doing: "En curso", review: "Por confirmar", done: "Hecha", blocked: "Bloqueada", dropped: "Descartada" };
+const taskGroups = [["doing", "En curso"], ["review", "Por confirmar"], ["todo", "Pendientes"], ["blocked", "Bloqueadas"], ["done", "Hechas"], ["dropped", "Descartadas"]];
+let planCurrent = null;
+const planCall = (body) => api("plan", { method: "POST", body: { projectId: project()?.id, ...body } });
+function planTaskHtml(task, index, total) {
+  const current = task.id === planCurrent;
+  const meta = [`T${task.id}`, t(memorySources[task.source] ?? task.source), task.criterion ? `${t("Criterio")}: ${task.criterion}` : t("Libre"), task.dependsOn.length ? `${t("Depende de")} ${task.dependsOn.map((id) => "T" + id).join(", ")}` : "", task.closed_round != null ? `${t("Ronda")} ${task.closed_round}` : ""].filter(Boolean);
+  const actions = task.status === "dropped"
+    ? `<button type="button" class="button quiet compact" data-task-restore="${task.id}">${esc(t("Restaurar"))}</button>`
+    : `<button type="button" class="button quiet compact" data-task-up="${task.id}" ${index === 0 ? "disabled" : ""} title="${esc(t("Subir"))}">↑</button><button type="button" class="button quiet compact" data-task-down="${task.id}" ${index === total - 1 ? "disabled" : ""} title="${esc(t("Bajar"))}">↓</button><button type="button" class="button quiet compact" data-task-edit="${task.id}">${esc(t("Corregir"))}</button>${task.status === "done" ? "" : `<button type="button" class="button quiet compact" data-task-drop="${task.id}">${esc(t("Descartar"))}</button>`}`;
+  return `<article class="memory-item plan-item${task.status === "dropped" ? " retired" : ""}${current ? " current" : ""}" data-task="${task.id}"><div class="memory-text" data-user-content><span class="memory-state task-${esc(task.status)}">${esc(t(taskStates[task.status] ?? task.status))}</span>${current ? `<span class="memory-state task-current">${esc(t("Claude ahora"))}</span>` : ""} ${esc(task.title)}${task.detail ? `<small class="task-detail">${esc(task.detail)}</small>` : ""}${task.evidence ? `<small class="task-evidence">${esc(t("Evidencia"))}: ${esc(task.evidence)}</small>` : ""}${task.note ? `<small class="task-note">${esc(task.note)}</small>` : ""}</div><div class="memory-meta">${meta.map((m) => `<span data-user-content>${esc(m)}</span>`).join("")}</div><div class="memory-actions">${actions}</div></article>`;
+}
+function renderPlan({ tasks, stats, currentTaskId }) {
+  planCurrent = currentTaskId ?? null;
+  $("#planStats").innerHTML = [[stats.done, "hechas"], [stats.doing + stats.review, "en curso"], [stats.todo, "pendientes"], [stats.blocked, "bloqueadas"], [stats.dropped, "descartadas"]].map(([n, label]) => `<span><strong>${n}</strong> ${esc(t(label))}</span>`).join("") + (stats.byCriterion?.length ? `<span>${esc(t("Criterios cubiertos"))}: <strong>${stats.byCriterion.filter((c) => c.covered).length}/${stats.byCriterion.length}</strong></span>` : "");
+  const groups = taskGroups.map(([status, label]) => [label, tasks.filter((task) => task.status === status)]).filter(([, list]) => list.length);
+  const ordered = tasks.filter((task) => task.status !== "dropped");
+  $("#planContent").innerHTML = groups.map(([label, list]) => `<h4>${esc(t(label))}</h4>${list.map((task) => planTaskHtml(task, ordered.indexOf(task), ordered.length)).join("")}`).join("") || `<div class="list-empty">${esc(t("Todavía no hay tareas. El director las creará al planificar, o agrega una abajo."))}</div>`;
+}
+async function loadPlan() {
+  if (!project()) return;
+  try {
+    renderPlan(await planCall({ action: "list" }));
+  } catch (e) {
+    $("#planContent").innerHTML = `<div class="list-empty form-error">${esc(t(e.message))}</div>`;
+  }
+}
+async function planUpdate(body, done) {
+  try {
+    await planCall(body);
+    if (done) toast(done);
+    await loadPlan();
+  } catch (e) { toast(e.message); }
+}
+function openPlan() {
+  const p = project();
+  if (!p) return toast("Selecciona un proyecto.");
+  $("#planTitle").textContent = p.name;
+  const select = $("#planForm").elements.criterion;
+  select.innerHTML = `<option value="">${esc(t("Sin criterio (libre)"))}</option>` + p.criteria.map((c) => `<option value="${esc(c)}">${esc(c.length > 70 ? c.slice(0, 69) + "…" : c)}</option>`).join("");
+  $("#planContent").innerHTML = "";
+  showDialog("#planDialog");
+  void loadPlan();
+}
+$("#planButton").addEventListener("click", openPlan);
+$("#planForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  try {
+    await planCall({ action: "add", title: data.title, criterion: data.criterion });
+    e.target.reset();
+    toast("Tarea agregada al plan.");
+    await loadPlan();
+  } catch (error) { toast(error.message); }
+});
+$("#planContent").addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  const item = button.closest("[data-task]"), id = Number(item?.dataset.task);
+  if (button.dataset.taskDrop) {
+    const note = prompt(t("¿Por qué se descarta esta tarea?"), "");
+    if (note === null) return;
+    return void planUpdate({ action: "drop", id, note: note || t("Descartada por el usuario") }, "Tarea descartada. Sigue en el historial.");
+  }
+  if (button.dataset.taskRestore) return void planUpdate({ action: "restore", id }, "Tarea restaurada.");
+  if (button.dataset.taskUp || button.dataset.taskDown) {
+    const ids = [...$("#planContent").querySelectorAll(".plan-item:not(.retired)")].map((el) => Number(el.dataset.task));
+    const at = ids.indexOf(id), to = button.dataset.taskUp ? at - 1 : at + 1;
+    if (to < 0 || to >= ids.length) return;
+    [ids[at], ids[to]] = [ids[to], ids[at]];
+    return void planUpdate({ action: "reorder", ids });
+  }
+  if (button.dataset.taskEdit) {
+    const text = item.querySelector(".memory-text");
+    const title = [...text.childNodes].find((node) => node.nodeType === 3 && node.textContent.trim())?.textContent.trim() ?? "";
+    text.innerHTML = `<input type="text" value="${esc(title)}" maxlength="140" aria-label="${esc(t("Tarea"))}">`;
+    item.querySelector(".memory-actions").innerHTML = `<button type="button" class="button primary compact" data-task-save="${id}">${esc(t("Guardar"))}</button><button type="button" class="button quiet compact" data-task-cancel="${id}">${esc(t("Cancelar"))}</button>`;
+    text.querySelector("input").focus();
+    return;
+  }
+  if (button.dataset.taskSave) return void planUpdate({ action: "update", id, title: item.querySelector("input").value }, "Tarea corregida.");
+  if (button.dataset.taskCancel) return void loadPlan();
+});
+// A fresh conversation with the selected agent: its next message starts from zero (the summary of the last exchanges travels with it).
+$("#chatReset").addEventListener("click", async () => {
+  if (!project()) return toast("Selecciona un proyecto para conversar.");
+  const target = $("#chatTarget").value;
+  try {
+    await api("chat", { method: "POST", body: { action: "reset", projectId: selected, target: target === "both" ? null : target } });
+    toast(target === "coder" ? "Conversación con Claude reiniciada." : target === "auditor" ? "Conversación con Codex reiniciada." : "Conversación reiniciada para ambos agentes.");
+  } catch (e) { toast(e.message); }
+});
 $("#memoryStatus").addEventListener("change", () => void loadMemory());
 $("#memorySearch").addEventListener("input", () => {
   clearTimeout(memoryTimer);

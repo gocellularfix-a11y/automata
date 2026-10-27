@@ -171,6 +171,21 @@
     "No se pudo retomar la sesión anterior; se inicia una nueva.": "The previous session could not be resumed; starting a new one.",
     "Sin cambios para confirmar.": "No changes to commit.",
     "Recuperaciones": "Recoveries", "Recuperación": "Recovery", "Menciona archivos que ya no existen:": "Mentions files that no longer exist:",
+    "Plan del proyecto": "Project plan", "PLAN DEL PROYECTO": "PROJECT PLAN", "Lo que falta por hacer.": "What is left to do.",
+    "El director mantiene estas tareas y las confirma con evidencia. Puedes agregar, corregir, reordenar y descartar; nada se borra.": "The director keeps these tasks and confirms them with evidence. You can add, correct, reorder and drop; nothing is deleted.",
+    "Una tarea nueva para el plan…": "A new task for the plan…", "Nueva tarea": "New task", "Criterio de aceptación": "Acceptance criterion", "Sin criterio (libre)": "No criterion (free)",
+    "Una tarea ligada a un criterio cuenta para completar el objetivo; descartarla no lo cumple. Las tareas que pides por el chat entran aquí como tuyas.": "A task linked to a criterion counts towards completing the goal; dropping it does not meet it. Tasks you ask for in the chat land here as yours.",
+    "Pendiente": "Pending", "En curso": "In progress", "Por confirmar": "To confirm", "Hecha": "Done", "Bloqueada": "Blocked", "Descartada": "Dropped",
+    "Pendientes": "Pending", "Bloqueadas": "Blocked", "Hechas": "Done", "Descartadas": "Dropped", "hechas": "done", "en curso": "in progress", "pendientes": "pending", "bloqueadas": "blocked", "descartadas": "dropped",
+    "Criterios cubiertos": "Criteria covered", "Criterio": "Criterion", "Libre": "Free", "Depende de": "Depends on", "Claude ahora": "Claude now", "Evidencia": "Evidence", "Subir": "Move up", "Bajar": "Move down", "Tarea": "Task", "Cancelar": "Cancel",
+    "Todavía no hay tareas. El director las creará al planificar, o agrega una abajo.": "No tasks yet. The director creates them when planning, or add one below.",
+    "Tarea agregada al plan.": "Task added to the plan.", "Tarea descartada. Sigue en el historial.": "Task dropped. It stays in the history.", "Tarea restaurada.": "Task restored.", "Tarea corregida.": "Task corrected.",
+    "¿Por qué se descarta esta tarea?": "Why is this task dropped?", "Descartada por el usuario": "Dropped by the user", "Tareas hechas del plan": "Plan tasks done",
+    "Nueva conversación": "New conversation", "Nueva conversación: el siguiente mensaje empieza de cero con este agente": "New conversation: the next message starts from scratch with this agent",
+    "Conversación con Claude reiniciada.": "Conversation with Claude restarted.", "Conversación con Codex reiniciada.": "Conversation with Codex restarted.", "Conversación reiniciada para ambos agentes.": "Conversation restarted for both agents.",
+    "Renovar sesiones cada N rondas": "Renew sessions every N rounds", "La sesión nueva recibe el plan y la memoria, y el contexto deja de crecer. 0 desactiva.": "The new session gets the plan and the memory, and the context stops growing. 0 disables it.",
+    "¡Gracias! No se lo pasé a los agentes porque el mensaje no pide ningún cambio. Describe qué quieres construir, corregir o revisar y se ponen a trabajar.": "Thanks! I did not send this to the agents because it does not ask for a change. Describe what you want built, fixed or checked and they will get to work.",
+    "sessionRefreshRounds: usa un número entre 0 y 50.": "sessionRefreshRounds: enter a number between 0 and 50.",
     "Esperando para continuar": "Waiting to continue", "ESPERA": "WAIT", "Continuar ahora": "Continue now", "En espera": "On hold",
     "Límite de uso de": "Usage limit of", "sin hora confiable": "no reliable reset time", "Sesión de": "Session of", "demasiado larga": "too long", "Fallo pasajero de": "Passing failure of", "sigue a las": "resumes at", "intento": "attempt",
     "Espera a que": "Waiting until", "pueda continuar": "can continue", "Puedes continuar ahora, pausar o detener.": "You can continue now, pause or stop.", "Motivo:": "Reason:",
@@ -217,6 +232,10 @@
       .replace(/^El límite de uso de (Claude|Codex) no se liberó tras (\d+) esperas\. ([\s\S]*)$/, "The $1 usage limit did not clear after $2 waits. $3")
       .replace(/^(Claude|Codex) falló (\d+) veces seguidas por un motivo pasajero\. ([\s\S]*)$/, "$1 failed $2 times in a row for a passing reason. $3")
       .replace(/ · Continúa la tarea interrumpida · /, " · Continues the interrupted task · ")
+      .replace(/^Sesión de (Claude|Codex) renovada tras (\d+) rondas: la nueva recibe el plan y la memoria en el prompt completo\.$/, "$1 session renewed after $2 rounds: the new one gets the plan and the memory in the full prompt.")
+      .replace(/^Plan: (?:(\d+) tarea\(s\) nueva\(s\))?(?:, )?(?:(\d+) actualizada\(s\))?\.$/, (_m, a, b) => `Plan: ${a ? `${a} new task(s)` : ""}${a && b ? ", " : ""}${b ? `${b} updated` : ""}.`)
+      .replace(/^Instrucción entregada al director y anotada en el plan como T(\d+)\. Se revisará antes de la siguiente tarea\.$/, "Instruction delivered to the director and noted in the plan as T$1. It will be reviewed before the next task.")
+      .replace(/^PLAN (\d+)\/(\d+)$/, "PLAN $1/$2")
       .replace(/^Acceso completo para ambos agentes\. Se aplica a la siguiente operación\.$/, "Full access for both agents. Applies to the next operation.")
       .replace(/^Acceso limitado para ambos agentes\. Se aplica a la siguiente operación\.$/, "Limited access for both agents. Applies to the next operation.")
       .replace(/^Permisos para la siguiente operación: acceso completo\.$/, "Permissions for the next operation: full access.")

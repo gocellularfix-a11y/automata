@@ -38,6 +38,14 @@ Fecha: 2026-10-26. Las pruebas con proveedores simulados no equivalen a validar 
 - Instrucciones en cola que no omiten las verificaciones.
 - Token y origen exigidos por la API.
 
+## Plan persistente y memoria conversacional (P2, 27 oct 2026)
+
+`node --test test/*.test.mjs`: **145 aprobadas** (las 133 de P1 más 5 de `test/plan.test.mjs` y 7 de `test/plan-flow.test.mjs`). Ninguna prueba anterior cambió de expectativa.
+
+Con agentes simulados: tareas con dependencias entre nuevas y existentes, historial e ids estables, plan que sobrevive a reabrir el archivo; transiciones, ciclos, referencias y evidencia validados sin dejar rastro; cobertura de criterios y reglas de `complete` y `continue` (descartar no cumple); bloque del plan dentro de 800 tokens y adaptado a Claude; sesiones de chat por agente, intercambios resumidos y aislamiento; ciclo completo con tareas asignadas en orden y confirmadas; decisión inválida devuelta al director tres veces; renovación de sesiones cada N rondas en puntos seguros con registro y medición de contexto; cierre con la revisión entregada sin aplicar el plan dos veces; conversación retomada, reiniciada y aislada; consultas, tareas directas, instrucciones y mensajes casuales; panel y API del plan.
+
+`node scripts/smoke-plan.mjs`: **18 de 18** en Chrome. Los simulacros reales están en `P2_PERSISTENT_PLAN_REPORT.md`.
+
 ## Recuperación autónoma (P1, 27 oct 2026)
 
 `node --test test/*.test.mjs`: **133 aprobadas** (las 115 anteriores más 18 de `test/recovery.test.mjs`). Dos pruebas anteriores cambiaron de expectativa a propósito: un mensaje del chat interrumpido se reencola una vez (antes quedaba interrumpido) y una aprobación con verificaciones fallidas se le devuelve al director hasta tres veces (antes era un error directo).

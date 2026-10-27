@@ -278,6 +278,17 @@ select option { background: #15171b; color: var(--ink); }
 .run-state.paused::before, .run-state.limit::before, .run-state.interrupted::before, .run-state.waiting::before { background: var(--warn); }
 .run-state.waiting::before { box-shadow: 0 0 0 0 #eab96866; animation: ping 2.4s infinite; }
 .memory-stale { color: var(--warn); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.plan-item.current { border-color: #74d39a66; }
+.plan-item .memory-state { display: inline-block; margin-right: 6px; font: 500 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line-strong); color: var(--muted); vertical-align: 1px; }
+.plan-item .task-done { color: var(--ok); border-color: #74d39a47; }
+.plan-item .task-doing, .plan-item .task-current { color: var(--gold); border-color: #e8d5a647; }
+.plan-item .task-review { color: var(--warn); border-color: #eab96847; }
+.plan-item .task-blocked { color: var(--err); border-color: #f2816f47; }
+.plan-item .task-detail, .plan-item .task-evidence, .plan-item .task-note { display: block; margin-top: 3px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.plan-item .task-evidence { color: var(--ok); }
+.plan-item .task-note { color: var(--warn); }
+.plan-add select { max-width: 240px; }
+#chatReset { flex-shrink: 0; }
 .git-item.uncertain { border-color: #f2816f40; }
 .git-item.uncertain .git-kind { color: var(--err); background: #f2816f1a; border-color: #f2816f47; }
 .run-state.complete { color: var(--gold); border-color: #e8d5a640; background: #e8d5a610; }

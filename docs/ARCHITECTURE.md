@@ -14,7 +14,7 @@ Flutter no estaba instalado. Se implementó una interfaz compartida con Electron
 
 ## Máquina de estados
 
-`plan → code → checks → review → apply → code… → complete | blocked | limit`, con `waiting` como estado transitorio ante un límite de uso o un fallo pasajero (ver «Recuperación autónoma»).
+`plan → code → checks → review → apply → code… → complete | blocked | limit`, con `waiting` como estado transitorio ante un límite de uso o un fallo pasajero (ver «Recuperación autónoma»). El director mantiene un plan de tareas persistente que guía las rondas (ver «Plan persistente»).
 
 Solo un proceso de agente se ejecuta a la vez. El director inicial y el auditor son Codex. Las consultas a ambos se serializan. Pausar espera el final de la operación actual; detener cancela el proceso activo. Una interrupción del codificador se recupera verificando y auditando el trabajo parcial.
 
@@ -176,6 +176,20 @@ Desde esta versión, el registro original de cada llamada (`*.jsonl`) también s
 **Escritorio.** `autoStart` (desactivado por defecto) registra o quita Automata en el inicio de sesión de Windows con `app.setLoginItemSettings`, solo en la app empaquetada y solo cuando la persona cambia la opción. No se toca ninguna otra configuración global.
 
 **Auditoría de registros.** `node scripts/audit-secrets.mjs [carpeta de datos] [--quarantine]` revisa los registros históricos (`*.jsonl`, prompts, reportes, eventos, mensajes y las bases de memoria) en busca de secretos. Sin opciones solo informa. Con `--quarantine` mueve cada original a `quarantine/<fecha>/` con permisos de solo dueño, verifica que la copia redactada siga siendo JSON válido y deja un manifiesto con el SHA-256 de ambas versiones.
+
+## Plan persistente y memoria conversacional (P2)
+
+**Tareas.** `server/plan.mjs` guarda el plan en el mismo archivo SQLite del proyecto (esquema 2: `tasks`, `task_history`, `plan_applied`). Una tarea tiene título, detalle, criterio (texto exacto de un criterio de aceptación, o vacío si es de apoyo), estado (`todo`, `doing`, `review`, `done`, `blocked`, `dropped`), dependencias, evidencia, nota, origen (`director` o `user`) y la ronda en que se creó y se cerró. Nada se borra: cada cambio deja una fila de historial. El plan es del proyecto, no del trabajo: un trabajo nuevo lo continúa.
+
+**El director lo mantiene.** La revisión trae `plan.add`, `plan.update` y `task` (la tarea que asigna con `nextPrompt`: `T12` existente o `N1` recién creada). Al planificar debe cubrir cada criterio con al menos una tarea. Todo se valida en una transacción antes de aplicarse: referencias, criterios, transiciones de estado, evidencia para `done`, motivo para `blocked` y `dropped`, ciclos de dependencias, dependencias abiertas de una tarea en curso, y las reglas de la decisión (`continue` exige una tarea asignable; `complete` exige que ninguna tarea ligada a un criterio siga abierta y que cada criterio con tareas tenga al menos una hecha: descartar no cumple). Una decisión inválida se revierte entera y vuelve al director con el motivo por el bucle de tres correcciones de P1. Cada decisión se aplica una sola vez (`plan_applied` con la clave trabajo:ronda:fase), así que un reinicio que reutilice la revisión no la aplica dos veces. Automata marca `doing` la tarea asignada al enviarla a Claude.
+
+**En los prompts** (`plan.brief`): bloque «PLAN DEL PROYECTO» con presupuesto propio de 800 tokens, aparte de los 1 500 de la memoria: la tarea actual completa, las en curso, las por confirmar, las pedidas por el usuario, las bloqueadas, las siguientes por título y las hechas por id. Claude recibe la suya como «TU TAREA AHORA» y las demás como «no las hagas ahora». El bloque queda en `round-NN/plan-<fase>.txt`. Las revisiones sin campo `plan` (agentes simulados, revisiones anteriores) no tocan el plan.
+
+**Sesiones largas.** `sessionRefreshRounds` (8 por defecto, 0 desactiva): en un punto seguro (el inicio de una etapa, nunca en una corrección ni en una continuación), una sesión que ya sirvió N rondas se reemplaza por una nueva con el prompt completo, que trae plan y memoria. Cada renovación queda en `run.sessionLog` y como evento. `run.usageLog` registra por llamada el contexto leído (entrada más caché), la salida y si la sesión se retomó; el resumen por agente va en el estado.
+
+**Conversación por proyecto.** `chat_sessions` guarda la sesión retomable de cada agente; `conversations` un resumen de cada intercambio (tipo, petición, respuesta, archivos tocados). Una consulta o tarea retoma la sesión del agente con un prompt corto; «Nueva conversación» (`POST /api/chat` con `action: reset`) la reinicia y la siguiente sesión recibe los últimos cinco intercambios resumidos (400 tokens). El director recibe en cada revisión las peticiones del usuario desde su última revisión. Tipos: una **consulta** es de solo lectura y no toca el plan; una **tarea directa** que Claude ejecutó entra al plan como tarea del usuario «por confirmar» hasta que el director la confirme con evidencia o la devuelva; una **instrucción** entra al plan como tarea del usuario pendiente que el director asigna o descarta con motivo. Un mensaje casual («buen trabajo», «gracias») lo responde Automata sin llamar a ningún agente (`server/chat.mjs`). Las conversaciones viven en el archivo del proyecto: no se cruzan.
+
+**Panel Plan** (`POST /api/plan`): ver por estado, agregar (ligada a un criterio o libre), corregir, reordenar, descartar con motivo y restaurar, con historial. El contador «PLAN hechas/activas» acompaña a la ronda.
 
 ## Idiomas y configuración (0.4.0)
 
