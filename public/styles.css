@@ -365,6 +365,37 @@ select option { background: #15171b; color: var(--ink); }
 .agent-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
 .agent-status.active { color: var(--agent); }
 .agent-status.active i { background: var(--agent); animation: ping-agent 1.8s infinite; }
+/* Status chip by state: working, watching, paused, waiting, done, needs attention */
+.agent-status { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); }
+.agent-status.tone-work { border-color: var(--agent-line); background: var(--agent-soft); font-weight: 500; }
+.agent-status.tone-watch { border-color: var(--agent-line); }
+.agent-status.tone-watch i { animation-duration: 3s; }
+.agent-status.tone-pause { color: var(--warn); border-color: #eab96847; background: #eab96812; }
+.agent-status.tone-pause i { width: 8px; height: 8px; border-radius: 1px; background: linear-gradient(90deg, var(--warn) 0 35%, transparent 35% 65%, var(--warn) 65%); }
+.agent-status.tone-wait i { background: transparent; border: 1px solid var(--muted); }
+.agent-status.tone-done { color: var(--ok); border-color: #74d39a40; }
+.agent-status.tone-done i { background: var(--ok); }
+.agent-status.tone-alert { color: var(--err); border-color: #f2816f40; background: #f2816f10; }
+.agent-status.tone-alert i { background: var(--err); }
+.agent-clock { font: 11px var(--mono); color: var(--ink-2); opacity: .8; }
+/* The subtitle becomes a live line: what the agent is doing right now */
+.agent-header p.live { display: flex; align-items: baseline; gap: 6px; min-width: 0; color: var(--ink-2); }
+.agent-header p.live .live-verb { color: var(--agent); flex-shrink: 0; }
+.agent-panel[data-tone="pause"] .agent-header p.live .live-verb { color: var(--warn); }
+.agent-panel[data-tone="alert"] .agent-header p.live .live-verb { color: var(--err); }
+.agent-header p.live code { font: 11.5px var(--mono); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.live-dots { display: inline-flex; gap: 3px; margin-left: 2px; flex-shrink: 0; }
+.live-dots i { width: 3px; height: 3px; border-radius: 50%; background: var(--agent); animation: live-dot 1.2s infinite ease-in-out; }
+.live-dots i:nth-child(2) { animation-delay: .2s; }
+.live-dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes live-dot { 0%, 80%, 100% { opacity: .2; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+/* A bar that runs along the top of the panel while the agent works; amber and still when paused */
+.agent-panel[data-tone="work"]::before, .agent-panel[data-tone="watch"]::before { height: 2px; opacity: 1; background: linear-gradient(90deg, transparent 0%, var(--agent) 50%, transparent 100%) 0 0 / 40% 100% no-repeat; animation: agent-bar 1.6s linear infinite; }
+.agent-panel[data-tone="watch"]::before { opacity: .45; animation-duration: 3.2s; }
+.agent-panel[data-tone="pause"]::before { height: 2px; opacity: .8; background: var(--warn); }
+.agent-panel[data-tone="pause"] { border-color: #eab96838; }
+@keyframes agent-bar { from { background-position: -70% 0; } to { background-position: 170% 0; } }
+@media (prefers-reduced-motion: reduce) { .agent-panel[data-tone]::before, .live-dots i { animation: none; } }
 .panel-body { padding: 22px 22px 14px; flex: 1; overflow: auto; }
 .agent-footer { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--line); background: #0a0b0e99; flex-shrink: 0; flex-wrap: wrap; }
 .model-control, .effort-control { display: flex; align-items: center; gap: 9px; height: 34px; padding: 0 4px 0 12px; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--surface-2); margin: 0; transition: border-color .2s; }
@@ -563,6 +594,31 @@ select option { background: #15171b; color: var(--ink); }
 .github-account .account-login { width: auto; }
 .github-account .account-flow, .github-account .account-help { grid-column: 1 / -1; margin: 0; }
 .github-account .account-flow .button { width: auto; }
+/* Who is signed in, account options and the model each agent uses */
+.account-who { margin: -8px 0 10px; font: 12px var(--mono); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.github-account .account-who { margin: 2px 0 0; }
+.account-manage { display: flex; gap: 18px; margin: 0 0 8px; }
+.account-manage .account-text-button { padding: 4px 0; }
+.account-text-button.danger { color: var(--muted); }
+.account-text-button.danger:hover { color: #f08a7e; }
+.account-text-button:disabled { opacity: .45; cursor: not-allowed; text-decoration: none; }
+.modal label.account-model { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; font-size: 12px; color: var(--muted); }
+.modal label.account-model select { flex: 1; min-width: 0; }
+/* Everything fits on one screen: taglines go, spacing tightens */
+.accounts-modal { padding: 26px 30px; }
+.accounts-modal .modal-heading h2 { font-size: 36px; }
+.accounts-modal .account-description { display: none; }
+.accounts-modal .account-card { padding: 18px 20px; }
+.accounts-modal .account-card-top { margin-bottom: 12px; }
+.accounts-modal .account-card h3 { margin-bottom: 6px; }
+.accounts-modal .account-message { min-height: 0; margin-bottom: 10px; }
+.accounts-modal .account-help { margin-top: 4px; }
+.accounts-modal .github-account { margin-top: 14px; padding: 14px 20px; }
+.modal label.plan-row { margin: 14px 0 0; padding: 10px 14px; }
+.plan-row span { display: grid; gap: 4px; }
+.plan-row strong { font-size: 13px; color: var(--ink); font-weight: 500; }
+.plan-row small { font-size: 12px; line-height: 1.6; color: var(--muted); }
+.accounts-modal .account-notice { margin: 10px 0 6px; padding: 10px 14px; }
 .project-source-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0; border: 0; margin: 0 0 20px; }
 .project-source-picker legend { font-size: 12.5px; color: var(--ink-2); font-weight: 500; margin-bottom: 10px; padding: 0; }
 .modal .source-choice { display: flex; align-items: center; gap: 11px; border: 1px solid var(--line-strong); border-radius: 13px; padding: 14px 13px; margin: 0; cursor: pointer; background: var(--surface-2); transition: border-color .2s, background .2s; }
@@ -653,6 +709,16 @@ select option { background: #15171b; color: var(--ink); }
 .git-kind { flex-shrink: 0; font: 500 10px var(--mono); letter-spacing: .1em; color: var(--warn); background: #eab9681a; border: 1px solid #eab96847; border-radius: 6px; padding: 3px 8px; }
 .git-text { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-actions { display: flex; gap: 8px; flex-shrink: 0; }
+/* The app the director proposes to run, and the app once it is running */
+.git-kind.app-kind { color: var(--ok); background: #74d39a1a; border-color: #74d39a47; }
+.git-kind.app-kind.live { box-shadow: 0 0 0 0 #74d39a66; animation: ping 1.8s infinite; }
+.app-text { display: flex; align-items: baseline; gap: 10px; }
+.app-text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-text > span { flex-shrink: 0; }
+.app-text code { font: 12px var(--mono); color: var(--ink); min-width: 0; }
+.app-text small { color: var(--muted); font-size: 12px; min-width: 0; }
+.app-panel { display: grid; gap: 6px; min-width: 0; }
+.app-output { margin: 0; max-height: 160px; overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: #050608; font: 11px/1.5 var(--mono); color: var(--muted); white-space: pre-wrap; word-break: break-word; }
 
 /* Check rows (settings and new repository) */
 .modal label.check-row { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); cursor: pointer; transition: border-color .2s; }

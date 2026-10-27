@@ -4,7 +4,7 @@ import os from "node:os";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createRequire } from "node:module";
-import { MODES, REVIEW_SCHEMA } from "./config.mjs";
+import { MODES, REVIEW_SCHEMA, agentEnv } from "./config.mjs";
 export function findCodexNative(packageRoot, { platform = process.platform, arch = process.arch } = {}) {
   if (platform !== "win32" || !["x64", "arm64"].includes(arch)) return null;
   const target = arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
@@ -242,7 +242,7 @@ export class CliAgents {
         cwd: project.directory,
         input: prompt,
         signal,
-        env: executable.env,
+        env: { ...executable.env, ...agentEnv(settings, role) },
         timeoutMs: settings.timeoutMinutes * 6e4,
         onLine: (line, stream) => {
           if (stream === "stderr") {
@@ -366,6 +366,6 @@ export class DemoAgents {
       return { text: (en ? "Demo: implemented a greeting and its test. Automata will run node --test to verify it. No AI was called." : "Demostración: implementé un saludo con su prueba. Automata ejecutará node --test para verificarlo. No se llamó a ninguna AI.") };
     }
     const complete = phase !== "plan";
-    return { review: { decision: complete ? "complete" : "continue", summary: complete ? (en ? "Demo complete: the greeting and its test were created. Actual checks ran separately." : "Demostración completada: el saludo y su prueba están creados. Las verificaciones reales se ejecutaron por separado.") : (en ? "Prepared a small task to try the complete workflow without using credits." : "Preparé una tarea pequeña para probar el ciclo completo sin consumir créditos."), nextPrompt: complete ? "" : (en ? "Create greet.mjs with a greeting and greet.test.mjs with a node:test test." : "Crea greet.mjs con un saludo y greet.test.mjs con una prueba de node:test."), findings: [], criteria: project.criteria.map((criterion) => ({ criterion, met: complete, evidence: complete ? (en ? "Sample greet.mjs and greet.test.mjs; node --test results." : "greet.mjs y greet.test.mjs del ejemplo; resultados de node --test.") : (en ? "Awaiting execution." : "Pendiente de ejecución.") })) } };
+    return { review: { decision: complete ? "complete" : "continue", summary: complete ? (en ? "Demo complete: the greeting and its test were created. Actual checks ran separately." : "Demostración completada: el saludo y su prueba están creados. Las verificaciones reales se ejecutaron por separado.") : (en ? "Prepared a small task to try the complete workflow without using credits." : "Preparé una tarea pequeña para probar el ciclo completo sin consumir créditos."), nextPrompt: complete ? "" : (en ? "Create greet.mjs with a greeting and greet.test.mjs with a node:test test." : "Crea greet.mjs con un saludo y greet.test.mjs con una prueba de node:test."), findings: [], criteria: project.criteria.map((criterion) => ({ criterion, met: complete, evidence: complete ? (en ? "Sample greet.mjs and greet.test.mjs; node --test results." : "greet.mjs y greet.test.mjs del ejemplo; resultados de node --test.") : (en ? "Awaiting execution." : "Pendiente de ejecución.") })), run: complete ? { ready: true, command: `node --input-type=module -e "const { greet } = await import('./greet.mjs'); console.log(greet('compa'))"`, url: "", note: en ? "Prints the greeting in the console." : "Muestra el saludo en la consola." } : { ready: false, command: "", url: "", note: "" } } };
   }
 }

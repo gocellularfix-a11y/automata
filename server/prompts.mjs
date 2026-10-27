@@ -30,41 +30,52 @@ function gitSection(git) {
   return `GIT (lo decides tú, sin ejecutar nada): ${state} ${policy}
 En el campo git: commit=true con un mensaje convencional (feat:, fix:, test:, docs:) cuando haya un hito verificable y las verificaciones pasen; branch="feature/…" solo al planificar, si conviene trabajar fuera de la rama principal; push=true solo cuando el trabajo ya confirmado deba publicarse; merge_into="main" solo al completar el objetivo con todo verificado. Si no corresponde ninguna operación, deja commit=false, push=false y cadenas vacías.`;
 }
-const phaseText = (phase) => phase === "plan"
+const phaseText = (phase, watched = false) => phase === "plan"
   ? "PLANIFICAR la primera tarea: inspecciona los archivos del proyecto y entrega un nextPrompt concreto para Claude. No marques complete en esta fase."
-  : "AUDITAR el resultado: inspecciona el código real, los cambios y la evidencia. Usa el diff si hay Git; si no, revisa los archivos directamente. El reporte del codificador no basta para aprobar.";
+  : watched
+    ? "AUDITAR el resultado. Estuviste observando al codificador mientras trabajaba (bitácora de abajo): parte de ahí y del diff. NO vuelvas a leer todo el proyecto; abre solo los archivos que tocó o los que necesites para confirmar un criterio o una sospecha concreta. El reporte y la bitácora no bastan para aprobar: confirma en el código real lo que vayas a aprobar."
+    : "AUDITAR el resultado: inspecciona el código real, los cambios y la evidencia. Usa el diff si hay Git; si no, revisa los archivos directamente. El reporte del codificador no basta para aprobar.";
+const watchSection = (watch) => watch ? `LO QUE VISTE HACER AL CODIFICADOR DESDE TU ÚLTIMA REVISIÓN (Automata lo registró en vivo):
+${watch}` : "";
+// The director tells Automata when there is something the user can open; Automata asks before running it.
+const runSection = `APP (lo decides tú, sin ejecutar nada): en el campo run indica si ya hay algo que el usuario pueda abrir y probar, aunque falten criterios. ready=true con command = el comando exacto para arrancarla desde la carpeta del proyecto (por ejemplo npm start, npm run dev o python main.py; una sola línea, sin instalar nada que no esté ya instalado); url = la dirección local si se abre en el navegador (http://localhost:PUERTO), o cadena vacía; note = una frase de lo que verá el usuario. Si todavía no hay nada que correr o es una biblioteca sin app, ready=false y cadenas vacías. Al marcar complete indica siempre cómo correrla si aplica. Automata le preguntará al usuario antes de ejecutar el comando.`;
 const language = (settings) => settings.language === "en" ? "English" : "Español";
-export function directorPrompt(project, settings, { phase, report = "", evidence = "", history = "", team = null, git = null, short = false }) {
+export function directorPrompt(project, settings, { phase, report = "", evidence = "", history = "", team = null, git = null, short = false, watch = "" }) {
   const teamLine = team ? `
 EQUIPO: eres el revisor ${team.index + 1} de ${team.count}. Para completar el objetivo todos los revisores deben aprobar; evalúa de forma independiente y no asumas que otro revisor ya comprobó algo.` : "";
+  const watched = phase === "review" && !!watch;
   const closing = "Entrega el JSON solicitado. decision=continue: nextPrompt con una tarea concreta y verificable del tamaño elegido. decision=complete: evidencia para TODOS los criterios exactos, ninguna verificación fallida y ningún hallazgo critical/major pendiente. decision=blocked: explica qué información o condición externa falta. No inventes comprobaciones realizadas. Cada hallazgo debe incluir archivo y evidencia. Razona de forma independiente; preserva las limitaciones y los fallos.";
   if (short) {
     // Same session as before: the rules, project and criteria from the first instruction still apply.
     return `Seguimos en la misma sesión como director y auditor independiente de Automata. Siguen vigentes tus reglas, el proyecto y los criterios de la primera instrucción (eres de solo lectura).
 IDIOMA DE RESPUESTA: ${language(settings)}. Usa ese idioma en summary, nextPrompt, findings y evidence; conserva las claves JSON y el texto exacto de cada criterion.${teamLine}
-FASE: ${phaseText(phase)}
+FASE: ${phaseText(phase, watched)}
 REPORTE DEL CODIFICADOR:
 ${report || "Todavía no hay ejecución."}
+${watchSection(watch)}
 EVIDENCIA RECOGIDA POR AUTOMATA:
 ${evidence}
 ${gitSection(git)}
+${runSection}
 ${closing}`;
   }
   return `Eres el director y auditor independiente de Automata. ${directorRules}
 IDIOMA DE RESPUESTA: ${language(settings)}. Usa ese idioma en summary, nextPrompt, findings y evidence; conserva las claves JSON y el texto exacto de cada criterion.${teamLine}
 ${brief(project, settings)}
-FASE: ${phaseText(phase)}
+FASE: ${phaseText(phase, watched)}
 ${history ? "CONTEXTO DE LA RONDA ANTERIOR:\n" + history : ""}
 REPORTE DEL CODIFICADOR:
 ${report || "Todavía no hay ejecución."}
+${watchSection(watch)}
 EVIDENCIA RECOGIDA POR AUTOMATA:
 ${evidence}
 ${gitSection(git)}
+${runSection}
 ${closing}`;
 }
 export function coderPrompt(project, settings, task, baseline, team = null, short = false) {
   const teamLine = team ? ` (codificador ${team.index + 1} de ${team.count}; los codificadores se turnan por ronda, así que revisa el trabajo previo en lugar de duplicarlo)` : "";
-  const report = `Al terminar entrega un reporte en ${language(settings)} con: cambios y archivos, comprobaciones realmente ejecutadas y resultados, fallos o limitaciones, y trabajo pendiente. No declares completado el objetivo global: eso lo decide la auditoría independiente.`;
+  const report = `Al terminar entrega un reporte en ${language(settings)} con: cambios y archivos, comprobaciones realmente ejecutadas y resultados, fallos o limitaciones, trabajo pendiente y, si la app ya se puede abrir, el comando para correrla. No declares completado el objetivo global: eso lo decide la auditoría independiente.`;
   const noGit = "No hagas commit, push ni merge por tu cuenta: el director decide cuándo y Automata lo ejecuta.";
   if (short) {
     return `Seguimos en la misma sesión como codificador de Automata${teamLine}. Siguen vigentes el proyecto, los criterios y tus reglas de la primera instrucción.

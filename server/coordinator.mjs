@@ -6,6 +6,8 @@ import { DEFAULT_SETTINGS, validateProject, validateSettings, validateReview, te
 import { CliAgents, DemoAgents, gitEvidence, runChecks } from "./agents.mjs";
 import { GitOps, normalizeGit, hasGitActions } from "./git.mjs";
 import { directorPrompt, coderPrompt, chatPrompt } from "./prompts.mjs";
+import { observe, digest } from "./watch.mjs";
+import { AppRunner } from "./apprun.mjs";
 const LIVE = /* @__PURE__ */ new Set(["running", "pausing"]);
 // When checks fail the executor fixes them straight away; the director only steps in after this many tries.
 const MAX_AUTO_FIXES = 3;
@@ -22,7 +24,7 @@ VERIFICACIONES FALLIDAS:
 ${failing.map((check) => `$ ${check.command ?? "(sin comando)"} → código ${check.code ?? "?"}\n${tail(check.output, 2500)}${check.stderr ? "\n" + tail(check.stderr, 800) : ""}`).join("\n\n")}`;
 const gitView = ({ kind, message, branch, into, push }) => ({ kind, message, branch, into, push });
 export class Coordinator extends EventEmitter {
-  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git } = {}) {
+  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app } = {}) {
     super();
     this.store = store;
     this.demo = demo;
@@ -31,6 +33,22 @@ export class Coordinator extends EventEmitter {
     this.evidence = evidence;
     this.git = git ?? new GitOps();
     this.gitBusy = false;
+    this.app = app ?? new AppRunner();
+    // App output can arrive many times per second; the UI only needs a refresh now and then.
+    this.app.on("change", () => {
+      const st = this.app.state;
+      if (st && st.status !== "running" && !st.announced) {
+        st.announced = true;
+        const text = st.status === "failed" ? `La app no pudo iniciar: ${st.error}` : st.status === "stopped" ? "App detenida." : `La app se cerró (código ${st.code}).`;
+        this.event({ role: "system", kind: st.status === "exited" && st.code === 0 || st.status === "stopped" ? "stop" : "warning", text, runId: st.runId, projectId: st.projectId });
+      }
+      if (this.appTimer) return;
+      this.appTimer = setTimeout(() => {
+        this.appTimer = null;
+        this.notify();
+      }, 600);
+      this.appTimer.unref?.();
+    });
     this.projects = store.read("projects.json", []);
     this.settings = validateSettings(store.read("settings.json", DEFAULT_SETTINGS));
     this.runs = store.read("runs.json", []);
@@ -65,7 +83,7 @@ export class Coordinator extends EventEmitter {
     for (const [name, data] of Object.entries({ projects: this.projects, settings: this.settings, runs: this.runs, events: this.events.slice(-700), messages: this.messages.slice(-200) })) this.store.write(`${name}.json`, data);
   }
   snapshot() {
-    return { projects: this.projects, settings: this.settings, runs: this.runs.map(({ baseline, coderReport, nextPrompt, sessions, ...r }) => r), activeId: this.active?.id ?? null, events: this.events.slice(-250), messages: this.messages.slice(-100), demo: this.demo, busy: this.busy };
+    return { projects: this.projects, settings: this.settings, runs: this.runs.map(({ baseline, coderReport, nextPrompt, sessions, watch, ...r }) => ({ ...r, watched: watch?.length ?? 0 })), activeId: this.active?.id ?? null, events: this.events.slice(-250), messages: this.messages.slice(-100), demo: this.demo, busy: this.busy, app: this.app.view() };
   }
   notify() {
     this.emit("state", this.snapshot());
@@ -104,7 +122,11 @@ export class Coordinator extends EventEmitter {
   updateSettings(input) {
     const previousAccess = this.settings.accessMode;
     this.settings = validateSettings(input);
-    if (this.active?.settings) this.active.settings.language = this.settings.language;
+    if (this.active?.settings) {
+      this.active.settings.language = this.settings.language;
+      // Plan or API key is a property of this PC, not of a run.
+      this.active.settings.planOnly = this.settings.planOnly;
+    }
     if (previousAccess !== this.settings.accessMode && this.active?.settings && this.active.status !== "complete") {
       this.active.settings.accessMode = this.settings.accessMode;
       this.event({ role: "system", kind: "phase", text: `Permisos para la siguiente operación: acceso ${this.settings.accessMode === "full" ? "completo" : "limitado"}.` });
@@ -119,6 +141,8 @@ export class Coordinator extends EventEmitter {
     if (!p) throw new Error("Selecciona un proyecto.");
     validateProject(p);
     const run = { id: randomUUID(), projectId: p.id, project: { ...p }, settings: JSON.parse(JSON.stringify(this.settings)), status: "running", stage: "plan", round: 0, createdAt: (/* @__PURE__ */ new Date()).toISOString(), updatedAt: (/* @__PURE__ */ new Date()).toISOString(), baseline: "", coderReport: "", nextPrompt: "", review: null, checks: [], tokens: 0, costUsd: 0, sessions: {}, gitQueue: [] };
+    // A new run of the project replaces any question still open from an earlier one.
+    for (const old of this.runs) if (old.projectId === p.id) for (const offer of old.runOffers ?? []) if (offer.status === "pending") offer.status = "superseded";
     this.runs.unshift(run);
     this.active = run;
     this.event({ role: "system", kind: "start", text: `${this.demo ? "Demostración · " : ""}Iniciando ${p.name}. El director preparará la primera tarea.` });
@@ -202,6 +226,7 @@ export class Coordinator extends EventEmitter {
         r.actualModels ??= {};
         r.actualModels[role] = e.model;
       }
+      if (role === "coder") observe(r.watch ??= [], e);
       this.event(team.length > 1 ? { ...e, agent: agent.label } : e);
       } });
       if (watcher) await new Promise(resolve => setTimeout(resolve, 50));
@@ -317,6 +342,51 @@ export class Coordinator extends EventEmitter {
     }
     return item;
   }
+  // The director said the app can be opened: ask the user instead of running anything on our own.
+  offerRun(r, review) {
+    const run = review.run;
+    if (!run?.ready || !run.command) return null;
+    const final = review.decision === "complete";
+    r.runOffers ??= [];
+    const app = this.app.view();
+    if (app?.status === "running" && app.projectId === r.projectId && app.command === run.command) return null;
+    const pending = r.runOffers.find((offer) => offer.status === "pending");
+    if (pending && pending.command === run.command && !final) return null;
+    // Mid-run the user is asked once per command; once the goal is done they are asked again.
+    if (!final && r.runOffers.some((offer) => offer.command === run.command)) return null;
+    if (pending) pending.status = "superseded";
+    const offer = { id: randomUUID(), command: run.command, url: run.url, note: run.note, final, status: "pending", round: r.round, at: (/* @__PURE__ */ new Date()).toISOString() };
+    r.runOffers.push(offer);
+    this.event({ role: "auditor", kind: "runoffer", text: final ? "Proyecto terminado. ¿Quieres correr la app?" : "La app ya se puede correr. ¿Quieres probarla?", offer: { command: offer.command, url: offer.url, note: offer.note } });
+    return offer;
+  }
+  resolveRun(runId, offerId, decision) {
+    const r = this.runs.find((run) => run.id === runId);
+    const offer = r?.runOffers?.find((entry) => entry.id === offerId);
+    if (!offer) throw new Error("No se encontró esa propuesta.");
+    if (offer.status !== "pending") throw new Error("Esa propuesta ya se resolvió.");
+    if (!["approve", "reject"].includes(decision)) throw new Error("Decisión no válida.");
+    const tag = { runId: r.id, projectId: r.projectId };
+    if (decision === "reject") {
+      offer.status = "declined";
+      this.event({ role: "system", kind: "pause", text: "La app no se corrió. Puedes pedirlo después en el chat.", ...tag });
+    } else {
+      this.app.start({ directory: r.project.directory, command: offer.command, url: offer.url, projectId: r.projectId, runId: r.id });
+      offer.status = "started";
+      this.event({ role: "system", kind: "start", text: `Corriendo la app · ${offer.command}`, ...tag });
+    }
+    offer.doneAt = (/* @__PURE__ */ new Date()).toISOString();
+    this.persist();
+    this.notify();
+    return offer;
+  }
+  async appControl(action) {
+    if (action === "stop") await this.app.stop();
+    else if (action === "dismiss") this.app.dismiss();
+    else throw new Error("Acción desconocida.");
+    this.notify();
+    return this.app.view();
+  }
   async loop() {
     const r = this.active, p = r.project, s = r.settings, root = this.store.runDir(r.id);
     if (!r.baseline) r.baseline = await this.evidence(p.directory);
@@ -360,10 +430,13 @@ ${state}`;
         const team = teamOf(s, "auditor"), reviewers = phase === "plan" ? 1 : team.length;
         const reviews = [];
         let projectChanged = false;
+        // Everything the coder did since the last review, as the director "saw" it happen.
+        const watched = r.watch?.length ?? 0, watch = digest(r.watch, p.directory);
+        if (watched) fs.writeFileSync(path.join(dir, "watch.txt"), watch);
         for (let i = 0; i < reviewers; i++) {
           const reviewDir = i === 0 ? dir : path.join(dir, `reviewer-${i + 1}`);
           fs.mkdirSync(reviewDir, { recursive: true });
-          const options = { phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo } };
+          const options = { phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo }, watch };
           const prompts = { full: directorPrompt(p, s, { ...options, evidence: evidenceFull }), short: directorPrompt(p, s, { ...options, evidence: state, short: true }) };
           const result = await this.invoke("auditor", prompts, phase, reviewDir, i);
           reviews.push(validateReview(result.review, p, phase));
@@ -386,8 +459,11 @@ ${state}`;
         review.git = normalizeGit(review.git);
         fs.writeFileSync(path.join(dir, "review.json"), JSON.stringify(review, null, 2));
         r.review = review;
+        // The director has seen it: the next review only gets what happens from here on.
+        r.watch = (r.watch ?? []).slice(watched);
         this.event({ role: "auditor", kind: "review", text: review.summary, review });
         if (review.decision !== "blocked") await this.applyGit(review);
+        if (review.decision !== "blocked") this.offerRun(r, review);
         if (review.decision === "complete") {
           r.status = "complete";
           r.stage = "complete";
@@ -531,7 +607,11 @@ ${message.text}`;
               const dir = path.join(this.store.directory, "chats", message.id, role);
               fs.mkdirSync(dir, { recursive: true });
               message.settings = { ...this.settings };
-              const result = await this.agents.run({ role, phase: message.kind === "task" ? "task" : "chat", prompt: chatPrompt(project, role, message.text, this.runs.find((r) => r.projectId === project.id)?.review?.summary, message.settings, { kind: message.kind, previousAnswers: message.answers }), project, settings: message.settings, directory: dir, signal: withinRun ? this.controller.signal : this.chatController.signal, emit: (e) => this.event({ ...e, projectId: project.id }) });
+              const result = await this.agents.run({ role, phase: message.kind === "task" ? "task" : "chat", prompt: chatPrompt(project, role, message.text, this.runs.find((r) => r.projectId === project.id)?.review?.summary, message.settings, { kind: message.kind, previousAnswers: message.answers }), project, settings: message.settings, directory: dir, signal: withinRun ? this.controller.signal : this.chatController.signal, emit: (e) => {
+                // Work asked from the chat also goes in front of the director's eyes.
+                if (e.role === "coder" && this.active?.projectId === project.id && this.active.status !== "complete") observe(this.active.watch ??= [], e);
+                this.event({ ...e, projectId: project.id });
+              } });
               message.answers.push({ role, text: result.text });
             } catch (e) {
               message.answers.push({ role, text: e.message, error: true });
@@ -566,6 +646,9 @@ ${message.text}`;
   async close() {
     this.controller?.abort();
     this.chatController?.abort();
+    await this.app.stop().catch(() => {
+    });
+    clearTimeout(this.appTimer);
     await this.pending?.catch(() => {
     });
     await this.chatPending?.catch(() => {

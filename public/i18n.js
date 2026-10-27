@@ -94,6 +94,31 @@
     "líneas": "lines",
     "Operación de Git ejecutada.": "Git operation executed.",
     "Operación de Git rechazada.": "Git operation rejected.",
+    "Esperando": "Waiting", "Verificando": "Checking", "Pausa pedida": "Pause requested", "Necesita tu decisión": "Needs your decision", "Error": "Error", "Interrumpido": "Interrupted",
+    "Ejecutando": "Running", "Editando": "Editing", "Escribiendo": "Writing", "Leyendo": "Reading", "Buscando": "Searching", "Organizando sus tareas": "Organizing its tasks", "Usando": "Using", "Pensando": "Thinking", "Git": "Git",
+    "Trabajando en tu petición": "Working on your request", "Preparando la respuesta": "Preparing the answer", "Termina lo actual y se pausa": "Finishing the current step, then pausing",
+    "Empezando la tarea": "Starting the task", "Planificando la primera tarea": "Planning the first task", "Revisando lo que hizo Claude": "Reviewing what Claude did", "Corriendo las verificaciones": "Running the checks",
+    "Sigue a Claude": "Following Claude", "Se pausa cuando Claude termine": "Pauses when Claude finishes", "acciones registradas": "actions logged", "Espera la tarea del director": "Waiting for the director's task", "Pulsa Continuar para seguir": "Press Continue to go on",
+    "Lee su revisión y responde en el chat": "Read its review and reply in the chat", "Revisa el error y pulsa Continuar": "Check the error and press Continue", "Sube el límite y pulsa Continuar": "Raise the limit and press Continue", "Pulsa Continuar para retomar": "Press Continue to resume",
+    "Cambiar cuenta": "Switch account", "Cerrar sesión": "Sign out", "Modelo": "Model", "Clave de API": "API key", "Plan": "Plan", "Cuenta de Claude": "Claude account", "Plan de ChatGPT": "ChatGPT plan",
+    "Usar solo mis planes": "Use only my plans", "Claves encontradas en Windows": "Keys found in Windows", "no se usan": "not used",
+    "Claude y Codex trabajan con tu plan, como en la terminal. Automata nunca usa claves de API, que cobran por uso.": "Claude and Codex work with your plan, as in the terminal. Automata never uses API keys, which bill per use.",
+    "Si hay una clave de API en Windows, Claude o Codex la usarán y se cobrará por uso, aparte de tu plan.": "If Windows has an API key, Claude or Codex will use it and bill per use, on top of your plan.",
+    "¿Cerrar la sesión de": "Sign out of", "También se cerrará en la terminal de esta PC.": "It will also sign out in this PC's terminal.",
+    "Usa tu plan de Claude, como en la terminal.": "Uses your Claude plan, as in the terminal.", "Usa tu plan de ChatGPT, como en la terminal.": "Uses your ChatGPT plan, as in the terminal.",
+    "Conectado con una clave de API: se cobra por uso, aparte de tu plan.": "Connected with an API key: billed per use, on top of your plan.",
+    "Conectado con una clave de API de OpenAI: se cobra por uso, aparte de tu plan.": "Connected with an OpenAI API key: billed per use, on top of your plan.",
+    "Termina o cancela el acceso pendiente antes de cerrar la sesión.": "Finish or cancel the pending sign-in before signing out.",
+    "APP": "APP", "Correr": "Run", "Ahora no": "Not now", "Abrir": "Open", "Ver salida": "Show output", "Ocultar salida": "Hide output", "Cerrar": "Close",
+    "En marcha": "Running", "Detenida": "Stopped", "No pudo iniciar": "Could not start", "Se cerró": "Exited", "código": "code", "Sin salida todavía.": "No output yet.",
+    "Proyecto terminado. ¿Quieres correr la app?": "Project finished. Do you want to run the app?",
+    "La app ya se puede correr. ¿Quieres probarla?": "The app can run now. Do you want to try it?",
+    "Corriendo la app.": "Running the app.", "De acuerdo, no se corre por ahora.": "OK, it won't run for now.", "App detenida.": "App stopped.", "Panel de la app cerrado.": "App panel closed.",
+    "La app no se corrió. Puedes pedirlo después en el chat.": "The app was not run. You can ask for it later in the chat.",
+    "Ya hay una app corriendo. Detenla antes de abrir otra.": "An app is already running. Stop it before opening another.",
+    "Detén la app antes de cerrar su panel.": "Stop the app before closing its panel.",
+    "No se encontró esa propuesta.": "That proposal was not found.", "Esa propuesta ya se resolvió.": "That proposal was already resolved.",
+    "Observando": "Watching", "El director sigue lo que hace Claude y lo revisará sin releer todo el proyecto.": "The director follows what Claude does and will review it without rereading the whole project.",
     "Git y proyectos": "Git and projects",
     "Decisiones de Git del director": "Director's Git decisions",
     "Commit automático; push y merge con mi aprobación": "Automatic commits; push and merge need my approval",
@@ -152,6 +177,7 @@
       .replace(/^Permisos para la siguiente operación: acceso limitado\.$/, "Permissions for the next operation: limited access.")
       .replace(/^Iniciando (.+)\. El director preparará la primera tarea\.$/, "Starting $1. The director will prepare the first task.")
       .replace(/^Verificando · /, "Checking · ").replace(/^Aprobado · /, "Passed · ").replace(/^Falló · /, "Failed · ")
+      .replace(/^Corriendo la app · /, "Running the app · ").replace(/^La app se cerró \(código (-?\d+)\)\.$/, "The app exited (code $1).").replace(/^La app no pudo iniciar: /, "The app could not start: ")
       .replace(/^Verificaciones fallidas: el ejecutor corrige directamente \((\d+)\/(\d+)\)\.$/, "Checks failed: the executor is fixing them directly ($1/$2).")
       .replace(/^Archivos sensibles excluidos del commit: (.+)$/, "Sensitive files left out of the commit: $1")
       .replace(/^Commit ([0-9a-f]+)$/, "Commit $1").replace(/^Push de (.+)$/, "Push of $1")

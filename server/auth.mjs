@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { findAgent, runProcess, killTree, nodeEnv } from "./agents.mjs";
 import { findGitHub } from "./github.mjs";
+import { API_KEY_VARIABLES } from "./config.mjs";
 
 const aiRoles = ["coder", "auditor"];
 const roles = [...aiRoles, "github"];
@@ -24,7 +25,8 @@ export function interpretStatus(role, result) {
   if (role === "github") {
     const connected = result.code === 0 && /logged in to github\.com account/i.test(text);
     const disconnected = /not logged|not logged into|gh auth login/i.test(text);
-    return { connected, status: connected ? "connected" : disconnected ? "disconnected" : "error", message: connected ? "Sesión de GitHub disponible en esta PC." : disconnected ? "Conecta GitHub para clonar tus repositorios." : "No se pudo verificar GitHub. Revisa GitHub CLI, tu conexión y vuelve a comprobar." };
+    const account = connected ? /logged in to github\.com account ([A-Za-z0-9-]{1,39})/i.exec(text)?.[1] ?? null : null;
+    return { connected, account, status: connected ? "connected" : disconnected ? "disconnected" : "error", message: connected ? "Sesión de GitHub disponible en esta PC." : disconnected ? "Conecta GitHub para clonar tus repositorios." : "No se pudo verificar GitHub. Revisa GitHub CLI, tu conexión y vuelve a comprobar." };
   }
   if (role === "coder") {
     let data;
@@ -33,21 +35,26 @@ export function interpretStatus(role, result) {
     }
     const connected = result.code === 0 && data.loggedIn === true;
     const method = typeof data.authMethod === "string" ? data.authMethod : "unknown";
-    return { connected, status: connected ? "connected" : "disconnected", method,
-      message: connected ? (method === "claude.ai" ? "Sesión de Claude activa en esta PC." : "Credenciales de Claude disponibles en esta PC.") : "Inicia sesión con tu cuenta de Claude." };
+    // Only names are kept: the email of the account and where an API key comes from, never the key.
+    const email = typeof data.email === "string" ? data.email : typeof data.account?.email === "string" ? data.account.email : null;
+    const keySource = method === "api_key" && typeof data.apiKeySource === "string" ? data.apiKeySource.slice(0, 60) : null;
+    const plan = method === "claude.ai" && typeof data.subscriptionType === "string" ? data.subscriptionType.slice(0, 30) : null;
+    return { connected, status: connected ? "connected" : "disconnected", method, account: connected ? email : null, plan, keySource,
+      message: !connected ? "Inicia sesión con tu cuenta de Claude." : method === "claude.ai" ? "Usa tu plan de Claude, como en la terminal." : method === "api_key" ? "Conectado con una clave de API: se cobra por uso, aparte de tu plan." : "Credenciales de Claude disponibles en esta PC." };
   }
   const connected = result.code === 0 && /logged in/i.test(text) && !/not logged in/i.test(text);
   const disconnected = /not logged in|no credentials|not authenticated/i.test(text);
   const method = connected ? /api key/i.test(text) ? "api_key" : /access token/i.test(text) ? "access_token" : /chatgpt/i.test(text) ? "chatgpt" : "other" : "none";
   const diagnostic = /could not find home directory/i.test(text) ? "Codex no pudo localizar tu perfil de usuario. Abre Automata.exe desde tu escritorio de Windows y vuelve a comprobar." : "No se pudo verificar Codex. Revisa su instalación y vuelve a comprobar.";
   return { connected, status: connected ? "connected" : disconnected ? "disconnected" : "error", method,
-    message: connected ? (method === "chatgpt" ? "Sesión de ChatGPT activa en Codex." : "Credenciales de Codex disponibles en esta PC.") : disconnected ? "Inicia sesión con ChatGPT para conectar al director." : diagnostic };
+    message: connected ? (method === "chatgpt" ? "Usa tu plan de ChatGPT, como en la terminal." : method === "api_key" ? "Conectado con una clave de API de OpenAI: se cobra por uso, aparte de tu plan." : "Credenciales de Codex disponibles en esta PC.") : disconnected ? "Inicia sesión con ChatGPT para conectar al director." : diagnostic };
 }
 
 // OAuth URLs and device codes live only in memory; never write CLI login output to disk.
 export class AuthManager {
-  constructor({ demo = false, find = role => role === "github" ? findGitHub() : findAgent(role), run = runProcess, spawnLogin = spawn, stop = killTree, timeoutMs = 10 * 60 * 1000 } = {}) {
-    Object.assign(this, { demo, find, run, spawnLogin, stop, timeoutMs });
+  // agentEnv(role): extra environment for each CLI, so the plan login is used instead of a Windows API key.
+  constructor({ demo = false, find = role => role === "github" ? findGitHub() : findAgent(role), run = runProcess, spawnLogin = spawn, stop = killTree, timeoutMs = 10 * 60 * 1000, agentEnv = () => ({}), env = process.env } = {}) {
+    Object.assign(this, { demo, find, run, spawnLogin, stop, timeoutMs, agentEnv, env });
     this.providers = Object.fromEntries(roles.map(role => [role, { installed: false, connected: false, status: "unknown", message: "Pendiente de comprobar." }]));
     this.jobs = new Map();
     this.probes = new Map();
@@ -60,7 +67,7 @@ export class AuthManager {
     if (this.closed) throw new Error("Automata se está cerrando.");
   }
   snapshot({ local = false } = {}) {
-    return { demo: this.demo, canLogin: local && !this.demo, providers: Object.fromEntries(roles.map(role => {
+    return { demo: this.demo, canLogin: local && !this.demo, apiKeys: Object.fromEntries(aiRoles.map(role => [role, API_KEY_VARIABLES[role].filter(name => !!this.env[name])])), providers: Object.fromEntries(roles.map(role => {
       const provider = { ...this.providers[role] };
       if (this.demo) return [role, { installed: false, connected: false, status: "demo", message: "La demostración funciona sin iniciar sesión." }];
       const job = this.jobs.get(role);
@@ -82,7 +89,7 @@ export class AuthManager {
       }
       try {
         const args = role === "coder" ? ["auth", "status", "--json"] : role === "github" ? ["auth", "status", "--active", "--hostname", "github.com"] : ["login", "status"];
-        const result = await this.run(cli.command, [...cli.args, ...args], { timeoutMs: 20000, signal: controller.signal, env: cli.env });
+        const result = await this.run(cli.command, [...cli.args, ...args], { timeoutMs: 20000, signal: controller.signal, env: this.envFor(role, cli) });
         if (!this.closed && !this.jobs.has(role)) this.providers[role] = { installed: true, ...interpretStatus(role, result) };
       } catch {
         if (!this.closed && !this.jobs.has(role)) this.providers[role] = { installed: true, connected: false, status: "error", message: `No se pudo comprobar ${names[role]}. Revisa su instalación y vuelve a intentar.` };
@@ -117,7 +124,7 @@ export class AuthManager {
     if (!cli) throw new Error(`Instala ${names[role]} en esta PC antes de conectar.`);
     const args = role === "coder" ? ["auth", "login", "--claudeai"] : role === "github" ? ["auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--skip-ssh-key"] : ["login", ...method === "device" ? ["--device-auth"] : []];
     const child = this.spawnLogin(cli.command, [...cli.args, ...args], {
-      shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...nodeEnv(cli.command), NO_COLOR: "1", ...cli.env }
+      shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...nodeEnv(cli.command), NO_COLOR: "1", ...this.envFor(role, cli) }
     });
     const job = { child, method, url: role === "github" ? "https://github.com/login/device" : null, deviceCode: null, acceptsCode: false, buffer: "", timer: null };
     this.jobs.set(role, job);
@@ -153,6 +160,33 @@ export class AuthManager {
     child.once("close", code => void complete(code));
     job.timer = setTimeout(() => void this.cancel(role, true), this.timeoutMs);
     job.timer.unref?.();
+    return this.snapshot({ local: true });
+  }
+  envFor(role, cli) {
+    return { ...cli?.env, ...role === "github" ? {} : this.agentEnv(role) };
+  }
+  // The next status query asks the CLI again instead of using the last answer.
+  invalidate(role) {
+    this.checkedAt[role] = 0;
+  }
+  async logout(role) {
+    this.validate(role);
+    if (this.demo) throw new Error("Abre Automata sin --demo para administrar tus cuentas.");
+    if (this.jobs.has(role)) throw new Error("Termina o cancela el acceso pendiente antes de cerrar la sesión.");
+    await this.probes.get(role);
+    const cli = this.find(role);
+    if (!cli) throw new Error(`Instala ${names[role]} en esta PC antes de continuar.`);
+    const account = this.providers[role]?.account;
+    const args = role === "coder" ? ["auth", "logout"] : role === "github" ? ["auth", "logout", "--hostname", "github.com", ...account ? ["--user", account] : []] : ["logout"];
+    let result;
+    try {
+      result = await this.run(cli.command, [...cli.args, ...args], { timeoutMs: 30000, env: { NO_COLOR: "1", ...this.envFor(role, cli) } });
+    } catch {
+      result = { code: -1, stdout: "", stderr: "" };
+    }
+    this.invalidate(role);
+    await this.probe(role, true);
+    if (result.code !== 0 && this.providers[role].connected) throw new Error(`No se pudo cerrar la sesión de ${names[role]}. ${stripAnsi(result.stderr || result.stdout).trim().slice(-300)}`.trim());
     return this.snapshot({ local: true });
   }
   submitCode(role, code) {

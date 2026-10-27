@@ -24,6 +24,8 @@ Una interfaz compartida para Windows y Android: dos paneles en escritorio, pesta
 - **El director (Codex) es de solo lectura**: inspecciona y decide qué cambios hacer; el ejecutor (Claude) escribe todo el código. Una tarea dirigida al director se le entrega después al ejecutor.
 - **El director decide cuándo hacer commit, push y merge** (campo `git` de cada revisión). Por defecto los commits son automáticos y el push y el merge esperan tu aprobación en la tarjeta «El director propone»; en Configuración puedes pasar a todo automático, todo con aprobación o desactivarlo. Nunca fuerza ni borra ramas y deja fuera los archivos con secretos.
 - **Un repositorio por proyecto**: configura tu **carpeta de proyectos**; **Repositorio nuevo** crea su propia carpeta con Git (y, si quieres, un repositorio privado en GitHub) y los clones se guardan cada uno en su subcarpeta.
+- **El director observa al codificador**: Automata registra en vivo lo que Claude lee, edita y ejecuta, y se lo entrega al director en la revisión para que no tenga que releer todo el proyecto.
+- **¿Correr la app?**: cuando el director ve que la app ya se puede abrir (o al terminar), te pregunta con **Correr / Ahora no**. Al aprobar, Automata la corre en la carpeta del proyecto, muestra su salida y te deja abrirla o detenerla.
 - **Terminal del ejecutor**: comandos, diffs y código con su salida en vivo, como en una terminal.
 - **Flujo más ágil**: Claude y Codex retoman su sesión entre rondas y, si fallan las verificaciones, el ejecutor corrige directamente sin esperar al director (ambos ajustables).
 - **English / Español** desde **Configuración / Settings**: interfaz, avisos y próximas respuestas de los agentes. Los mensajes originales y reportes anteriores se conservan.

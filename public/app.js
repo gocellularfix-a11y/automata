@@ -4,7 +4,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const icon = (name) => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const effortNames = { default: "Predeterminado", low: "Bajo", medium: "Medio", high: "Alto", xhigh: "Extra alto", max: "Máximo", ultra: "Ultra" };
 const stateNames = { running: "Trabajando", pausing: "Pausando", paused: "En pausa", stopped: "Detenido", complete: "Completado", blocked: "Necesita tu atención", error: "Error de ejecución", interrupted: "Sesión interrumpida", limit: "Límite de rondas" };
-const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", tool: "ACTIVIDAD", session: "SESIÓN", message: "MENSAJE", warning: "ATENCIÓN", error: "ERROR", check: "VERIFICACIÓN", success: "VERIFICADO", start: "INICIO", pause: "PAUSA", stop: "DETENIDO", complete: "COMPLETADO", approval: "APROBACIÓN" };
+const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", tool: "ACTIVIDAD", session: "SESIÓN", message: "MENSAJE", warning: "ATENCIÓN", error: "ERROR", check: "VERIFICACIÓN", success: "VERIFICADO", start: "INICIO", pause: "PAUSA", stop: "DETENIDO", complete: "COMPLETADO", approval: "APROBACIÓN", runoffer: "APP" };
 let state = { projects: [], settings: { language: i18n.language, mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30 }, runs: [], events: [], messages: [], busy: false };
 let selected = localStorage.getItem("automata.project"), capabilities = null, connection = null, streamAbort = null, toastTimer, reconnectTimer, renderTimer;
 let accounts = null, authTimer, authLoading = null, accountsOpened = false;
@@ -62,7 +62,9 @@ function syncSettings() {
     populateEffort(role, model, state.settings[role + "Effort"]);
     $("#" + role + "ModelLabel").textContent = modelName(role, model) + teamSuffix(state.settings, role);
     $("#" + role + "TeamCount").textContent = String(teamSize(state.settings, role));
+    syncAccountModel(role);
   }
+  if (typeof renderPlanOnly === "function" && $("#accountsDialog").open) renderPlanOnly();
   document.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === state.settings.mode));
   i18n.translateDom();
 }
@@ -132,16 +134,65 @@ function approvalEntry(e) {
   return `<article class="activity-entry approval"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t("APROBACIÓN")}</span><time>${entryTime(e)}</time></div><p data-user-content>${esc(gitText(e.git))}</p></article>`;
 }
 const pendingGit = () => state.runs.filter((r) => r.projectId === selected).flatMap((r) => (r.gitQueue ?? []).filter((item) => item.status === "pending").map((item) => ({ ...item, runId: r.id })));
+// ───────── The app: the director asks before running it, then it can be watched and stopped ─────────
+const pendingRuns = () => state.runs.filter((r) => r.projectId === selected).flatMap((r) => (r.runOffers ?? []).filter((offer) => offer.status === "pending").map((offer) => ({ ...offer, runId: r.id })));
+let appOutputOpen = false;
+const onAndroid = /Android/i.test(navigator.userAgent);
+function runOfferRow(offer) {
+  return `<div class="git-item run-offer" data-run="${esc(offer.runId)}" data-offer="${esc(offer.id)}"><span class="git-kind app-kind">${t("APP")}</span><span class="git-text app-text"><span>${t(offer.final ? "Proyecto terminado. ¿Quieres correr la app?" : "La app ya se puede correr. ¿Quieres probarla?")}</span><code data-user-content title="${esc(offer.command)}">${esc(offer.command)}</code>${offer.note ? `<small data-user-content title="${esc(offer.note)}">${esc(offer.note)}</small>` : ""}</span><span class="git-actions"><button type="button" class="button small primary" data-app="approve">${t("Correr")}</button><button type="button" class="button small quiet" data-app="reject">${t("Ahora no")}</button></span></div>`;
+}
+function appRow(app) {
+  const running = app.status === "running";
+  const status = running ? t("En marcha") : app.status === "stopped" ? t("Detenida") : app.status === "failed" ? t("No pudo iniciar") : `${t("Se cerró")} · ${t("código")} ${app.code}`;
+  const actions = [
+    app.url && running && !onAndroid ? `<button type="button" class="button small primary" data-app="open">${t("Abrir")}</button>` : "",
+    `<button type="button" class="button small quiet" data-app="output">${t(appOutputOpen ? "Ocultar salida" : "Ver salida")}</button>`,
+    running ? `<button type="button" class="button small quiet" data-app="stop">${t("Detener")}</button>` : `<button type="button" class="button small quiet" data-app="dismiss">${t("Cerrar")}</button>`
+  ].join("");
+  return `<div class="app-panel"><div class="git-item app-row"><span class="git-kind app-kind${running ? " live" : ""}">${t("APP")}</span><span class="git-text app-text"><span>${status}</span><code data-user-content title="${esc(app.command)}">${esc(app.command)}</code>${app.url ? `<small data-user-content>${esc(app.url)}</small>` : ""}</span><span class="git-actions">${actions}</span></div>${appOutputOpen ? `<pre class="app-output" data-user-content>${esc(app.output || app.error || t("Sin salida todavía."))}</pre>` : ""}</div>`;
+}
 function renderGitBar() {
-  const items = pendingGit(), bar = $("#gitBar");
-  bar.hidden = !items.length;
-  if (!items.length) {
+  const items = pendingGit(), offers = pendingRuns(), app = state.app, bar = $("#gitBar");
+  bar.hidden = !items.length && !offers.length && !app;
+  if (bar.hidden) {
     $("#gitItems").innerHTML = "";
     return;
   }
-  $("#gitItems").innerHTML = items.map((item) => `<div class="git-item" data-run="${esc(item.runId)}" data-git="${esc(item.id)}"><span class="git-kind">${esc(t(gitKinds[item.kind] ?? "GIT"))}</span><span class="git-text" data-user-content title="${esc(gitText(item))}">${esc(gitText(item))}</span><span class="git-actions"><button type="button" class="button small primary" data-decision="approve">${t("Aprobar")}</button><button type="button" class="button small quiet" data-decision="reject">${t("Rechazar")}</button></span></div>`).join("");
+  const output = $("#gitItems .app-output"), pinned = !output || output.scrollHeight - output.scrollTop - output.clientHeight < 30;
+  $("#gitItems").innerHTML = (app ? appRow(app) : "") + offers.map(runOfferRow).join("") + items.map((item) => `<div class="git-item" data-run="${esc(item.runId)}" data-git="${esc(item.id)}"><span class="git-kind">${esc(t(gitKinds[item.kind] ?? "GIT"))}</span><span class="git-text" data-user-content title="${esc(gitText(item))}">${esc(gitText(item))}</span><span class="git-actions"><button type="button" class="button small primary" data-decision="approve">${t("Aprobar")}</button><button type="button" class="button small quiet" data-decision="reject">${t("Rechazar")}</button></span></div>`).join("");
+  const next = $("#gitItems .app-output");
+  if (next) next.scrollTop = pinned ? next.scrollHeight : output.scrollTop;
 }
 $("#gitItems").addEventListener("click", async (event) => {
+  const appButton = event.target.closest("[data-app]");
+  if (appButton) {
+    const action = appButton.dataset.app, row = appButton.closest(".git-item");
+    if (action === "output") {
+      appOutputOpen = !appOutputOpen;
+      renderGitBar();
+      i18n.translateDom($("#gitBar"));
+      return;
+    }
+    if (action === "open") {
+      window.open(state.app?.url, "_blank", "noopener");
+      return;
+    }
+    const buttons = row.querySelectorAll("button");
+    buttons.forEach((b) => b.disabled = true);
+    try {
+      if (action === "approve" || action === "reject") {
+        await api("app", { method: "POST", body: { runId: row.dataset.run, offerId: row.dataset.offer, decision: action } });
+        if (action === "approve") appOutputOpen = true;
+      } else await api("app", { method: "POST", body: { action } });
+      state = await api("state");
+      render();
+      toast(action === "approve" ? "Corriendo la app." : action === "reject" ? "De acuerdo, no se corre por ahora." : action === "stop" ? "App detenida." : "Panel de la app cerrado.");
+    } catch (error) {
+      toast(error.message);
+      buttons.forEach((b) => b.disabled = false);
+    }
+    return;
+  }
   const button = event.target.closest("[data-decision]");
   if (!button) return;
   const row = button.closest(".git-item"), buttons = row.querySelectorAll("button");
@@ -161,7 +212,7 @@ function entry(e, result) {
   if (e.kind === "approval" && e.git) return approvalEntry(e);
   const time = new Date(e.at).toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" });
   const review = e.review;
-  return `<article class="activity-entry ${esc(e.kind)}"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t(kindNames[e.kind] ?? "ACTIVIDAD")}</span>${e.agent ? `<span class="entry-agent">${esc(e.agent)}</span>` : ""}<time>${time}</time></div>${e.kind === "report" ? `<pre>${esc(e.text)}</pre>` : `<p>${esc(["phase", "start", "pause", "stop", "check", "success", "warning", "complete"].includes(e.kind) ? t(e.text) : e.text)}</p>`}${review ? `${review.findings.map((f) => `<div class="finding"><strong>${esc(f.severity.toUpperCase())} · ${esc(f.file)}</strong>${esc(f.description)}<br>${esc(f.evidence)}</div>`).join("")}<div class="criteria-list">${review.criteria.map((c) => `<div class="criterion ${c.met ? "met" : ""}">${icon(c.met ? "check" : "shield")}<span>${esc(c.criterion)}<br><small>${esc(c.evidence)}</small></span></div>`).join("")}</div>` : ""}</article>`;
+  return `<article class="activity-entry ${esc(e.kind)}"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t(kindNames[e.kind] ?? "ACTIVIDAD")}</span>${e.agent ? `<span class="entry-agent">${esc(e.agent)}</span>` : ""}<time>${time}</time></div>${e.kind === "report" ? `<pre>${esc(e.text)}</pre>` : `<p>${esc(["phase", "start", "pause", "stop", "check", "success", "warning", "complete", "runoffer"].includes(e.kind) ? t(e.text) : e.text)}</p>`}${e.offer ? `<pre data-user-content>$ ${esc(e.offer.command)}${e.offer.note ? "\n" + esc(e.offer.note) : ""}</pre>` : ""}${review ? `${review.findings.map((f) => `<div class="finding"><strong>${esc(f.severity.toUpperCase())} · ${esc(f.file)}</strong>${esc(f.description)}<br>${esc(f.evidence)}</div>`).join("")}<div class="criteria-list">${review.criteria.map((c) => `<div class="criterion ${c.met ? "met" : ""}">${icon(c.met ? "check" : "shield")}<span>${esc(c.criterion)}<br><small>${esc(c.evidence)}</small></span></div>`).join("")}</div>` : ""}</article>`;
 }
 function chatEntry(m, role) {
   const a = m.answers?.find((a2) => a2.role === role);
@@ -200,6 +251,71 @@ function renderFeed(role) {
   el.innerHTML = items.length ? items.slice(-100).map((i) => i.html).join("") : role === "coder" ? emptyCoder() : emptyAuditor();
   if (atBottom && items.length) el.scrollTop = el.scrollHeight;
 }
+// ───────── What each agent is doing right now: working, watching, paused… ─────────
+const shortPath = (file) => String(file ?? "").split(/[\\/]/).filter(Boolean).slice(-2).join("/");
+function describeActivity(e) {
+  if (!e) return null;
+  if (e.kind === "tool" && e.tool) {
+    const tool = e.tool;
+    if (tool.name === "Bash") return { verb: tool.git ? "Git" : "Ejecutando", what: tool.command };
+    if (tool.name === "Edit" || tool.name === "MultiEdit") return { verb: "Editando", what: shortPath(tool.path) };
+    if (tool.name === "Write") return { verb: "Escribiendo", what: shortPath(tool.path) };
+    if (tool.name === "Read") return { verb: "Leyendo", what: shortPath(tool.path) };
+    if (tool.name === "Glob" || tool.name === "Grep") return { verb: "Buscando", what: tool.pattern };
+    if (tool.name === "TodoWrite") return { verb: "Organizando sus tareas", what: "" };
+    return { verb: "Usando", what: tool.name };
+  }
+  if (e.kind === "message") return { verb: "Pensando", what: "" };
+  if (e.kind === "check") return { verb: "Verificando", what: e.text.replace(/^Verificando · /, "") };
+  return null;
+}
+// tone: work (busy), watch (following the coder), pause, wait (its turn will come), done, alert, idle.
+function agentState(role, r, replying) {
+  const events = state.events.filter((e) => e.projectId === selected);
+  const last = (test) => events.findLast(test);
+  const since = (e) => e?.at ?? null;
+  if (replying) {
+    const latest = last((e) => e.role === role && e.kind !== "toolresult" && e.at >= (replying.startedAt ?? ""));
+    return { tone: "work", label: replying.kind === "task" ? "Trabajando" : "Respondiendo", activity: describeActivity(latest) ?? { verb: replying.kind === "task" ? "Trabajando en tu petición" : "Preparando la respuesta", what: "" }, since: replying.startedAt };
+  }
+  if (!r) return { tone: "idle", label: "En espera" };
+  const mine = role === "coder" ? r.stage === "code" : ["plan", "review"].includes(r.stage);
+  const start = last((e) => e.runId === r.id && e.kind === "phase" && e.role === role);
+  const latest = last((e) => e.runId === r.id && e.role === role && e.kind !== "toolresult" && e.kind !== "phase");
+  const current = latest && (!start || latest.at >= start.at) ? describeActivity(latest) : null;
+  if (r.status === "running" || r.status === "pausing") {
+    const pausing = r.status === "pausing";
+    if (mine) return { tone: pausing ? "pause" : "work", label: pausing ? "Pausando" : "Trabajando", activity: pausing ? { verb: "Termina lo actual y se pausa", what: "" } : current ?? { verb: role === "coder" ? "Empezando la tarea" : r.stage === "plan" ? "Planificando la primera tarea" : "Revisando lo que hizo Claude", what: "" }, since: since(start) };
+    if (r.stage === "checks" && role === "coder") return { tone: pausing ? "pause" : "work", label: "Verificando", activity: describeActivity(last((e) => e.runId === r.id && e.kind === "check")) ?? { verb: "Corriendo las verificaciones", what: "" }, since: since(last((e) => e.runId === r.id && e.kind === "check")) };
+    if (role === "auditor") return { tone: pausing ? "pause" : "watch", label: pausing ? "Pausa pedida" : "Observando", activity: pausing ? { verb: "Se pausa cuando Claude termine", what: "" } : { verb: "Sigue a Claude", what: r.watched ? `${r.watched} ${t("acciones registradas")}` : "" }, title: "El director sigue lo que hace Claude y lo revisará sin releer todo el proyecto." };
+    return { tone: pausing ? "pause" : "wait", label: pausing ? "Pausa pedida" : "Esperando", activity: { verb: "Espera la tarea del director", what: "" } };
+  }
+  if (r.status === "paused") return { tone: "pause", label: "En pausa", activity: { verb: "Pulsa Continuar para seguir", what: "" } };
+  if (r.status === "complete") return { tone: "done", label: "Completado" };
+  if (r.status === "blocked") return role === "auditor" ? { tone: "alert", label: "Necesita tu decisión", activity: { verb: "Lee su revisión y responde en el chat", what: "" } } : { tone: "idle", label: "En espera" };
+  if (r.status === "error") return { tone: "alert", label: "Error", activity: { verb: "Revisa el error y pulsa Continuar", what: "" } };
+  if (r.status === "limit") return { tone: "pause", label: "Límite de rondas", activity: { verb: "Sube el límite y pulsa Continuar", what: "" } };
+  if (r.status === "interrupted") return { tone: "pause", label: "Interrumpido", activity: { verb: "Pulsa Continuar para retomar", what: "" } };
+  if (r.status === "stopped") return { tone: "idle", label: "Detenido" };
+  return { tone: "idle", label: "En espera" };
+}
+const defaultSubtitles = { coder: "Convierte la siguiente tarea en código.", auditor: "La dirección correcta. La evidencia primero." };
+const elapsed = (from) => {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(from).getTime()) / 1000));
+  return seconds >= 3600 ? `${Math.floor(seconds / 3600)}:${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}` : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+};
+function renderAgentState(role, s) {
+  const chip = $("#" + role + "Status");
+  chip.innerHTML = `<i></i>${esc(t(s.label))}${s.since && s.tone === "work" ? ` <span class="agent-clock" data-since="${esc(s.since)}">${elapsed(s.since)}</span>` : ""}`;
+  chip.className = "agent-status tone-" + s.tone + (["work", "watch"].includes(s.tone) ? " active" : "");
+  chip.title = s.title ? t(s.title) : "";
+  chip.closest(".agent-panel")?.setAttribute("data-tone", s.tone);
+  const subtitle = $("#" + role + "Subtitle");
+  subtitle.classList.toggle("live", !!s.activity);
+  subtitle.innerHTML = s.activity ? `<span class="live-verb">${esc(t(s.activity.verb))}</span>${s.activity.what ? ` <code data-user-content title="${esc(s.activity.what)}">${esc(s.activity.what)}</code>` : ""}${["work", "watch"].includes(s.tone) ? '<span class="live-dots" aria-hidden="true"><i></i><i></i><i></i></span>' : ""}` : esc(t(defaultSubtitles[role]));
+}
+// The clocks tick on their own; the rest of the page only redraws when something changes.
+setInterval(() => document.querySelectorAll(".agent-clock[data-since]").forEach((el) => el.textContent = elapsed(el.dataset.since)), 1000);
 function render() {
   syncSettings();
   if (!selected && state.projects.length) selected = state.projects[0].id;
@@ -217,9 +333,7 @@ function render() {
   $("#stopButton").disabled = !state.busy && (!r || !["running", "pausing", "paused", "interrupted", "error", "blocked", "limit"].includes(r.status));
   for (const role of ["coder", "auditor"]) {
     const replying = state.messages.find(message => message.projectId === selected && message.status === "processing" && message.activeRole === role);
-    const working = replying || active && (role === "coder" ? r.stage === "code" : ["plan", "review"].includes(r.stage));
-    $("#" + role + "Status").innerHTML = `<i></i>${replying ? replying.kind === "task" ? "Trabajando" : "Respondiendo" : working ? "Trabajando" : r?.status === "complete" ? "Completado" : "En espera"}`;
-    $("#" + role + "Status").classList.toggle("active", working);
+    renderAgentState(role, agentState(role, r, replying));
     {
       const source = r && ["running", "pausing", "paused"].includes(r.status) ? r.settings : state.settings;
       $("#" + role + "ModelLabel").textContent = modelName(role, source[role + "Model"]) + teamSuffix(source, role);
@@ -614,7 +728,39 @@ $("#connectionForm").addEventListener("submit", async (e) => {
   }
 });
 const accountStateNames = { connected: "Conectado", disconnected: "Sin conectar", missing: "Falta instalar", error: "Revisar conexión", pending: "Esperando acceso", unknown: "Comprobando", demo: "Demostración" };
+const planNames = { max: "Max", pro: "Pro", team: "Team", enterprise: "Enterprise" };
+function accountWho(role, provider) {
+  if (!provider?.connected) return "";
+  if (role === "github") return provider.account ? "@" + provider.account : "";
+  if (role === "coder") {
+    if (provider.method === "api_key") return `${t("Clave de API")} · ${provider.keySource ?? ""}`;
+    return [provider.plan ? `${t("Plan")} ${planNames[provider.plan] ?? provider.plan}` : t("Cuenta de Claude"), provider.account].filter(Boolean).join(" · ");
+  }
+  return provider.method === "chatgpt" ? t("Plan de ChatGPT") : provider.method === "api_key" ? t("Clave de API") : "";
+}
+// The model pickers in the cards mirror the ones under each panel, including "custom model".
+function syncAccountModel(role) {
+  const source = $("#" + role + "Model"), target = $("#" + role + "AccountModel");
+  target.innerHTML = source.innerHTML;
+  target.value = source.value;
+}
+for (const role of ["coder", "auditor"]) $("#" + role + "AccountModel").addEventListener("change", (event) => {
+  const source = $("#" + role + "Model");
+  source.value = event.target.value;
+  source.dispatchEvent(new Event("change"));
+});
+function renderPlanOnly() {
+  const found = [...accounts?.apiKeys?.coder ?? [], ...accounts?.apiKeys?.auditor ?? []];
+  $("#planOnly").checked = state.settings.planOnly !== false;
+  $("#planOnly").disabled = state.demo || state.busy;
+  $("#planOnlyNote").textContent = t(state.settings.planOnly === false ? "Si hay una clave de API en Windows, Claude o Codex la usarán y se cobrará por uso, aparte de tu plan." : "Claude y Codex trabajan con tu plan, como en la terminal. Automata nunca usa claves de API, que cobran por uso.") + (found.length ? ` ${t("Claves encontradas en Windows")}: ${found.join(", ")}${state.settings.planOnly === false ? "" : " — " + t("no se usan")}.` : "");
+}
+$("#planOnly").addEventListener("change", async (event) => {
+  await saveSettings({ planOnly: event.target.checked });
+  await loadAccounts(true);
+});
 function renderAccounts() {
+  renderPlanOnly();
   const providers = accounts?.providers ?? {};
   const count = ["coder", "auditor"].filter(role => providers[role]?.connected).length;
   $("#accountCount").textContent = state.demo ? "DEMO" : accounts ? `${count}/2` : "—";
@@ -627,6 +773,14 @@ function renderAccounts() {
     $("#" + role + "AccountMessage").textContent = provider.message;
     button.hidden = provider.connected || provider.status === "pending" || provider.status === "demo";
     button.disabled = !accounts?.canLogin || !provider.installed || state.busy;
+    // Who is signed in, and the options to switch account or sign out once connected.
+    const who = accountWho(role, provider);
+    $("#" + role + "AccountWho").textContent = who;
+    $("#" + role + "AccountWho").hidden = !who;
+    const manage = $("#" + role + "AccountManage");
+    manage.hidden = !provider.connected || !accounts?.canLogin;
+    manage.querySelectorAll("button").forEach((b) => b.disabled = state.busy);
+    if (role !== "github") syncAccountModel(role);
     const flow = provider.flow;
     $("#" + role + "AccountFlow").hidden = !flow;
     const link = $("#" + role + "AuthLink");
@@ -690,6 +844,14 @@ async function accountAction(body) {
 $("#accountsButton").addEventListener("click", () => void openAccounts());
 $("#refreshAccounts").addEventListener("click", () => void loadAccounts(accounts?.canLogin === true));
 document.querySelectorAll("[data-login]").forEach(button => button.addEventListener("click", () => void accountAction({ action: "login", role: button.dataset.login, method: "browser" })));
+const accountNames = { coder: "Claude Code", auditor: "Codex", github: "GitHub" };
+document.querySelectorAll("[data-relogin]").forEach(button => button.addEventListener("click", () => void accountAction({ action: "login", role: button.dataset.relogin, method: "browser" })));
+document.querySelectorAll("[data-logout]").forEach(button => button.addEventListener("click", () => {
+  const role = button.dataset.logout;
+  // The CLIs keep one session for the whole PC: signing out here also signs out the terminal.
+  if (!confirm(`${t("¿Cerrar la sesión de")} ${accountNames[role]}? ${t("También se cerrará en la terminal de esta PC.")}`)) return;
+  void accountAction({ action: "logout", role });
+}));
 document.querySelectorAll("[data-auth-cancel]").forEach(button => button.addEventListener("click", () => void accountAction({ action: "cancel", role: button.dataset.authCancel })));
 $("#deviceLoginButton").addEventListener("click", () => void accountAction({ action: "login", role: "auditor", method: "device" }));
 $("#claudeCodeForm").addEventListener("submit", async event => {

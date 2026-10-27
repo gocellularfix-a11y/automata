@@ -23,7 +23,12 @@ export const MODELS = {
 export const TEAM_LIMITS = { coder: 3, auditor: 2 };
 const TEAM_KEYS = { coder: "extraCoders", auditor: "extraAuditors" };
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:[\]-]{0,99}$/;
-export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true };
+export const DEFAULT_SETTINGS = { language: "es", mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6.1-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30, extraCoders: [], extraAuditors: [], gitMode: "ask-push", projectsRoot: "", reuseSessions: true, fastFix: true, planOnly: true };
+// planOnly: Claude and Codex use the user's subscription login, as in the terminal. API keys found in
+// Windows are left out, because with a key the CLIs bill per use instead of using the plan.
+export const API_KEY_VARIABLES = { coder: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"], auditor: ["OPENAI_API_KEY", "CODEX_API_KEY"] };
+// Node's spawn leaves out variables whose value is undefined, so this removes them for that agent only.
+export const agentEnv = (settings, role) => settings?.planOnly === false ? {} : Object.fromEntries((API_KEY_VARIABLES[role] ?? []).map((name) => [name, undefined]));
 // ask-push: commits run on their own, push and merge wait for the user. ask-all: everything waits. auto: nothing waits. off: the director does not decide Git.
 export const GIT_MODES = ["ask-push", "ask-all", "auto", "off"];
 export const defaultProjectsRoot = () => path.join(os.homedir(), "Automata Projects");
@@ -55,14 +60,13 @@ export function validateSettings(value = {}) {
       return { model, effort };
     });
   }
-  if (!GIT_MODES.includes(s.gitMode)) throw new Error("Elige cuánto decide el director sobre Git.");
-  if (typeof s.projectsRoot !== "string" || s.projectsRoot.length > 1000) throw new Error("La carpeta de proyectos debe ser una ruta absoluta que no sea la raíz del disco.");
+  if (!GIT_MODES.includes(s.gitMode)) throw new Error("Elige cuánto decide el director sobre Git.");  if (typeof s.projectsRoot !== "string" || s.projectsRoot.length > 1000) throw new Error("La carpeta de proyectos debe ser una ruta absoluta que no sea la raíz del disco.");
   if (s.projectsRoot.trim()) {
     const root = path.resolve(s.projectsRoot.trim());
     if (!path.isAbsolute(s.projectsRoot.trim()) || root === path.parse(root).root) throw new Error("La carpeta de proyectos debe ser una ruta absoluta que no sea la raíz del disco.");
     s.projectsRoot = root;
   } else s.projectsRoot = "";
-  for (const k of ["reuseSessions", "fastFix"]) if (typeof s[k] !== "boolean") throw new Error(`${k}: usa verdadero o falso.`);
+  for (const k of ["reuseSessions", "fastFix", "planOnly"]) if (typeof s[k] !== "boolean") throw new Error(`${k}: usa verdadero o falso.`);
   for (const [k, min, max] of [["maxRounds", 1, 50], ["timeoutMinutes", 1, 120]]) {
     s[k] = Number(s[k]);
     if (!Number.isInteger(s[k]) || s[k] < min || s[k] > max) throw new Error(`${k}: usa un número entre ${min} y ${max}.`);
@@ -101,7 +105,7 @@ export function validateProject(input, { checkDirectory = true } = {}) {
 export const REVIEW_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["decision", "summary", "nextPrompt", "findings", "criteria", "git"],
+  required: ["decision", "summary", "nextPrompt", "findings", "criteria", "git", "run"],
   properties: {
     decision: { type: "string", enum: ["continue", "complete", "blocked"] },
     summary: { type: "string" },
@@ -109,9 +113,20 @@ export const REVIEW_SCHEMA = {
     findings: { type: "array", items: { type: "object", additionalProperties: false, required: ["severity", "file", "description", "evidence"], properties: { severity: { type: "string", enum: ["critical", "major", "minor", "info"] }, file: { type: "string" }, description: { type: "string" }, evidence: { type: "string" } } } },
     criteria: { type: "array", items: { type: "object", additionalProperties: false, required: ["criterion", "met", "evidence"], properties: { criterion: { type: "string" }, met: { type: "boolean" }, evidence: { type: "string" } } } },
     // What the director decides about Git. The executor (not the director) carries it out; empty values mean "do nothing".
-    git: { type: "object", additionalProperties: false, required: ["commit", "message", "push", "branch", "merge_into"], properties: { commit: { type: "boolean" }, message: { type: "string" }, push: { type: "boolean" }, branch: { type: "string" }, merge_into: { type: "string" } } }
+    git: { type: "object", additionalProperties: false, required: ["commit", "message", "push", "branch", "merge_into"], properties: { commit: { type: "boolean" }, message: { type: "string" }, push: { type: "boolean" }, branch: { type: "string" }, merge_into: { type: "string" } } },
+    // Whether the app can already be opened, and how. Automata asks the user before running anything.
+    run: { type: "object", additionalProperties: false, required: ["ready", "command", "url", "note"], properties: { ready: { type: "boolean" }, command: { type: "string" }, url: { type: "string" }, note: { type: "string" } } }
   }
 };
+const LOCAL_URL = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?(?:[/?#][^\s]*)?$/i;
+// Keeps only what Automata may offer: a one-line command and, optionally, a local address.
+export function normalizeRun(run) {
+  const command = String(run?.command ?? "").split(/\r?\n/)[0].trim().slice(0, 500);
+  const url = String(run?.url ?? "").trim().replace(/^(https?:\/\/)0\.0\.0\.0/i, "$1localhost");
+  const ready = run?.ready === true && !!command;
+  return { ready, command: ready ? command : "", url: ready && LOCAL_URL.test(url) ? url.slice(0, 300) : "", note: ready ? String(run?.note ?? "").trim().slice(0, 300) : "" };
+}
+export const isLocalUrl = (url) => LOCAL_URL.test(String(url ?? ""));
 // Reviewers run in order and only the last one may be something other than "complete".
 // Approval needs every reviewer; anything else is decided by the reviewer that did not approve.
 export function combineReviews(reviews, labels) {
@@ -123,6 +138,7 @@ export function combineReviews(reviews, labels) {
     summary: reviews.map(tag).join("\n"),
     nextPrompt: "",
     git: reviews[0].git,
+    run: reviews[0].run,
     findings: reviews.flatMap((review, i) => review.findings.map((f) => ({ ...f, description: `[${labels[i]}] ${f.description}` }))),
     criteria: reviews[0].criteria.map((c) => ({
       criterion: c.criterion,
@@ -144,5 +160,6 @@ export function validateReview(r, project, phase = "review") {
     if (project.criteria.some((c) => !r.criteria.some((x) => x.criterion === c && x.met && x.evidence.trim()))) throw new Error("Falta evidencia para uno o más criterios de aceptación.");
     if (r.findings.some((f) => ["critical", "major"].includes(f.severity))) throw new Error("Hay hallazgos importantes pendientes.");
   }
+  r.run = normalizeRun(r.run);
   return r;
 }

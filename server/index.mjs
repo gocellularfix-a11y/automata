@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { Store } from "./store.mjs";
 import { Coordinator } from "./coordinator.mjs";
-import { MODELS, MODES, TEAM_LIMITS, GIT_MODES, projectsRootOf, effortsFor } from "./config.mjs";
+import { MODELS, MODES, TEAM_LIMITS, GIT_MODES, projectsRootOf, effortsFor, agentEnv } from "./config.mjs";
 import { findAgent } from "./agents.mjs";
 import { AuthManager } from "./auth.mjs";
 import { GitHubProjects } from "./github.mjs";
@@ -20,6 +20,8 @@ export async function createServer({ port = 4780, lan = false, demo = false, dat
   try {
     coordinator = new Coordinator(store, { demo, ...injections });
     coordinator.seedDemo();
+    // Status checks and logins see the same accounts as the runs (the plan, without API keys).
+    auth.agentEnv = (role) => agentEnv(coordinator.settings, role);
   } catch (e) {
     release();
     throw e;
@@ -121,9 +123,9 @@ data: ${JSON.stringify(coordinator.snapshot())}
           if (data.action === "refresh") return send(200, await auth.status({ force: true, local: true }));
           if (data.action === "cancel") return send(200, await auth.cancel(data.role));
           if (data.action === "code") return send(200, auth.submitCode(data.role, data.code));
-          if (data.action === "login") {
+          if (data.action === "login" || data.action === "logout") {
             if (coordinator.busy || coordinator.active && ["running", "pausing"].includes(coordinator.active.status)) throw new Error("Pausa o detén el trabajo antes de cambiar la conexión de tus cuentas.");
-            return send(202, await auth.start(data.role, data.method));
+            return data.action === "login" ? send(202, await auth.start(data.role, data.method)) : send(200, await auth.logout(data.role));
           }
           throw new Error("Acción de acceso no válida.");
         }
@@ -146,7 +148,11 @@ data: ${JSON.stringify(coordinator.snapshot())}
           }
           return send(201, coordinator.addProject(input));
         }
-        if (url.pathname === "/api/settings" && req.method === "PUT") return send(200, coordinator.updateSettings(await body()));
+        if (url.pathname === "/api/settings" && req.method === "PUT") {
+          const before = coordinator.settings.planOnly, saved = coordinator.updateSettings(await body());
+          if (saved.planOnly !== before) { auth.invalidate?.("coder"); auth.invalidate?.("auditor"); }
+          return send(200, saved);
+        }
         if (url.pathname === "/api/start" && req.method === "POST") {
           const data = await body();
           await auth.requireConnected();
@@ -160,6 +166,11 @@ data: ${JSON.stringify(coordinator.snapshot())}
         if (url.pathname === "/api/git" && req.method === "POST") {
           const data = await body();
           return send(200, await coordinator.resolveGit(String(data.runId ?? ""), String(data.gitId ?? ""), data.decision));
+        }
+        if (url.pathname === "/api/app" && req.method === "POST") {
+          const data = await body();
+          if (["approve", "reject"].includes(data.decision)) return send(200, coordinator.resolveRun(String(data.runId ?? ""), String(data.offerId ?? ""), data.decision));
+          return send(200, await coordinator.appControl(data.action));
         }
         if (url.pathname === "/api/chat" && req.method === "POST") {
           const data = await body();

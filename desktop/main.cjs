@@ -98,7 +98,8 @@ else {
       if (!quitting && !process.env.AUTOMATA_SMOKE) dialog.showErrorBox("Automata no pudo iniciar la interfaz", `El proceso de la interfaz terminó (${details.reason}, ${details.exitCode}).\nRegistro: ${path.join(app.getPath("userData"), "boot.log")}`);
     });
     win.webContents.setWindowOpenHandler(({ url }) => {
-      if (/^https:\/\//.test(url)) void shell.openExternal(url);
+      // https anywhere, or the local address of an app the user chose to run.
+      if (/^https:\/\//.test(url) || /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?(?:[/?#]|$)/i.test(url)) void shell.openExternal(url);
       return { action: "deny" };
     });
     win.webContents.on("will-navigate", (e, url) => {
