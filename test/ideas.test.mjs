@@ -112,6 +112,11 @@ test("la propuesta se valida: criterios, verificaciones, plan que cubre cada cri
   assert.throws(() => validateProposal(proposal({ plan: proposal().plan.slice(0, 3) })), /Sin tarea: «README\.md explica/);
   assert.throws(() => validateProposal(proposal({ plan: proposal().plan.map((t, i) => i === 2 ? { ...t, dependsOn: ["N9"] } : t) })), /depende de «N9»/);
   assert.throws(() => validateProposal(proposal({ plan: [...proposal().plan, { title: "Extra", detail: "", criterion: "inventado", dependsOn: [] }] })), /criterio exacto/);
+  // A criterion quoted shortened (and without accents) is linked when only one criterion matches.
+  const shortened = validateProposal(proposal({ plan: proposal().plan.map((task, i) => i === 2 ? { ...task, criterion: "La CLI lista el inventario en J" } : i === 1 ? { ...task, criterion: "agregarproducto VALIDA nombre y cantidad" } : task) }));
+  assert.equal(shortened.plan[2].criterion, CRITERIA[1]);
+  assert.equal(shortened.plan[1].criterion, CRITERIA[0]);
+  assert.throws(() => validateProposal(proposal({ plan: proposal().plan.map((task, i) => i === 2 ? { ...task, criterion: "La CLI" } : task) })), /Sin tarea: «La CLI lista/, "una cita demasiado corta no se adivina");
   assert.ok(PROPOSAL_SCHEMA.required.includes("risks") && PROPOSAL_SCHEMA.required.includes("plan"));
   assert.ok(REVIEW_SCHEMA.required.includes("files"));
   assert.deepEqual(normalizeFiles(["src/a.mjs", "./README.md", "C:/Windows/x", "../otro/x.js", "/etc/passwd", "src\\b.mjs", "a|b", "src/a.mjs"]), ["src/a.mjs", "README.md", "src/b.mjs"]);
@@ -161,7 +166,7 @@ test("de una idea a un proyecto: propuesta del director, ajuste, una aprobación
   assert.equal(project.name, "Inventario de la tienda");
   assert.deepEqual(project.criteria, CRITERIA);
   assert.deepEqual(project.checks, ["node --test"]);
-  assert.match(project.constraints, /No publiques nada, no compres[\s\S]*no hagas push ni merge/);
+  assert.match(project.constraints, /No publiques nada, no compres[\s\S]*no hagas push ni merge[\s\S]*Los commits locales sí/);
   assert.match(project.objective, /FUNCIONES PRINCIPALES:[\s\S]*Alertas de existencias bajas[\s\S]*PLATAFORMA: Consola de Windows/);
   assert.equal(project.proposalId, ready.id);
   assert.equal(c.proposals[0].status, "accepted");
@@ -290,4 +295,13 @@ test("la CLI simulada recibe el esquema de propuesta en la fase define, en solo 
   const args = JSON.parse(fs.readFileSync(path.join(dir, "invocation.json"), "utf8")).args;
   assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
   assert.ok(fs.readFileSync(path.join(dir, "proposal-schema.json"), "utf8").includes("questions"));
+});
+
+test("con cambios sin confirmar, la regla de Git le pide al director guardar el hito, también al completar", async () => {
+  const { directorPrompt } = await import("../server/prompts.mjs");
+  const project = { name: "P", directory: "C:/p", objective: "Algo", criteria: ["Funciona."], checks: [] };
+  const dirty = directorPrompt(project, validateSettings(), { phase: "review", git: { mode: "ask-push", info: { repo: true, branch: "main", dirty: true } } });
+  assert.match(dirty, /Hay cambios sin confirmar: si las verificaciones pasan[\s\S]*o si marcas complete\), decide commit=true/);
+  const clean = directorPrompt(project, validateSettings(), { phase: "review", git: { mode: "ask-push", info: { repo: true, branch: "main", dirty: false } } });
+  assert.doesNotMatch(clean, /Hay cambios sin confirmar/);
 });

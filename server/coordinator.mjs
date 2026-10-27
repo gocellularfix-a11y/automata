@@ -355,7 +355,7 @@ export class Coordinator extends EventEmitter {
     const objective = `${d.objective}\n\nFUNCIONES PRINCIPALES:\n${d.features.map((f) => "- " + f).join("\n")}\nPLATAFORMA: ${d.platform || "la más simple que cumpla el objetivo"}`;
     const constraints = [
       "Proyecto creado desde una idea de una persona que no sabe programar. Trabaja solo dentro de esta carpeta; no leas ni modifiques otros proyectos.",
-      "No publiques nada, no compres ni contrates servicios, no crees cuentas, no hagas push ni merge y no instales programas fuera de la carpeta. Si algo lo requiere, detente y explícalo (decision blocked).",
+      "No publiques nada, no compres ni contrates servicios, no crees cuentas, no hagas push ni merge y no instales programas fuera de la carpeta. Los commits locales sí: el director decide uno en cada hito verificado y Automata lo ejecuta, para que la persona conserve cada versión. Si algo lo requiere, detente y explícalo (decision blocked).",
       "Las pruebas aprobadas demuestran los criterios, no garantizan calidad comercial: no lo afirmes en reportes ni en el README.",
       d.risks.length ? `Limitaciones aceptadas: ${d.risks.join(" · ")}` : ""
     ].filter(Boolean).join("\n");

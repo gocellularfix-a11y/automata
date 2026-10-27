@@ -184,6 +184,16 @@ export function validateProposal(p) {
   if (proposal.criteria.length < 3) throw invalid("La propuesta necesita al menos 3 criterios de aceptación comprobables.");
   if (!proposal.checks.length) throw invalid("La propuesta necesita al menos un comando de verificación (por ejemplo node --test).");
   if (proposal.plan.length < 3) throw invalid("La propuesta necesita un plan inicial de al menos 3 tareas.");
+  // A task that quotes a criterion shortened or with different accents/punctuation is linked to it when
+  // exactly one criterion matches (in the real run, two of three proposals failed only for this).
+  const key = (text) => String(text).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  for (const task of proposal.plan) {
+    if (!task.criterion || proposal.criteria.includes(task.criterion)) continue;
+    const quoted = key(task.criterion).replace(/\s*\S*$/, "");
+    if (quoted.length < 20) continue;
+    const matches = proposal.criteria.filter((criterion) => key(criterion).startsWith(quoted) || quoted.startsWith(key(criterion)));
+    if (matches.length === 1) task.criterion = matches[0];
+  }
   const uncovered = proposal.criteria.filter((criterion) => !proposal.plan.some((task) => task.criterion === criterion));
   if (uncovered.length) throw invalid(`Cada criterio necesita al menos una tarea del plan con su texto exacto en criterion. Sin tarea: ${uncovered.map((c) => `«${c.slice(0, 60)}»`).join("; ")}.`);
   const stray = proposal.plan.filter((task) => task.criterion && !proposal.criteria.includes(task.criterion));

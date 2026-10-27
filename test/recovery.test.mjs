@@ -576,7 +576,8 @@ test("la configuración valida autoResume, maxRetries e inicio con Windows, y la
   const dir = fixture();
   let fail = true;
   const demoReview = (decision) => ({ ...review(decision), criteria: [{ criterion: "El saludo incluye el nombre y la prueba pasa.", met: decision === "complete", evidence: "ok" }] });
-  const app = await createServer({ port: 0, demo: true, dataDir: path.join(dir, "data"), backoff: FAST, checks: async (p) => p.checks.map((command) => ({ command, passed: true, code: 0, output: "ok" })), agents: { async run(a) {
+  // A long wait: only Continuar (over HTTP) may end it, never the timer racing it under load.
+  const app = await createServer({ port: 0, demo: true, dataDir: path.join(dir, "data"), backoff: { ...FAST, transient: [6e4] }, checks: async (p) => p.checks.map((command) => ({ command, passed: true, code: 0, output: "ok" })), agents: { async run(a) {
     if (a.role === "coder") return { text: "x" };
     if (fail) { fail = false; throw Object.assign(new Error("overloaded_error: Overloaded"), { role: "auditor", agent: true }); }
     return { review: demoReview(a.phase === "review" ? "complete" : "continue") };
