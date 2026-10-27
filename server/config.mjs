@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { directoryProblem } from "./safety.mjs";
 export const MODES = {
   small: { label: "Pequeño", description: "Un cambio concreto por ronda. Audita antes de avanzar.", turns: 20 },
   medium: { label: "Mediano", description: "Una funcionalidad acotada por ronda, con sus verificaciones.", turns: 45 },
@@ -92,7 +93,8 @@ export function githubRepository(value) {
   if (!repository || /^\.+$/.test(repository)) throw new Error("Nombre de repositorio no válido.");
   return `https://github.com/${parts[1]}/${repository}`;
 }
-export function validateProject(input, { checkDirectory = true } = {}) {
+// safety: { automataRoot, dataDir, projectsRoot } (safety.mjs). Without it only the disk root is refused.
+export function validateProject(input, { checkDirectory = true, safety = null } = {}) {
   const text = (k, max) => {
     const t = String(input[k] ?? "").trim();
     if (!t || t.length > max) throw new Error(`Completa ${k} (máximo ${max} caracteres).`);
@@ -102,6 +104,10 @@ export function validateProject(input, { checkDirectory = true } = {}) {
   const directory = path.resolve(text("directory", 1e3));
   if (directory === path.parse(directory).root) throw new Error("Selecciona la carpeta de un proyecto, no la raíz del disco.");
   if (checkDirectory && !fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory()) throw new Error("La carpeta del proyecto no existe.");
+  if (safety) {
+    const problem = directoryProblem(directory, safety);
+    if (problem) throw Object.assign(new Error(problem), { code: "unsafe-directory" });
+  }
   const lines = (v) => (Array.isArray(v) ? v : String(v ?? "").split(/\r?\n/)).map((x) => String(x).trim()).filter(Boolean);
   const criteria = lines(input.criteria), checks = lines(input.checks);
   if (!criteria.length || criteria.length > 30 || criteria.some((c) => c.length > 2e3)) throw new Error("Define entre 1 y 30 criterios de aceptación.");
@@ -113,13 +119,15 @@ export function validateProject(input, { checkDirectory = true } = {}) {
 export const REVIEW_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["decision", "summary", "nextPrompt", "task", "findings", "criteria", "git", "run", "memory", "plan"],
+  required: ["decision", "summary", "nextPrompt", "task", "files", "findings", "criteria", "git", "run", "memory", "plan"],
   properties: {
     decision: { type: "string", enum: ["continue", "complete", "blocked"] },
     summary: { type: "string" },
     nextPrompt: { type: "string" },
     // The plan task nextPrompt works on: "T12" (existing) or "N1" (first task added in this review). Empty when not continuing.
     task: { type: "string" },
+    // Files (relative to the project) the executor should start from for this task, so it does not reread everything.
+    files: { type: "array", items: { type: "string" } },
     findings: { type: "array", items: { type: "object", additionalProperties: false, required: ["severity", "file", "description", "evidence"], properties: { severity: { type: "string", enum: ["critical", "major", "minor", "info"] }, file: { type: "string" }, description: { type: "string" }, evidence: { type: "string" } } } },
     criteria: { type: "array", items: { type: "object", additionalProperties: false, required: ["criterion", "met", "evidence"], properties: { criterion: { type: "string" }, met: { type: "boolean" }, evidence: { type: "string" } } } },
     // What the director decides about Git. The executor (not the director) carries it out; empty values mean "do nothing".
@@ -139,6 +147,56 @@ export const REVIEW_SCHEMA = {
     } }
   }
 };
+// Relative paths inside the project, a dozen at most; anything else (absolute, "..", odd characters) is dropped.
+export function normalizeFiles(files) {
+  return [...new Set((Array.isArray(files) ? files : []).map((f) => String(f ?? "").trim().replace(/\\/g, "/").replace(/^\.\//, "")).filter((f) => f && f.length <= 200 && !path.isAbsolute(f) && !/^[a-z]:/i.test(f) && !f.split("/").includes("..") && !/[<>"|?*\0]/.test(f)))].slice(0, 12);
+}
+// ---- Proposals: an idea in plain words becomes a project definition the user approves once ----
+export const PROPOSAL_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "summary", "objective", "features", "criteria", "checks", "platform", "plan", "risks", "questions"],
+  properties: {
+    name: { type: "string" },
+    summary: { type: "string" },
+    objective: { type: "string" },
+    features: { type: "array", items: { type: "string" } },
+    criteria: { type: "array", items: { type: "string" } },
+    checks: { type: "array", items: { type: "string" } },
+    platform: { type: "string" },
+    plan: { type: "array", items: { type: "object", additionalProperties: false, required: ["title", "detail", "criterion", "dependsOn"], properties: { title: { type: "string" }, detail: { type: "string" }, criterion: { type: "string" }, dependsOn: { type: "array", items: { type: "string" } } } } },
+    risks: { type: "array", items: { type: "string" } },
+    questions: { type: "array", items: { type: "string" } }
+  }
+};
+const lines = (value, max, maxLength) => (Array.isArray(value) ? value : []).map((item) => String(item ?? "").trim()).filter(Boolean).slice(0, max).map((item) => item.slice(0, maxLength));
+export function validateProposal(p) {
+  if (!p || typeof p !== "object") throw Object.assign(new Error("El director no entregó una propuesta válida."), { kind: "malformed", role: "auditor" });
+  const proposal = {
+    name: String(p.name ?? "").trim().slice(0, 60), summary: String(p.summary ?? "").trim().slice(0, 600), objective: String(p.objective ?? "").trim().slice(0, 4000),
+    features: lines(p.features, 12, 200), criteria: lines(p.criteria, 25, 2000), checks: lines(p.checks, 6, 2000), platform: String(p.platform ?? "").trim().slice(0, 120),
+    plan: (Array.isArray(p.plan) ? p.plan : []).slice(0, 40).map((t) => ({ title: String(t?.title ?? "").trim().slice(0, 140), detail: String(t?.detail ?? "").trim().slice(0, 600), criterion: String(t?.criterion ?? "").trim().slice(0, 2000), dependsOn: lines(t?.dependsOn, 12, 10) })),
+    risks: lines(p.risks, 12, 300), questions: lines(p.questions, 6, 300)
+  };
+  const invalid = (message) => Object.assign(new Error(message), { kind: "malformed", role: "auditor" });
+  if (proposal.name.length < 3) throw invalid("La propuesta necesita un nombre de proyecto.");
+  if (proposal.objective.length < 20) throw invalid("La propuesta necesita un objetivo claro.");
+  if (proposal.criteria.length < 3) throw invalid("La propuesta necesita al menos 3 criterios de aceptación comprobables.");
+  if (!proposal.checks.length) throw invalid("La propuesta necesita al menos un comando de verificación (por ejemplo node --test).");
+  if (proposal.plan.length < 3) throw invalid("La propuesta necesita un plan inicial de al menos 3 tareas.");
+  const uncovered = proposal.criteria.filter((criterion) => !proposal.plan.some((task) => task.criterion === criterion));
+  if (uncovered.length) throw invalid(`Cada criterio necesita al menos una tarea del plan con su texto exacto en criterion. Sin tarea: ${uncovered.map((c) => `«${c.slice(0, 60)}»`).join("; ")}.`);
+  const stray = proposal.plan.filter((task) => task.criterion && !proposal.criteria.includes(task.criterion));
+  if (stray.length) throw invalid(`Las tareas deben citar un criterio exacto de la lista o dejar criterion vacío: «${stray[0].title}».`);
+  for (const [index, task] of proposal.plan.entries()) {
+    if (!task.title) throw invalid(`La tarea ${index + 1} del plan no tiene título.`);
+    for (const ref of task.dependsOn) {
+      const m = /^N(\d+)$/i.exec(ref);
+      if (!m || Number(m[1]) < 1 || Number(m[1]) > proposal.plan.length || Number(m[1]) === index + 1) throw invalid(`La tarea «${task.title}» depende de «${ref}», que no es una tarea de este plan (usa N1, N2…).`);
+    }
+  }
+  return proposal;
+}
 // Keeps only well-formed memory items, a few per review. Reviews without the field are valid.
 export function normalizeMemory(memory) {
   const add = (Array.isArray(memory?.add) ? memory.add : []).filter((item) => ["decision", "env", "pending", "gotcha", "note"].includes(item?.kind) && typeof item.text === "string" && item.text.trim()).slice(0, 6).map((item) => ({ kind: item.kind, text: item.text.trim().slice(0, 400) }));
@@ -195,6 +253,7 @@ export function validateReview(r, project, phase = "review") {
   r.run = normalizeRun(r.run);
   r.memory = normalizeMemory(r.memory);
   r.task = String(r.task ?? "").trim().toUpperCase();
+  r.files = normalizeFiles(r.files);
   // Reviews without a plan field (simulated agents, older reviews) leave the plan untouched.
   r.plan = r.plan && typeof r.plan === "object" ? { add: Array.isArray(r.plan.add) ? r.plan.add : [], update: (Array.isArray(r.plan.update) ? r.plan.update : []).map((item) => ({ ...item, status: item?.status || null, evidence: item?.evidence ? item.evidence : null, note: item?.note ? item.note : null })) } : null;
   return r;

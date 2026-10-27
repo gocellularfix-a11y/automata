@@ -231,10 +231,16 @@ export class PlanStore {
     if (status !== "todo") this.apply(projectId, { update: [{ id, status, evidence, note }] }, { by, runId, round });
     return this.list(projectId).find((t) => t.id === id);
   }
-  reorder(projectId, ids) {
+  // Every task whose place changes keeps a history row (before → after position).
+  reorder(projectId, ids, { by = "user", runId = null, round = null } = {}) {
     return this.memory.transaction(projectId, (db) => {
       const at = now();
-      ids.map(Number).forEach((id, index) => db.prepare("UPDATE tasks SET position = ?, updated_at = ? WHERE id = ?").run(index + 1, at, id));
+      ids.map(Number).forEach((id, index) => {
+        const task = db.prepare("SELECT id, position FROM tasks WHERE id = ?").get(id);
+        if (!task || task.position === index + 1) return;
+        db.prepare("UPDATE tasks SET position = ?, updated_at = ? WHERE id = ?").run(index + 1, at, id);
+        db.prepare("INSERT INTO task_history (task_id, action, before, after, by, run_id, round, at) VALUES (?, 'reorder', ?, ?, ?, ?, ?, ?)").run(id, String(task.position), String(index + 1), by, runId, round, at);
+      });
       return true;
     });
   }

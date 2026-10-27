@@ -4,7 +4,7 @@ import os from "node:os";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createRequire } from "node:module";
-import { MODES, REVIEW_SCHEMA, agentEnv } from "./config.mjs";
+import { MODES, REVIEW_SCHEMA, PROPOSAL_SCHEMA, agentEnv } from "./config.mjs";
 import { redactTokens, redactSecrets, redactJsonLine } from "./redact.mjs";
 import { classifyError } from "./recovery.mjs";
 export function findCodexNative(packageRoot, { platform = process.platform, arch = process.arch } = {}) {
@@ -231,8 +231,9 @@ export class CliAgents {
     let args;
     if (role === "auditor") {
       // The director never changes the project: it inspects and decides, the executor writes.
-      const schema = conversation ? null : path.join(directory, "review-schema.json");
-      if (schema) fs.writeFileSync(schema, JSON.stringify(REVIEW_SCHEMA));
+      // "define" turns an idea into a proposal; every other structured phase is a review.
+      const schema = conversation ? null : path.join(directory, phase === "define" ? "proposal-schema.json" : "review-schema.json");
+      if (schema) fs.writeFileSync(schema, JSON.stringify(phase === "define" ? PROPOSAL_SCHEMA : REVIEW_SCHEMA));
       const effortArgs = effort !== "default" ? ["-c", `model_reasoning_effort="${effort}"`] : [];
       args = sessionId
         ? ["exec", "resume", "--skip-git-repo-check", "-c", 'sandbox_mode="read-only"', "--model", model, "--json", "--output-last-message", outputFile, ...schema ? ["--output-schema", schema] : [], ...effortArgs, sessionId, "-"]
@@ -304,8 +305,9 @@ export class CliAgents {
     try {
       review = JSON.parse(text);
     } catch {
-      throw hints(Object.assign(new Error("Codex no entregó el JSON de auditoría esperado."), { kind: "malformed" }));
+      throw hints(Object.assign(new Error(phase === "define" ? "Codex no entregó la propuesta en el formato esperado." : "Codex no entregó el JSON de auditoría esperado."), { kind: "malformed" }));
     }
+    if (phase === "define") return keep({ text: review.summary ?? "", proposal: review, sessionId: sessionOut, resumed: !!sessionId, usage });
     return keep({ text: review.summary, review, sessionId: sessionOut, resumed: !!sessionId, usage });
   }
 }
@@ -384,6 +386,11 @@ export class DemoAgents {
         reject(Object.assign(new Error("Demostración detenida"), { name: "AbortError" }));
       }, { once: true });
     });
+    if (phase === "define") {
+      // The demo proposal: a greeting program, the same thing the demo project builds.
+      const c = en ? ["greet(name) returns a greeting with the name.", "node --test passes with at least one test of greet.", "README.md explains how to run it."] : ["greet(nombre) devuelve un saludo con el nombre.", "node --test pasa con al menos una prueba de greet.", "README.md explica cómo ejecutarlo."];
+      return { proposal: { name: en ? "Greeting" : "Saludo", summary: en ? "A tiny program that greets by name, with its own test." : "Un programa pequeño que saluda por nombre, con su propia prueba.", objective: en ? "Create greet.mjs with a greet(name) function, a node:test test and a README." : "Crear greet.mjs con una función greet(nombre), una prueba con node:test y un README.", features: en ? ["Greets by name", "Automatic test"] : ["Saluda por nombre", "Prueba automática"], criteria: c, checks: ["node --test"], platform: en ? "Windows console" : "Consola de Windows", plan: [{ title: en ? "Greeting and test" : "Saludo y prueba", detail: "greet.mjs, greet.test.mjs", criterion: c[0], dependsOn: [] }, { title: en ? "Test passes" : "La prueba pasa", detail: "node --test", criterion: c[1], dependsOn: ["N1"] }, { title: "README", detail: "README.md", criterion: c[2], dependsOn: ["N1"] }], risks: [en ? "Demo only: no AI is called." : "Solo demostración: no se llama a ninguna AI."], questions: [] } };
+    }
     if (["chat", "task"].includes(phase)) return { text: (en ? "This is the local demo. Try the workflow, controls, and history. To use a real model, open Automata without --demo and configure a project." : "Estás en la demostración local. Puedes probar el flujo, los controles y el historial. Para trabajar con un modelo real, abre Automata sin --demo y configura un proyecto.") };
     if (role === "coder") {
       fs.writeFileSync(path.join(project.directory, "greet.mjs"), "export function greet(name) { return `Hola, ${name}. Bienvenido a Automata.`; }\n");

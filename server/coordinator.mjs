@@ -2,10 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { DEFAULT_SETTINGS, validateProject, validateSettings, validateReview, invalidReview, teamOf, agentLabel, combineReviews } from "./config.mjs";
+import { DEFAULT_SETTINGS, validateProject, validateSettings, validateReview, invalidReview, validateProposal, projectsRootOf, teamOf, agentLabel, combineReviews } from "./config.mjs";
+import { AUTOMATA_ROOT } from "./safety.mjs";
+import { slugify, freeFolder } from "./github.mjs";
 import { CliAgents, DemoAgents, gitEvidence, runChecks } from "./agents.mjs";
 import { GitOps, normalizeGit, hasGitActions } from "./git.mjs";
-import { directorPrompt, coderPrompt, chatPrompt, reviewFixPrompt, continuationPrompt } from "./prompts.mjs";
+import { directorPrompt, coderPrompt, chatPrompt, reviewFixPrompt, continuationPrompt, proposalPrompt } from "./prompts.mjs";
 import { observe, digest } from "./watch.mjs";
 import { AppRunner } from "./apprun.mjs";
 import { MemoryStore, parseRemember, changedFiles, staleMentions, shallowNames } from "./memory.mjs";
@@ -90,6 +92,9 @@ export class Coordinator extends EventEmitter {
     }
     this.events = store.read("events.json", []);
     this.messages = store.read("messages.json", []);
+    // Ideas turned into project proposals (P3); a proposal being drafted when Automata closed can be retried.
+    this.proposals = store.read("proposals.json", []);
+    for (const proposal of this.proposals) if (["drafting", "accepting"].includes(proposal.status)) { proposal.status = proposal.draft ? "ready" : "error"; proposal.error = proposal.draft ? null : "Automata se cerró mientras se preparaba la propuesta. Vuelve a enviarla."; }
     this.busy = false;
     this.controller = null;
     this.chatController = null;
@@ -189,7 +194,7 @@ export class Coordinator extends EventEmitter {
   persist() {
     clearTimeout(this.eventsTimer);
     this.eventsTimer = null;
-    for (const [name, data] of Object.entries({ projects: this.projects, settings: this.settings, runs: this.runs, events: this.events.slice(-700), messages: this.messages.slice(-200) })) this.store.write(`${name}.json`, data);
+    for (const [name, data] of Object.entries({ projects: this.projects, settings: this.settings, runs: this.runs, events: this.events.slice(-700), messages: this.messages.slice(-200), proposals: this.proposals })) this.store.write(`${name}.json`, data);
   }
   // Plan counts per project, cached until the plan changes (the snapshot is built often).
   planStatsFor(projectId) {
@@ -214,7 +219,7 @@ export class Coordinator extends EventEmitter {
     return summary;
   }
   snapshot() {
-    return { projects: this.projects, settings: this.settings, runs: this.runs.map((run) => { const { baseline, coderReport, nextPrompt, sessions, watch, inflight, continuation, usageLog, ...r } = run; return { ...r, watched: watch?.length ?? 0, usage: this.usageSummary(run) }; }), activeId: this.active?.id ?? null, events: this.events.slice(-250), messages: this.messages.slice(-100).map(({ inflight, ...m }) => m), demo: this.demo, busy: this.busy, app: this.app.view(), plans: Object.fromEntries(this.projects.map((p) => [p.id, this.planStatsFor(p.id)])) };
+    return { projects: this.projects, settings: this.settings, runs: this.runs.map((run) => { const { baseline, coderReport, nextPrompt, sessions, watch, inflight, continuation, usageLog, ...r } = run; return { ...r, watched: watch?.length ?? 0, usage: this.usageSummary(run) }; }), activeId: this.active?.id ?? null, events: this.events.slice(-250), messages: this.messages.slice(-100).map(({ inflight, ...m }) => m), proposals: this.proposals.filter((p) => p.status !== "discarded").slice(-10).map((p) => this.proposalView(p)), demo: this.demo, busy: this.busy, app: this.app.view(), plans: Object.fromEntries(this.projects.map((p) => [p.id, this.planStatsFor(p.id)])) };
   }
   notify() {
     this.emit("state", this.snapshot());
@@ -235,13 +240,145 @@ export class Coordinator extends EventEmitter {
     this.emit("event", item);
     return item;
   }
-  addProject(input) {
+  // Where projects may live (safety.mjs). The demo project lives inside Automata's data on purpose.
+  safetyContext() {
+    return this.demo ? null : { automataRoot: AUTOMATA_ROOT, dataDir: this.store.directory, projectsRoot: projectsRootOf(this.settings) };
+  }
+  addProject(input, extra = {}) {
     if (this.demo) throw new Error("En demostración usa el proyecto de ejemplo. Reinicia sin --demo para agregar tus proyectos.");
-    const p = { ...validateProject(input), id: randomUUID(), createdAt: now() };
+    const p = { ...validateProject(input, { safety: this.safetyContext() }), ...extra, id: randomUUID(), createdAt: now() };
     this.projects.push(p);
     this.persist();
     this.notify();
     return p;
+  }
+  // ---- From an idea to a project: the director proposes, the person approves once ----
+  proposalView(proposal) {
+    const { sessionId, ...rest } = proposal;
+    return rest;
+  }
+  environment() {
+    return `Windows, Node.js ${process.versions.node}, Git y PowerShell. Sin otros lenguajes instalados garantizados, sin cuentas de servicios y sin publicar en Internet.`;
+  }
+  // Starts (or adjusts) a proposal. The director works read-only in an empty scratch folder.
+  propose({ idea, adjustments = "", id = null } = {}) {
+    idea = String(idea ?? "").trim();
+    adjustments = String(adjustments ?? "").trim().slice(0, 4000);
+    let proposal = id ? this.proposals.find((p) => p.id === id) : null;
+    if (id && !proposal) throw new Error("No se encontró esa propuesta.");
+    if (proposal && ["accepted", "drafting"].includes(proposal.status)) throw new Error(proposal.status === "accepted" ? "Esa propuesta ya se convirtió en proyecto." : "La propuesta todavía se está preparando.");
+    if (!proposal) {
+      if (idea.length < 8 || idea.length > 4000) throw new Error("Describe tu idea en una o dos frases.");
+      // "Buen trabajo" is not an idea: nothing starts.
+      if (isCasual(idea)) throw new Error("Eso no parece una idea de proyecto. Cuéntame qué quieres crear, por ejemplo: «Quiero una aplicación para administrar el inventario de mi tienda».");
+    } else if (!adjustments) throw new Error("Escribe qué quieres cambiar de la propuesta.");
+    if (this.busy) throw new Error("Tu equipo está ocupado con otra tarea. Espera a que termine o pausa el trabajo para preparar una propuesta.");
+    if (!proposal) {
+      proposal = { id: randomUUID(), idea, status: "drafting", at: now(), versions: 0, usage: [] };
+      this.proposals.push(proposal);
+      this.proposals = this.proposals.slice(-30);
+    }
+    proposal.status = "drafting";
+    proposal.error = null;
+    if (adjustments) (proposal.adjustments ??= []).push({ text: adjustments, at: now() });
+    this.busy = true;
+    this.chatController = new AbortController();
+    this.persist();
+    this.notify();
+    this.proposalPending = this.draftProposal(proposal, adjustments).finally(() => {
+      this.busy = false;
+      this.chatController = null;
+      this.persist();
+      this.notify();
+      if (this.chatQueue.length) this.chatPending = this.drainChats();
+    });
+    return this.proposalView(proposal);
+  }
+  async draftProposal(proposal, adjustments) {
+    const base = path.join(this.store.directory, "proposals", proposal.id);
+    const workspace = path.join(base, "workspace");
+    const dir = path.join(base, `v${++proposal.versions}`);
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true });
+    const team = teamOf(this.settings, "auditor");
+    let fix = "";
+    for (let attempt = 1; attempt <= MAX_REVIEW_FIXES; attempt++) {
+      const prompt = proposalPrompt(proposal.idea, this.settings, { adjustments, previous: adjustments ? proposal.draft : null, environment: this.environment() }) + (fix ? `\nRESPUESTA ANTERIOR RECHAZADA (intento ${attempt - 1} de ${MAX_REVIEW_FIXES}): ${fix}` : "");
+      try {
+        const result = await this.agents.run({ role: "auditor", phase: "define", prompt, fallbackPrompt: prompt, project: { name: "Propuesta", directory: workspace, objective: proposal.idea, criteria: [], checks: [] }, settings: { ...this.settings }, directory: dir, signal: this.chatController.signal, agent: { ...team[0], index: 0, count: 1, label: agentLabel("auditor", team, 0), resume: null }, emit: (e) => this.event({ ...e, runId: null, projectId: null, proposalId: proposal.id }) });
+        const u = result.usage;
+        if (u) proposal.usage.push({ at: now(), context: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), cached: u.cached_input_tokens ?? u.cache_read_input_tokens ?? 0, output: u.output_tokens ?? 0 });
+        proposal.draft = validateProposal(result.proposal);
+        proposal.status = "ready";
+        proposal.readyAt = now();
+        const root = projectsRootOf(this.settings);
+        try { proposal.folder = freeFolder(root, slugify(proposal.draft.name)); } catch { proposal.folder = path.join(root, slugify(proposal.draft.name)); }
+        fs.writeFileSync(path.join(dir, "proposal.json"), JSON.stringify(proposal.draft, null, 2));
+        return;
+      } catch (error) {
+        if (error.name === "AbortError") {
+          proposal.status = proposal.draft ? "ready" : "error";
+          proposal.error = "Se detuvo la preparación de la propuesta.";
+          return;
+        }
+        if (classifyError(error).kind === "malformed" && attempt < MAX_REVIEW_FIXES) {
+          fix = error.message;
+          this.event({ role: "system", kind: "warning", text: `Propuesta no válida (${attempt}/${MAX_REVIEW_FIXES}): ${error.message} Se le pide al director que la corrija.`, runId: null, projectId: null });
+          continue;
+        }
+        proposal.status = proposal.draft ? "ready" : "error";
+        proposal.error = classifyError(error).kind === "limit" ? `El límite de uso de Codex no deja preparar la propuesta ahora. Inténtalo más tarde. (${clip(error.message, 160)})` : clip(error.message, 400);
+        return;
+      }
+    }
+  }
+  discardProposal(id) {
+    const proposal = this.proposals.find((p) => p.id === id);
+    if (!proposal) throw new Error("No se encontró esa propuesta.");
+    if (proposal.status === "drafting") throw new Error("Espera a que termine de prepararse.");
+    if (proposal.status !== "accepted") proposal.status = "discarded";
+    this.persist();
+    this.notify();
+    return this.proposalView(proposal);
+  }
+  // The single approval: the folder is created (create: github.createNew), the plan seeded and the work started.
+  async acceptProposal(id, create) {
+    const proposal = this.proposals.find((p) => p.id === id);
+    if (!proposal) throw new Error("No se encontró esa propuesta.");
+    if (proposal.status !== "ready") throw new Error(proposal.status === "accepted" ? "Esa propuesta ya se convirtió en proyecto." : "La propuesta todavía no está lista.");
+    if (this.busy || this.active && ["paused", "interrupted", "waiting", ...LIVE].includes(this.active.status)) throw new Error("Continúa o detén el trabajo actual antes de iniciar otro.");
+    const d = proposal.draft;
+    proposal.status = "accepting";
+    const objective = `${d.objective}\n\nFUNCIONES PRINCIPALES:\n${d.features.map((f) => "- " + f).join("\n")}\nPLATAFORMA: ${d.platform || "la más simple que cumpla el objetivo"}`;
+    const constraints = [
+      "Proyecto creado desde una idea de una persona que no sabe programar. Trabaja solo dentro de esta carpeta; no leas ni modifiques otros proyectos.",
+      "No publiques nada, no compres ni contrates servicios, no crees cuentas, no hagas push ni merge y no instales programas fuera de la carpeta. Si algo lo requiere, detente y explícalo (decision blocked).",
+      "Las pruebas aprobadas demuestran los criterios, no garantizan calidad comercial: no lo afirmes en reportes ni en el README.",
+      d.risks.length ? `Limitaciones aceptadas: ${d.risks.join(" · ")}` : ""
+    ].filter(Boolean).join("\n");
+    let project;
+    try {
+      const created = await create({ name: d.name, objective, criteria: d.criteria, checks: d.checks, constraints, source: "new" });
+      project = this.addProject(created, { proposalId: proposal.id, platform: d.platform });
+    } catch (error) {
+      proposal.status = "ready";
+      this.persist();
+      this.notify();
+      throw error;
+    }
+    // The approved plan becomes the project's plan; the director refines it when planning.
+    this.plan.apply(project.id, { add: d.plan }, { by: "director", key: `proposal:${proposal.id}`, criteria: project.criteria, requireCoverage: true });
+    this.planChanged(project.id);
+    this.remember("guardar", () => {
+      this.memory.addFact(project.id, { kind: "decision", text: `Plataforma elegida al proponer el proyecto: ${d.platform}`, source: "director" });
+      for (const risk of d.risks.slice(0, 4)) this.memory.addFact(project.id, { kind: "note", text: `Limitación aceptada por la persona: ${risk}`, source: "user" });
+    });
+    proposal.status = "accepted";
+    proposal.projectId = project.id;
+    proposal.acceptedAt = now();
+    this.persist();
+    const run = this.start(project.id);
+    return { project, run: { id: run.id, status: run.status }, proposal: this.proposalView(proposal) };
   }
   seedDemo() {
     if (!this.demo) return;
@@ -271,7 +408,9 @@ export class Coordinator extends EventEmitter {
     if (this.busy || this.active && ["paused", "interrupted", "waiting", ...LIVE].includes(this.active.status)) throw new Error("Continúa o detén el trabajo actual antes de iniciar otro.");
     const p = this.projects.find((p2) => p2.id === projectId);
     if (!p) throw new Error("Selecciona un proyecto.");
-    validateProject(p);
+    // Checked again here: a project registered before these rules (or a folder that changed) is refused now.
+    validateProject(p, { safety: this.safetyContext() });
+    if (!p.checks.length) this.event({ role: "system", kind: "warning", text: "Este proyecto no tiene verificaciones automáticas. El director pedirá crear pruebas como primera tarea y no aprobará sin evidencia comprobable.", projectId: p.id, runId: null });
     const run = { id: randomUUID(), projectId: p.id, project: { ...p }, settings: JSON.parse(JSON.stringify(this.settings)), status: "running", stage: "plan", round: 0, createdAt: now(), updatedAt: now(), baseline: "", coderReport: "", nextPrompt: "", review: null, checks: [], tokens: 0, costUsd: 0, sessions: {}, gitQueue: [], recovery: { attempts: {}, log: [], waits: 0 } };
     // A new run of the project replaces any question still open from an earlier one.
     for (const old of this.runs) if (old.projectId === p.id) for (const offer of old.runOffers ?? []) if (offer.status === "pending") offer.status = "superseded";
@@ -493,9 +632,23 @@ export class Coordinator extends EventEmitter {
           this.plan.apply(p.id, { update: [{ id, status: "todo" }] }, meta);
           return done();
         }
+        // A direct task waits "por confirmar": the person (who asked for it) can confirm it from the panel
+        // when no review will happen soon, or send it back to the director.
+        case "confirm": {
+          const task = this.plan.get(p.id, id);
+          if (task?.status !== "review") throw new Error("Solo se confirman las tareas que esperan confirmación.");
+          this.plan.apply(p.id, { update: [{ id, status: "done", evidence: `Confirmada por la persona. ${task.evidence}`.trim() }] }, meta);
+          return done();
+        }
+        case "reopen": {
+          const task = this.plan.get(p.id, id);
+          if (task?.status !== "review") throw new Error("Solo se devuelven al plan las tareas que esperan confirmación.");
+          this.plan.apply(p.id, { update: [{ id, status: "todo", note: input.note || "La persona pidió revisarla de nuevo." }] }, meta);
+          return done();
+        }
         case "reorder": {
           if (!Array.isArray(input.ids)) throw new Error("Indica el orden de las tareas.");
-          this.plan.reorder(p.id, input.ids);
+          this.plan.reorder(p.id, input.ids, meta);
           return done();
         }
         default: throw new Error("Acción del plan no válida.");
@@ -623,7 +776,7 @@ export class Coordinator extends EventEmitter {
       r.tokens += (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
       // Context = everything the model read this call (Claude counts the cache apart; Codex inside input_tokens).
       const context = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-      r.usageLog = [...r.usageLog ?? [], { at: now(), round: r.round, role, phase, context, cached: u.cache_read_input_tokens ?? u.cached_input_tokens ?? 0, output: u.output_tokens ?? 0, resumed: !!resume }].slice(-300);
+      r.usageLog = [...r.usageLog ?? [], { at: now(), round: r.round, role, phase, context, cached: u.cache_read_input_tokens ?? u.cached_input_tokens ?? 0, output: u.output_tokens ?? 0, resumed: !!resume, files: role === "coder" ? (r.files?.length ?? 0) : undefined }].slice(-300);
     }
     if (Number.isFinite(result.cost)) r.costUsd += result.cost;
     if (result.sessionId) {
@@ -873,7 +1026,7 @@ ${state}`;
         for (let i = 0; i < reviewers; i++) {
           const reviewDir = i === 0 ? dir : path.join(dir, `reviewer-${i + 1}`);
           fs.mkdirSync(reviewDir, { recursive: true });
-          const options = { phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo }, watch, memory, plan: planText, requests };
+          const options = { planExists: phase === "plan" && !!planText, phase, report: r.coderReport, history: r.review?.summary, team: reviewers > 1 ? { index: i, count: reviewers } : null, git: { mode: s.gitMode ?? "ask-push", info: gitInfo }, watch, memory, plan: planText, requests };
           const { result, review, taskId: assigned } = await this.review("auditor", phase, options, { full: evidenceFull, short: state }, reviewDir, i, p);
           reviews.push(review);
           if (assigned) taskId = assigned;
@@ -908,7 +1061,11 @@ ${state}`;
         fs.writeFileSync(path.join(dir, "review.json"), JSON.stringify(review, null, 2));
         r.review = review;
         r.reviewedAt = now();
-        if (review.decision === "continue") r.taskId = taskId ?? r.taskId ?? null;
+        if (review.decision === "continue") {
+          r.taskId = taskId ?? r.taskId ?? null;
+          // Where the executor should start reading, according to the director.
+          r.files = review.files ?? [];
+        }
         this.remember("guardar", () => this.memory.recordReview(p.id, { review, runId: r.id, round: r.round, criteria: p.criteria }));
         // The director has seen it: the next review only gets what happens from here on.
         r.watch = (r.watch ?? []).slice(watched);
@@ -966,7 +1123,9 @@ ${state}`;
         if (memory) fs.writeFileSync(path.join(work, "memory-code.txt"), memory);
         const planText = this.remember("leer", () => this.plan.brief(p.id, { current: r.taskId ?? null, forCoder: true }))?.text ?? "";
         if (planText) fs.writeFileSync(path.join(work, "plan-code.txt"), planText);
-        const prompts = { full: coderPrompt(p, s, task, r.baseline, teamInfo, false, memory, planText), short: coderPrompt(p, s, task, r.baseline, teamInfo, true, memory, planText) };
+        // Already normalized by validateReview: relative paths inside the project, no "..".
+        const files = r.files ?? [];
+        const prompts = { full: coderPrompt(p, s, task, r.baseline, teamInfo, false, memory, planText, files), short: coderPrompt(p, s, task, r.baseline, teamInfo, true, memory, planText, files) };
         this.persist();
         let result;
         try {

@@ -290,7 +290,7 @@ test("el panel y la API del plan: agregar ligado o libre, corregir, reordenar, d
   const restored = await call({ action: "restore", id: free.task.id });
   assert.equal(restored.tasks[0].status, "todo");
   const history = await call({ action: "history", id: free.task.id });
-  assert.deepEqual(history.history.map((h) => h.action), ["add", "dependencies", "title", "note", "status", "status"]);
+  assert.deepEqual(history.history.map((h) => h.action), ["add", "dependencies", "title", "reorder", "note", "status", "status"]);
   assert.equal(history.history.every((h) => h.by === "user"), true);
   const listed = await call({ action: "list" });
   assert.equal(listed.stats.total, 2);
