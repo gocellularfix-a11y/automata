@@ -108,6 +108,49 @@ Fuentes: [permisos de Claude Code](https://code.claude.com/docs/en/permissions) 
 
 **Estados.** Cada panel muestra Trabajando (con reloj), Observando, Verificando, Esperando, Pausando / Pausa pedida, En pausa, Completado, Necesita tu decisión, Error o Interrumpido. El subtítulo pasa a ser la actividad en curso (por ejemplo «Editando src/app.js») y una barra recorre el borde superior mientras trabaja; en pausa queda en ámbar.
 
+## Memoria del proyecto
+
+**Almacenamiento.** `server/memory.mjs` guarda lo que Claude y Codex deben recordar de cada proyecto:
+- Cada proyecto tiene **un archivo SQLite propio** (`node:sqlite`, el que trae el Node de Electron, con FTS5) en `<datos>/memory/<id del proyecto>.db`, fuera de la carpeta del proyecto. El archivo guarda el id de su proyecto y se rechaza si se copia a otro, así que no hay consultas entre proyectos.
+- El archivo se abre solo durante cada operación: no hay procesos residentes, puertos ni archivos bloqueados.
+- Cada escritura es una transacción con `synchronous = FULL`, así que la memoria sobrevive a cierres e interrupciones.
+
+**Qué guarda.** Solo resúmenes, cada uno con el trabajo y la ronda de origen. El historial completo sigue en `runs/<id>/round-NN/`. Tablas:
+- `facts`: recuerdos de tipo decisión, entorno, avance, pendiente, trampa conocida o nota, con estado activo o retirado. Las correcciones quedan en `fact_revisions`.
+- `errors`: firma, comando, extracto y número de veces que apareció.
+- `solutions`: la ronda, los archivos cambiados y el resumen que dejaron pasar la verificación otra vez.
+
+**Captura** (sin hooks; solo lo que el coordinador ya ve):
+1. **Verificaciones** (`recordChecks`). Una verificación que falla abre un error con su firma: comando y primera línea de error, sin tiempos, rutas absolutas ni números. Cuando la misma verificación pasa, sus errores abiertos se resuelven con los archivos editados según la bitácora y el reporte de Claude.
+2. **Comandos de Claude** (`recordCommands`). En cada llamada, un comando de compilación o prueba que falla y luego funciona queda resuelto con lo que cambió en medio.
+3. **Revisión del director.** El esquema tiene `memory.add` (hechos duraderos) y `memory.retire` (ids que el director comprobó falsos). Además, el resumen de cada revisión se guarda como avance, y los criterios abiertos quedan como pendientes automáticos, que se retiran al cumplirse.
+4. **Reportes de Claude y respuestas del chat.** Si terminan con una sección «PARA RECORDAR:», se guarda una línea por hecho con su etiqueta.
+5. **Commits** que ejecuta Automata, como avances.
+
+**Recuperación.** `brief()` arma el bloque «MEMORIA DEL PROYECTO» para los prompts del director (completo y corto), de Claude (completo y corto) y del chat:
+- Se limita a 1 500 tokens, estimados como 4 caracteres por token y repartidos por secciones con `allocateBudget`.
+- Orden de prioridad:
+  1. soluciones conocidas para las verificaciones que fallan ahora (la misma firma o una parecida, buscada con FTS),
+  2. entorno,
+  3. decisiones,
+  4. pendientes,
+  5. trampas conocidas,
+  6. errores resueltos antes,
+  7. avances recientes,
+  8. notas.
+- Dentro de cada sección va primero lo relevante a la tarea actual (FTS sobre su texto).
+- El bloque que recibió cada agente queda en `round-NN/memory-plan.txt`, `memory-code.txt` o `memory-review.txt`.
+
+**Corregir.** El panel Memoria (barra lateral) y `POST /api/memory` permiten consultar, buscar, agregar, corregir, retirar y restaurar recuerdos, y retirar errores. Lo retirado deja de llegar a los agentes.
+
+**Secretos.** `server/redact.mjs` limpia todo antes de guardarlo:
+- formas de token, asignaciones (`password=`, `"api_key": …`), bloques de clave privada, contraseñas en URL y cadenas aleatorias de alta entropía;
+- los archivos sensibles no se guardan como parte de una solución.
+
+Desde esta versión, el registro original de cada llamada (`*.jsonl`) también se limpia línea por línea sin romper el JSON, igual que los eventos, los reportes y la salida de las verificaciones. La redacción, el saneamiento FTS y el reparto de presupuesto están adaptados de local-mem (MIT); el aviso está en `server/redact.mjs` y en `THIRD_PARTY_NOTICES.md`.
+
+**Tolerancia a fallos.** Si la memoria falla (disco lleno, archivo dañado), se muestra un aviso una vez y el trabajo continúa sin ella.
+
 ## Idiomas y configuración (0.4.0)
 
 `settings.language` acepta `es` o `en`. El coordinador persiste la elección y la comparte por eventos con Windows y Android. Los prompts solicitan las próximas respuestas en ese idioma y conservan literalmente los criterios de aceptación. Las llamadas ya iniciadas conservan su snapshot. La interfaz recuerda el idioma localmente incluso antes de conectarse; el coordinador es la fuente de la preferencia al establecer conexión.

@@ -88,7 +88,10 @@ test("una sesión nueva recupera decisiones, entorno y errores resueltos, y un e
   assert.equal(c.memoryAction({ projectId: p.id }).errors.find((e) => e.id === checkError.id).occurrences, 2);
   // Prompts and the memory shown to each agent are saved with the round, next to the full history.
   const runDir = c.store.runDir(c.active.id);
-  assert.ok(fs.existsSync(path.join(runDir, "round-00", "memory.txt")));
+  assert.ok(fs.existsSync(path.join(runDir, "round-00", "memory-plan.txt")));
+  // The coder and the director of the same round keep separate copies.
+  assert.match(fs.readFileSync(path.join(runDir, "round-02", "memory-code.txt"), "utf8"), /SOLUCIONES CONOCIDAS/);
+  assert.ok(fs.existsSync(path.join(runDir, "round-02", "memory-review.txt")));
 });
 
 test("la memoria de un proyecto no aparece en otro, ni en el ciclo, ni en el chat, ni por la API", async (t) => {

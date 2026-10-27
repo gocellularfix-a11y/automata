@@ -20,6 +20,7 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"))
 delete pkg.devDependencies;
 fs.writeFileSync(path.join(app, "package.json"), JSON.stringify(pkg, null, 2));
 fs.copyFileSync(path.join(root, "README.md"), path.join(target, "LEEME.md"));
+fs.copyFileSync(path.join(root, "THIRD_PARTY_NOTICES.md"), path.join(target, "AVISOS_DE_TERCEROS.md"));
 if (!exists) fs.renameSync(path.join(target, "electron.exe"), path.join(target, "Automata.exe"));
 const legacyBrowserLauncher = path.join(target, "Automata-Chrome.cmd");
 if (fs.existsSync(legacyBrowserLauncher)) fs.unlinkSync(legacyBrowserLauncher);

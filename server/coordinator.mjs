@@ -487,7 +487,8 @@ ${state}`;
         if (watched) fs.writeFileSync(path.join(dir, "watch.txt"), watch);
         // What earlier sessions learned, filtered by what is on the table now.
         const memory = this.memoryBrief(p.id, { query: `${r.coderReport}\n${r.nextPrompt}\n${p.objective}`, failing });
-        if (memory) fs.writeFileSync(path.join(dir, "memory.txt"), memory);
+        // One file per phase: the coder and the director of the same round each get their own.
+        if (memory) fs.writeFileSync(path.join(dir, `memory-${phase}.txt`), memory);
         for (let i = 0; i < reviewers; i++) {
           const reviewDir = i === 0 ? dir : path.join(dir, `reviewer-${i + 1}`);
           fs.mkdirSync(reviewDir, { recursive: true });
@@ -554,7 +555,7 @@ ${state}`;
         this.event({ role: "coder", kind: "phase", text: `Ronda ${r.round} · ${r.nextPrompt}`, ...coders.length > 1 ? { agent: agentLabel("coder", coders, turn) } : {} });
         // A failure that already happened before comes with the solution that fixed it then.
         const memory = this.memoryBrief(p.id, { query: r.nextPrompt, failing: failingBefore });
-        if (memory) fs.writeFileSync(path.join(work, "memory.txt"), memory);
+        if (memory) fs.writeFileSync(path.join(work, "memory-code.txt"), memory);
         const prompts = { full: coderPrompt(p, s, r.nextPrompt, r.baseline, teamInfo, false, memory), short: coderPrompt(p, s, r.nextPrompt, r.baseline, teamInfo, true, memory) };
         const result = await this.invoke("coder", prompts, "code", work, turn);
         r.coderReport = result.text;
