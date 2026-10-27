@@ -105,7 +105,20 @@ else {
     win.webContents.on("will-navigate", (e, url) => {
       if (url !== index) e.preventDefault();
     });
+    // "Open with Windows" is the user's own setting: applied only when they turn it on, in the packaged
+    // app (a dev run would register electron.exe), and removed as soon as they turn it off.
+    let loginItem = null;
+    const applyLoginItem = (enabled) => {
+      if (!app.isPackaged || process.platform !== "win32" || enabled === loginItem) return;
+      loginItem = enabled;
+      try {
+        app.setLoginItemSettings({ openAtLogin: !!enabled, path: process.execPath, args: [] });
+        log(`login item ${enabled ? "registered" : "removed"}`);
+      } catch (e) { log("login item: " + e.message); }
+    };
+    applyLoginItem(service.coordinator.settings.autoStart === true);
     service.coordinator.on("state", (data) => {
+      applyLoginItem(data.settings?.autoStart === true);
       if (!win.isDestroyed()) win.webContents.send("automata:state", data);
     });
     service.coordinator.on("event", (data) => {

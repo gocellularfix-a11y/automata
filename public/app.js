@@ -3,8 +3,16 @@ const i18n = window.automataI18n, t = value => i18n.t(value);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const icon = (name) => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const effortNames = { default: "Predeterminado", low: "Bajo", medium: "Medio", high: "Alto", xhigh: "Extra alto", max: "Máximo", ultra: "Ultra" };
-const stateNames = { running: "Trabajando", pausing: "Pausando", paused: "En pausa", stopped: "Detenido", complete: "Completado", blocked: "Necesita tu atención", error: "Error de ejecución", interrupted: "Sesión interrumpida", limit: "Límite de rondas" };
-const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", tool: "ACTIVIDAD", session: "SESIÓN", message: "MENSAJE", warning: "ATENCIÓN", error: "ERROR", check: "VERIFICACIÓN", success: "VERIFICADO", start: "INICIO", pause: "PAUSA", stop: "DETENIDO", complete: "COMPLETADO", approval: "APROBACIÓN", runoffer: "APP" };
+const stateNames = { running: "Trabajando", pausing: "Pausando", paused: "En pausa", stopped: "Detenido", complete: "Completado", blocked: "Necesita tu atención", error: "Error de ejecución", interrupted: "Sesión interrumpida", limit: "Límite de rondas", waiting: "Esperando para continuar" };
+const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", tool: "ACTIVIDAD", session: "SESIÓN", message: "MENSAJE", warning: "ATENCIÓN", error: "ERROR", check: "VERIFICACIÓN", success: "VERIFICADO", start: "INICIO", pause: "PAUSA", stop: "DETENIDO", complete: "COMPLETADO", approval: "APROBACIÓN", runoffer: "APP", wait: "ESPERA" };
+// Why Automata waits, which agent is affected and when it will try again (mirrors describeWait on the server).
+function waitText(w) {
+  const who = w.role === "coder" ? "Claude" : "Codex";
+  const reason = w.kind === "limit" ? `${t("Límite de uso de")} ${who}${w.reliable ? "" : " · " + t("sin hora confiable")}` : w.kind === "context" ? `${t("Sesión de")} ${who} ${t("demasiado larga")}` : `${t("Fallo pasajero de")} ${who}`;
+  const at = w.resumeAt ? new Date(w.resumeAt) : null;
+  const clock = at ? at.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) + (at.toDateString() === new Date().toDateString() ? "" : " " + at.toLocaleDateString(i18n.language, { day: "numeric", month: "short" })) : "";
+  return `${reason} · ${t("sigue a las")} ${clock}${w.maxAttempts ? ` (${t("intento")} ${w.attempt}/${w.maxAttempts})` : ""}`;
+}
 let state = { projects: [], settings: { language: i18n.language, mode: "small", accessMode: "full", coderModel: "sonnet", auditorModel: "gpt-6-sol", coderEffort: "default", auditorEffort: "high", maxRounds: 6, timeoutMinutes: 30 }, runs: [], events: [], messages: [], busy: false };
 let selected = localStorage.getItem("automata.project"), capabilities = null, connection = null, streamAbort = null, toastTimer, reconnectTimer, renderTimer;
 let accounts = null, authTimer, authLoading = null, accountsOpened = false;
@@ -146,7 +154,8 @@ function gitText(g) {
 function approvalEntry(e) {
   return `<article class="activity-entry approval"><div class="activity-meta"><span class="tiny-line"></span><span class="entry-kind">${t("APROBACIÓN")}</span><time>${entryTime(e)}</time></div><p data-user-content>${esc(gitText(e.git))}</p></article>`;
 }
-const pendingGit = () => state.runs.filter((r) => r.projectId === selected).flatMap((r) => (r.gitQueue ?? []).filter((item) => item.status === "pending").map((item) => ({ ...item, runId: r.id })));
+// Pending: waiting for the OK. Uncertain: it was running when Automata closed; only the user may repeat it.
+const pendingGit = () => state.runs.filter((r) => r.projectId === selected).flatMap((r) => (r.gitQueue ?? []).filter((item) => item.status === "pending" || item.status === "uncertain").map((item) => ({ ...item, runId: r.id })));
 // ───────── The app: the director asks before running it, then it can be watched and stopped ─────────
 const pendingRuns = () => state.runs.filter((r) => r.projectId === selected).flatMap((r) => (r.runOffers ?? []).filter((offer) => offer.status === "pending").map((offer) => ({ ...offer, runId: r.id })));
 let appOutputOpen = false;
@@ -172,7 +181,11 @@ function renderGitBar() {
     return;
   }
   const output = $("#gitItems .app-output"), pinned = !output || output.scrollHeight - output.scrollTop - output.clientHeight < 30;
-  $("#gitItems").innerHTML = (app ? appRow(app) : "") + offers.map(runOfferRow).join("") + items.map((item) => `<div class="git-item" data-run="${esc(item.runId)}" data-git="${esc(item.id)}"><span class="git-kind">${esc(t(gitKinds[item.kind] ?? "GIT"))}</span><span class="git-text" data-user-content title="${esc(gitText(item))}">${esc(gitText(item))}</span><span class="git-actions"><button type="button" class="button small primary" data-decision="approve">${t("Aprobar")}</button><button type="button" class="button small quiet" data-decision="reject">${t("Rechazar")}</button></span></div>`).join("");
+  $("#gitItems").innerHTML = (app ? appRow(app) : "") + offers.map(runOfferRow).join("") + items.map((item) => {
+    const uncertain = item.status === "uncertain";
+    const text = uncertain ? `⚠ ${t("Resultado incierto")} · ${gitText(item)}` : gitText(item);
+    return `<div class="git-item${uncertain ? " uncertain" : ""}" data-run="${esc(item.runId)}" data-git="${esc(item.id)}"><span class="git-kind">${esc(t(gitKinds[item.kind] ?? "GIT"))}</span><span class="git-text" data-user-content title="${esc(uncertain ? `${text}. ${t(item.error ?? "")}` : text)}">${esc(text)}</span><span class="git-actions"><button type="button" class="button small primary" data-decision="approve">${t(uncertain ? "Repetir" : "Aprobar")}</button><button type="button" class="button small quiet" data-decision="reject">${t(uncertain ? "Descartar" : "Rechazar")}</button></span></div>`;
+  }).join("");
   const next = $("#gitItems .app-output");
   if (next) next.scrollTop = pinned ? next.scrollHeight : output.scrollTop;
 }
@@ -304,6 +317,11 @@ function agentState(role, r, replying) {
     return { tone: pausing ? "pause" : "wait", label: pausing ? "Pausa pedida" : "Esperando", activity: { verb: "Espera la tarea del director", what: "" } };
   }
   if (r.status === "paused") return { tone: "pause", label: "En pausa", activity: { verb: "Pulsa Continuar para seguir", what: "" } };
+  if (r.status === "waiting") {
+    const w = r.waiting ?? {};
+    if (w.role === role) return { tone: "pause", label: "En espera", activity: { verb: waitText(w), what: "" }, title: w.reason ?? "" };
+    return { tone: "wait", label: "Esperando", activity: { verb: `${t("Espera a que")} ${w.role === "coder" ? "Claude" : "Codex"} ${t("pueda continuar")}`, what: "" } };
+  }
   if (r.status === "complete") return { tone: "done", label: "Completado" };
   if (r.status === "blocked") return role === "auditor" ? { tone: "alert", label: "Necesita tu decisión", activity: { verb: "Lee su revisión y responde en el chat", what: "" } } : { tone: "idle", label: "En espera" };
   if (r.status === "error") return { tone: "alert", label: "Error", activity: { verb: "Revisa el error y pulsa Continuar", what: "" } };
@@ -339,11 +357,12 @@ function render() {
   $("#demoBadge").hidden = !state.demo;
   $("#runState").textContent = r ? stateNames[r.status] ?? r.status : "Todo listo para empezar";
   $("#runState").className = "run-state " + (r?.status ?? "");
-  const active = !!r && ["running", "pausing"].includes(r.status), resumable = !!r && ["paused", "interrupted", "error", "blocked", "limit", "stopped"].includes(r.status);
-  $("#startButton span").textContent = resumable ? "Continuar" : r?.status === "complete" ? "Nuevo trabajo" : "Iniciar trabajo";
+  const active = !!r && ["running", "pausing"].includes(r.status), waiting = r?.status === "waiting", resumable = !!r && ["paused", "interrupted", "error", "blocked", "limit", "stopped", "waiting"].includes(r.status);
+  $("#startButton span").textContent = waiting ? "Continuar ahora" : resumable ? "Continuar" : r?.status === "complete" ? "Nuevo trabajo" : "Iniciar trabajo";
   $("#startButton").disabled = !connection?.token || state.busy && !active || active;
-  $("#pauseButton").disabled = !active || r.status === "pausing";
-  $("#stopButton").disabled = !state.busy && (!r || !["running", "pausing", "paused", "interrupted", "error", "blocked", "limit"].includes(r.status));
+  // Pause and Stop win over any retry: both stay available while Automata waits.
+  $("#pauseButton").disabled = !(active && r.status !== "pausing") && !waiting;
+  $("#stopButton").disabled = !state.busy && (!r || !["running", "pausing", "paused", "interrupted", "error", "blocked", "limit", "waiting"].includes(r.status));
   for (const role of ["coder", "auditor"]) {
     const replying = state.messages.find(message => message.projectId === selected && message.status === "processing" && message.activeRole === role);
     renderAgentState(role, agentState(role, r, replying));
@@ -357,7 +376,8 @@ function render() {
   $("#roundCount").textContent = r ? `RONDA ${String(r.round).padStart(2, "0")} / ${r.settings.maxRounds}` : "RONDA —";
   $("#tokenCount").textContent = r?.tokens ? `TOKENS ${Intl.NumberFormat(i18n.language, { notation: "compact" }).format(r.tokens)}` : "TOKENS —";
   const replying = state.messages.find(message => message.projectId === selected && message.status === "processing");
-  $("#bottomStatus").textContent = state.demo ? "Demostración local · no llama a las AI ni consume créditos." : replying ? `${replying.activeRole === "coder" ? "Claude" : "Codex"} está ${replying.kind === "task" ? "trabajando en tu petición" : "respondiendo a tu consulta"}…` : r?.error ?? (active ? "Tu equipo está trabajando. Puedes dejarle un mensaje." : r?.status === "complete" ? "Objetivo completado. Revisa la evidencia en el panel del auditor." : "Tu siguiente proyecto empieza aquí.");
+  $("#bottomStatus").textContent = state.demo && !waiting ? "Demostración local · no llama a las AI ni consume créditos." : replying ? `${replying.activeRole === "coder" ? "Claude" : "Codex"} está ${replying.kind === "task" ? "trabajando en tu petición" : "respondiendo a tu consulta"}…` : waiting ? `${waitText(r.waiting ?? {})} · ${t("Puedes continuar ahora, pausar o detener.")} ${t("Motivo:")} ${String(r.waiting?.reason ?? "").slice(0, 160)}` : r?.error ?? (active ? "Tu equipo está trabajando. Puedes dejarle un mensaje." : r?.status === "complete" ? "Objetivo completado. Revisa la evidencia en el panel del auditor." : "Tu siguiente proyecto empieza aquí.");
+  $("#bottomStatus").title = waiting ? String(r.waiting?.reason ?? "") : "";
   renderFeed("coder");
   renderFeed("auditor");
   renderGitBar();
@@ -731,6 +751,9 @@ $("#settingsButton").addEventListener("click", () => {
   for (const role of ["coder", "auditor"]) populateEffort(role, state.settings[role + "Model"], state.settings[role + "Effort"], f.elements.namedItem(role + "Effort"));
   f.elements.reuseSessions.checked = state.settings.reuseSessions !== false;
   f.elements.fastFix.checked = state.settings.fastFix !== false;
+  f.elements.autoResume.checked = state.settings.autoResume !== false;
+  f.elements.autoStart.checked = state.settings.autoStart === true;
+  $("#autoStartRow").hidden = !capabilities?.features?.loginItem;
   f.elements.projectsRoot.placeholder = capabilities?.projectsRoot ?? "";
   for (const element of f.elements) if (element.name !== "language" && element.type !== "submit" && element.tagName !== "BUTTON") element.disabled = !connection?.token;
   showDialog("#settingsDialog");
@@ -752,6 +775,8 @@ $("#settingsForm").addEventListener("submit", async (e) => {
   const changes = Object.fromEntries(new FormData(e.target));
   changes.reuseSessions = e.target.elements.reuseSessions.checked;
   changes.fastFix = e.target.elements.fastFix.checked;
+  changes.autoResume = e.target.elements.autoResume.checked;
+  changes.autoStart = e.target.elements.autoStart.checked;
   if (!connection?.token) {
     state.settings.language = changes.language;
     syncSettings(); render();

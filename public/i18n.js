@@ -169,7 +169,22 @@
     "Hay otra operación de Git en curso.": "Another Git operation is in progress.",
     "El director propuso acciones de Git, pero esta carpeta no es un repositorio.": "The director proposed Git actions, but this folder is not a repository.",
     "No se pudo retomar la sesión anterior; se inicia una nueva.": "The previous session could not be resumed; starting a new one.",
-    "Sin cambios para confirmar.": "No changes to commit."
+    "Sin cambios para confirmar.": "No changes to commit.",
+    "Esperando para continuar": "Waiting to continue", "ESPERA": "WAIT", "Continuar ahora": "Continue now", "En espera": "On hold",
+    "Límite de uso de": "Usage limit of", "sin hora confiable": "no reliable reset time", "Sesión de": "Session of", "demasiado larga": "too long", "Fallo pasajero de": "Passing failure of", "sigue a las": "resumes at", "intento": "attempt",
+    "Espera a que": "Waiting until", "pueda continuar": "can continue", "Puedes continuar ahora, pausar o detener.": "You can continue now, pause or stop.", "Motivo:": "Reason:",
+    "Resultado incierto": "Uncertain result", "Repetir": "Retry", "Descartar": "Discard",
+    "Automata se cerró mientras se ejecutaba. Comprueba el resultado en el repositorio antes de repetirla.": "Automata closed while it was running. Check the result in the repository before repeating it.",
+    "Reintentos por fallo pasajero": "Retries after a passing failure", "Ante un límite de uso, Automata espera a la hora de restablecimiento y sigue sola.": "On a usage limit, Automata waits for the reset time and goes on by itself.",
+    "Reanudar solo al abrir Automata": "Resume on its own when Automata opens", "Un trabajo interrumpido o en espera continúa sin pulsar Continuar. Pausar y Detener siempre mandan.": "An interrupted or waiting run continues without pressing Continue. Pause and Stop always win.",
+    "Abrir Automata al iniciar Windows": "Open Automata when Windows starts", "Solo en la app de escritorio instalada. Puedes desactivarlo cuando quieras.": "Installed desktop app only. You can turn it off any time.",
+    "Espera cancelada. El trabajo queda en pausa hasta que pulses Continuar.": "Wait cancelled. The run stays paused until you press Continue.",
+    "Automata reanuda el trabajo interrumpido.": "Automata resumes the interrupted work.", "Continuando ahora, sin esperar.": "Continuing now, without waiting.",
+    "Faltan verificaciones de la ronda actual. Se ejecutan antes de aceptar la aprobación.": "The round's checks have not run. They run before the approval is accepted.",
+    "Claude alcanzó el máximo de turnos. Se verifica el trabajo parcial y el director decide cómo seguir.": "Claude ran out of turns. The partial work is checked and the director decides how to go on.",
+    "Claude alcanzó el límite de tiempo de la llamada. Se verifica el trabajo parcial y el director decide cómo seguir.": "Claude hit the call time limit. The partial work is checked and the director decides how to go on.",
+    "Detén o continúa el trabajo que está esperando antes de usar otro.": "Stop or continue the waiting run before using another one.",
+    "maxRetries: usa un número entre 0 y 10.": "maxRetries: enter a number between 0 and 10."
   };
   const reverse = Object.fromEntries(Object.entries(english).map(([es, en]) => [en, es]));
   let language = localStorage.getItem("automata.language") === "en" ? "en" : "es";
@@ -190,6 +205,17 @@
       .replace(/^(Claude|Codex) está trabajando en tu petición…$/, "$1 is working on your request…")
       .replace(/^(Claude|Codex) está respondiendo(?: a tu consulta)?…$/, "$1 is responding…")
       .replace(/^Esperando el turno de (Claude|Codex)…$/, "Waiting for $1's turn…")
+      .replace(/^Límite de uso de (Claude|Codex)(, sin hora confiable de restablecimiento)? · sigue a las (.+?)(?: \(intento (\d+) de (\d+)\))?\. Motivo: ([\s\S]*)$/, (_m, who, unsure, when, n, max, why) => `Usage limit of ${who}${unsure ? ", reset time unknown" : ""} · resumes at ${when}${n ? ` (attempt ${n} of ${max})` : ""}. Reason: ${why}`)
+      .replace(/^Fallo pasajero de (Claude|Codex) · sigue a las (.+?)(?: \(intento (\d+) de (\d+)\))?\. Motivo: ([\s\S]*)$/, (_m, who, when, n, max, why) => `${who} failed for a passing reason · resumes at ${when}${n ? ` (attempt ${n} of ${max})` : ""}. Reason: ${why}`)
+      .replace(/^La sesión de (Claude|Codex) creció demasiado; se abre una nueva · sigue a las (.+?)(?: \(intento (\d+) de (\d+)\))?\. Motivo: ([\s\S]*)$/, (_m, who, when, n, max, why) => `${who} session grew too large; a new one starts · resumes at ${when}${n ? ` (attempt ${n} of ${max})` : ""}. Reason: ${why}`)
+      .replace(/^Reanudando: (Claude|Codex) vuelve a intentarlo\.$/, "Resuming: $1 tries again.")
+      .replace(/^No se pudo reanudar solo: ([\s\S]*)$/, "Could not resume on its own: $1")
+      .replace(/^(Claude|Codex) ya había terminado esta operación antes del cierre; se usa su resultado sin repetirla\.$/, "$1 had already finished this operation before the shutdown; its result is used without repeating it.")
+      .replace(/^Revisión no válida \((\d)\/(\d)\): ([\s\S]*) Se le pide al director que la corrija\.$/, "Invalid review ($1/$2): $3 The director is asked to correct it.")
+      .replace(/^El director no entregó una revisión válida en (\d+) intentos\. Último motivo: ([\s\S]*)$/, "The director did not deliver a valid review in $1 attempts. Last reason: $2")
+      .replace(/^El límite de uso de (Claude|Codex) no se liberó tras (\d+) esperas\. ([\s\S]*)$/, "The $1 usage limit did not clear after $2 waits. $3")
+      .replace(/^(Claude|Codex) falló (\d+) veces seguidas por un motivo pasajero\. ([\s\S]*)$/, "$1 failed $2 times in a row for a passing reason. $3")
+      .replace(/ · Continúa la tarea interrumpida · /, " · Continues the interrupted task · ")
       .replace(/^Acceso completo para ambos agentes\. Se aplica a la siguiente operación\.$/, "Full access for both agents. Applies to the next operation.")
       .replace(/^Acceso limitado para ambos agentes\. Se aplica a la siguiente operación\.$/, "Limited access for both agents. Applies to the next operation.")
       .replace(/^Permisos para la siguiente operación: acceso completo\.$/, "Permissions for the next operation: full access.")
