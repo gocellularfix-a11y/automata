@@ -348,6 +348,13 @@ function renderAgentState(role, s) {
 }
 // The clocks tick on their own; the rest of the page only redraws when something changes.
 setInterval(() => document.querySelectorAll(".agent-clock[data-since]").forEach((el) => el.textContent = elapsed(el.dataset.since)), 1000);
+// What is being built and what is left, in plain words.
+function buildingText() {
+  const plan = state.plans?.[selected];
+  if (!plan?.current) return t("Tu equipo está trabajando. Puedes dejarle un mensaje.");
+  const left = plan.active - plan.done;
+  return `${t("Construyendo")}: «${plan.current.title}» · ${left === 1 ? t("falta 1 tarea") : `${t("faltan")} ${left} ${t("tareas")}`} ${t("de")} ${plan.active}`;
+}
 function render() {
   syncSettings();
   if (!selected && state.projects.length) selected = state.projects[0].id;
@@ -379,11 +386,12 @@ function render() {
   $("#planCount").textContent = planStats?.active ? `PLAN ${planStats.done}/${planStats.active}` : "PLAN —";
   $("#tokenCount").textContent = r?.tokens ? `TOKENS ${Intl.NumberFormat(i18n.language, { notation: "compact" }).format(r.tokens)}` : "TOKENS —";
   const replying = state.messages.find(message => message.projectId === selected && message.status === "processing");
-  $("#bottomStatus").textContent = state.demo && !waiting ? "Demostración local · no llama a las AI ni consume créditos." : replying ? `${replying.activeRole === "coder" ? "Claude" : "Codex"} está ${replying.kind === "task" ? "trabajando en tu petición" : "respondiendo a tu consulta"}…` : waiting ? `${waitText(r.waiting ?? {})} · ${t("Puedes continuar ahora, pausar o detener.")} ${t("Motivo:")} ${String(r.waiting?.reason ?? "").slice(0, 160)}` : r?.error ?? (active ? "Tu equipo está trabajando. Puedes dejarle un mensaje." : r?.status === "complete" ? "Objetivo completado. Revisa la evidencia en el panel del auditor." : "Tu siguiente proyecto empieza aquí.");
+  $("#bottomStatus").textContent = state.demo && !waiting ? "Demostración local · no llama a las AI ni consume créditos." : replying ? `${replying.activeRole === "coder" ? "Claude" : "Codex"} está ${replying.kind === "task" ? "trabajando en tu petición" : "respondiendo a tu consulta"}…` : waiting ? `${waitText(r.waiting ?? {})} · ${t("Puedes continuar ahora, pausar o detener.")} ${t("Motivo:")} ${String(r.waiting?.reason ?? "").slice(0, 160)}` : r?.error ?? (active ? buildingText() : r?.status === "complete" ? "Objetivo completado. Revisa la evidencia en el panel del auditor." : "Tu siguiente proyecto empieza aquí.");
   $("#bottomStatus").title = waiting ? String(r.waiting?.reason ?? "") : "";
   renderFeed("coder");
   renderFeed("auditor");
   renderGitBar();
+  if ($("#ideaDialog").open) renderIdea();
   i18n.translateDom();
 }
 function scheduleRender() {
@@ -469,6 +477,94 @@ function newProject() {
   showDialog("#projectDialog");
 }
 $("#newProjectTop").addEventListener("click", newProject);
+// ───────── From an idea: the director proposes, the person approves once ─────────
+let ideaId = null;
+const ideaProposal = () => (state.proposals ?? []).find((p) => p.id === ideaId) ?? null;
+function openIdea() {
+  // The latest proposal still waiting for a decision is shown again; otherwise a fresh box.
+  const open = (state.proposals ?? []).filter((p) => ["drafting", "ready", "error", "accepting"].includes(p.status)).at(-1);
+  ideaId = open?.id ?? null;
+  $("#ideaError").textContent = "";
+  renderIdea();
+  showDialog("#ideaDialog");
+  if (!ideaId) $("#ideaText").focus();
+}
+const list = (items) => `<ul class="idea-list">${items.map((item) => `<li data-user-content>${esc(item)}</li>`).join("")}</ul>`;
+function renderIdea() {
+  const p = ideaProposal(), d = p?.draft;
+  $("#ideaForm").hidden = !!p && p.status !== "error";
+  $("#ideaWorking").hidden = p?.status !== "drafting";
+  $("#ideaCard").hidden = !d || p.status === "drafting";
+  $("#ideaActions").hidden = !d || !["ready", "accepting"].includes(p.status);
+  if (p?.status === "error") $("#ideaError").textContent = t(p.error ?? "No se pudo preparar la propuesta.");
+  if (p && p.status === "error" && !$("#ideaText").value) $("#ideaText").value = p.idea;
+  if (!d || p.status === "drafting") return;
+  const byIndex = d.plan.map((task) => task.title);
+  $("#ideaCard").innerHTML = `<div class="idea-head"><h3 data-user-content>${esc(d.name)}</h3><p data-user-content>${esc(d.summary)}</p></div>
+    <section><h4>${esc(t("Lo que hará"))}</h4>${list(d.features)}</section>
+    <section><h4>${esc(t("Cómo sabremos que funciona"))}</h4>${list(d.criteria)}<p class="idea-small">${esc(t("Automata lo comprobará con pruebas automáticas y una revisión independiente. Que las pruebas pasen no garantiza calidad comercial."))}</p></section>
+    <section><h4>${esc(t("Dónde se usará"))}</h4><p data-user-content>${esc(d.platform)}</p></section>
+    <section><h4>${esc(t("Pasos del plan"))}</h4><ol class="idea-plan">${d.plan.map((task) => `<li><span data-user-content>${esc(task.title)}</span>${task.dependsOn.length ? `<small>${esc(t("después de"))} ${task.dependsOn.map((ref) => `«${esc(byIndex[Number(ref.slice(1)) - 1] ?? ref)}»`).join(", ")}</small>` : ""}</li>`).join("")}</ol></section>
+    ${d.risks.length ? `<section class="idea-risks"><h4>${esc(t("Ten en cuenta"))}</h4>${list(d.risks)}</section>` : ""}
+    ${d.questions.length ? `<section class="idea-questions"><h4>${esc(t("Preguntas del director"))}</h4>${list(d.questions)}<p class="idea-small">${esc(t("Respóndelas con Ajustar, o crea el proyecto con lo que propuso."))}</p></section>` : ""}
+    <section><h4>${esc(t("Dónde se guardará"))}</h4><p><code data-user-content>${esc(p.folder ?? "")}</code></p><p class="idea-small">${esc(t("Una carpeta nueva solo para este proyecto. Tu equipo no puede tocar otras carpetas desde aquí."))}</p></section>
+    <details><summary>${esc(t("Detalles técnicos"))}</summary><p class="idea-small">${esc(t("Verificaciones que ejecutará Automata:"))}</p><pre data-user-content>${esc(d.checks.join("\n"))}</pre></details>
+    <p class="idea-approval">${esc(t("Crear y empezar es la única aprobación que necesitas. Publicar, comprar, subir a GitHub o fusionar ramas siempre te lo preguntará aparte."))}</p>`;
+  $("#ideaAccept").disabled = p.status === "accepting";
+}
+$("#newIdeaTop").addEventListener("click", () => state.demo ? toast("La demostración usa un proyecto aislado. Reinicia sin --demo para crear proyectos desde una idea.") : openIdea());
+$("#ideaManual").addEventListener("click", () => { $("#ideaDialog").close(); newProject(); });
+$("#ideaForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#ideaError").textContent = "";
+  try {
+    const proposal = await api("ideas", { method: "POST", body: { action: "propose", idea: $("#ideaText").value } });
+    ideaId = proposal.id;
+    state.proposals = [...(state.proposals ?? []).filter((p) => p.id !== proposal.id), proposal];
+    renderIdea();
+  } catch (error) { $("#ideaError").textContent = t(error.message); }
+});
+$("#ideaAdjustForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const proposal = await api("ideas", { method: "POST", body: { action: "adjust", id: ideaId, adjustments: $("#ideaAdjust").value } });
+    $("#ideaAdjust").value = "";
+    $("#ideaAdjustForm").hidden = true;
+    state.proposals = [...(state.proposals ?? []).filter((p) => p.id !== proposal.id), proposal];
+    renderIdea();
+  } catch (error) { $("#ideaError").textContent = t(error.message); }
+});
+$("#ideaAdjustOpen").addEventListener("click", () => { $("#ideaAdjustForm").hidden = false; $("#ideaAdjust").focus(); });
+$("#ideaDiscard").addEventListener("click", async () => {
+  try {
+    await api("ideas", { method: "POST", body: { action: "discard", id: ideaId } });
+    ideaId = null;
+    $("#ideaText").value = "";
+    $("#ideaDialog").close();
+    toast("Propuesta descartada.");
+  } catch (error) { $("#ideaError").textContent = t(error.message); }
+});
+$("#ideaAccept").addEventListener("click", async () => {
+  $("#ideaAccept").disabled = true;
+  $("#ideaAccept span").textContent = t("Creando el proyecto…");
+  try {
+    if (!await ensureAccounts()) return;
+    const result = await api("ideas", { method: "POST", body: { action: "accept", id: ideaId } });
+    selected = result.project.id;
+    localStorage.setItem("automata.project", selected);
+    ideaId = null;
+    $("#ideaText").value = "";
+    $("#ideaDialog").close();
+    toast("Proyecto creado. Tu equipo ya empezó a trabajar.");
+    state = await api("state");
+    render();
+  } catch (error) {
+    $("#ideaError").textContent = t(error.message);
+  } finally {
+    $("#ideaAccept").disabled = false;
+    $("#ideaAccept span").textContent = t("Crear y empezar");
+  }
+});
 $("#projectForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const button = e.submitter;
@@ -623,7 +719,7 @@ function planTaskHtml(task, index, total) {
   const meta = [`T${task.id}`, t(memorySources[task.source] ?? task.source), task.criterion ? `${t("Criterio")}: ${task.criterion}` : t("Libre"), task.dependsOn.length ? `${t("Depende de")} ${task.dependsOn.map((id) => "T" + id).join(", ")}` : "", task.closed_round != null ? `${t("Ronda")} ${task.closed_round}` : ""].filter(Boolean);
   const actions = task.status === "dropped"
     ? `<button type="button" class="button quiet compact" data-task-restore="${task.id}">${esc(t("Restaurar"))}</button>`
-    : `<button type="button" class="button quiet compact" data-task-up="${task.id}" ${index === 0 ? "disabled" : ""} title="${esc(t("Subir"))}">↑</button><button type="button" class="button quiet compact" data-task-down="${task.id}" ${index === total - 1 ? "disabled" : ""} title="${esc(t("Bajar"))}">↓</button><button type="button" class="button quiet compact" data-task-edit="${task.id}">${esc(t("Corregir"))}</button>${task.status === "done" ? "" : `<button type="button" class="button quiet compact" data-task-drop="${task.id}">${esc(t("Descartar"))}</button>`}`;
+    : `<button type="button" class="button quiet compact" data-task-up="${task.id}" ${index === 0 ? "disabled" : ""} title="${esc(t("Subir"))}">↑</button><button type="button" class="button quiet compact" data-task-down="${task.id}" ${index === total - 1 ? "disabled" : ""} title="${esc(t("Bajar"))}">↓</button><button type="button" class="button quiet compact" data-task-edit="${task.id}">${esc(t("Corregir"))}</button>${task.status === "review" ? `<button type="button" class="button primary compact" data-task-confirm="${task.id}" title="${esc(t("Revisé el resultado y está bien"))}">${esc(t("Confirmar"))}</button><button type="button" class="button quiet compact" data-task-reopen="${task.id}">${esc(t("Revisar de nuevo"))}</button>` : ""}${task.status === "done" ? "" : `<button type="button" class="button quiet compact" data-task-drop="${task.id}">${esc(t("Descartar"))}</button>`}`;
   return `<article class="memory-item plan-item${task.status === "dropped" ? " retired" : ""}${current ? " current" : ""}" data-task="${task.id}"><div class="memory-text" data-user-content><span class="memory-state task-${esc(task.status)}">${esc(t(taskStates[task.status] ?? task.status))}</span>${current ? `<span class="memory-state task-current">${esc(t("Claude ahora"))}</span>` : ""} ${esc(task.title)}${task.detail ? `<small class="task-detail">${esc(task.detail)}</small>` : ""}${task.evidence ? `<small class="task-evidence">${esc(t("Evidencia"))}: ${esc(task.evidence)}</small>` : ""}${task.note ? `<small class="task-note">${esc(task.note)}</small>` : ""}</div><div class="memory-meta">${meta.map((m) => `<span data-user-content>${esc(m)}</span>`).join("")}</div><div class="memory-actions">${actions}</div></article>`;
 }
 function renderPlan({ tasks, stats, currentTaskId }) {
@@ -679,6 +775,8 @@ $("#planContent").addEventListener("click", async (event) => {
     return void planUpdate({ action: "drop", id, note: note || t("Descartada por el usuario") }, "Tarea descartada. Sigue en el historial.");
   }
   if (button.dataset.taskRestore) return void planUpdate({ action: "restore", id }, "Tarea restaurada.");
+  if (button.dataset.taskConfirm) return void planUpdate({ action: "confirm", id }, "Tarea confirmada como hecha.");
+  if (button.dataset.taskReopen) return void planUpdate({ action: "reopen", id }, "La tarea vuelve al plan para el director.");
   if (button.dataset.taskUp || button.dataset.taskDown) {
     const ids = [...$("#planContent").querySelectorAll(".plan-item:not(.retired)")].map((el) => Number(el.dataset.task));
     const at = ids.indexOf(id), to = button.dataset.taskUp ? at - 1 : at + 1;

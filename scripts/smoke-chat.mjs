@@ -1,17 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { chromium } from "playwright-core";
 import { createServer } from "../server/index.mjs";
 import { AuthManager } from "../server/auth.mjs";
 
 const output = path.resolve("artifacts", "chat-" + Date.now());
 fs.mkdirSync(output, { recursive: true });
+const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "automata-smoke-chat-"));
 const auth = new AuthManager({ find: role => ({ command: role, args: [] }), run: async role => ({ code: 0, stdout: role === "coder" ? '{"loggedIn":true,"authMethod":"claude.ai"}' : "", stderr: role === "auditor" ? "Logged in using ChatGPT" : role === "github" ? "Logged in to github.com account test-user" : "" }) });
 const replies = [];
 const app = await createServer({ port: 0, dataDir: path.join(output, "data"), auth, agents: { run({ signal, role }) {
   return new Promise((resolve, reject) => { replies.push({ resolve, reject, role }); signal.addEventListener("abort", () => reject(new Error("Consulta detenida")), { once: true }); });
 } } });
-app.coordinator.addProject({ name: "Consulta local", directory: output, objective: "Comprobar el estado del chat.", criteria: ["Las respuestas se muestran con su estado real."], checks: [] });
+app.coordinator.addProject({ name: "Consulta local", directory: projectDir, objective: "Comprobar el estado del chat.", criteria: ["Las respuestas se muestran con su estado real."], checks: [] });
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "C:/Program Files/Google/Chrome/Application/chrome.exe", headless: true });
 const page = await browser.newPage({ viewport: { width: 1480, height: 1020 }, reducedMotion: "reduce" });
 const checks = [], errors = [];

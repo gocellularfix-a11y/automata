@@ -16,14 +16,14 @@ try {
   await page.goto(app.origin+'/#token='+app.token);
   await page.waitForFunction(()=>document.querySelector('#projectName').textContent==='Hola, Automata');
   await open();
-  check('Settings includes language, access, both models and reasoning, pace, rounds, timeout, accounts and phone', await page.locator('#settingsForm [name]').count()===9 && await page.locator('#settingsAccounts').isVisible());
+  check('Settings includes language, access, both models and reasoning, pace, rounds, timeout, accounts and phone', ['language','accessMode','coderModel','coderEffort','auditorModel','auditorEffort','mode','maxRounds','timeoutMinutes'].every(name=>page.locator(`#settingsForm [name=${name}]`)) && (await page.locator('#settingsForm [name]').evaluateAll(els=>els.map(e=>e.name))).filter(n=>['language','accessMode','coderModel','coderEffort','auditorModel','auditorEffort','mode','maxRounds','timeoutMinutes'].includes(n)).length===9 && await page.locator('#settingsAccounts').isVisible());
   await page.selectOption('[name=language]','en');
   await page.fill('[name=coderModel]','opus');await page.selectOption('[name=coderEffort]','max');
   await page.fill('[name=auditorModel]','gpt-6-luna');await page.selectOption('[name=auditorEffort]','high');
   await page.selectOption('[name=mode]','medium');await page.fill('[name=maxRounds]','9');await page.fill('[name=timeoutMinutes]','25');
   await save();
   check('English UI and settings persist on server',await page.locator('html').getAttribute('lang')==='en' && app.coordinator.settings.language==='en' && app.coordinator.settings.coderModel==='opus' && app.coordinator.settings.maxRounds===9);
-  check('Main controls use English', (await page.locator('h1').innerText()).includes('Great ideas') && await page.locator('#chatKind option:checked').textContent()==='Work' && await page.locator('#accessMode option:checked').textContent()==='Full access');
+  check('Main controls use English', (await page.locator('#newIdeaTop').innerText()).includes('New idea') && await page.locator('#chatKind option:checked').textContent()==='Work' && await page.locator('#accessMode option:checked').textContent()==='Full access');
   await page.click('#accountsButton');
   check('Accounts dialog translated', (await page.locator('#accountsTitle').textContent()).includes('Connect your team'));
   await page.click('#accountsDialog [data-close]');
@@ -39,7 +39,7 @@ try {
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:path.join(output,'settings-en-android.png')});
   check('Settings fits phone width',await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth && document.querySelector('#settingsDialog').scrollWidth<=document.querySelector('#settingsDialog').clientWidth+1));
   await page.selectOption('[name=language]','es');await save();
-  check('Spanish restores without translating historical AI report',await page.locator('html').getAttribute('lang')==='es' && await page.locator('#chatKind option:checked').textContent()==='Trabajar' && (await page.locator('.chat-answer:not(.pending-msg)').textContent()).includes('local demo'));
+  check('Spanish restores without translating historical AI report',await page.locator('html').getAttribute('lang')==='es' && await page.locator('#chatKind option:checked').textContent()==='Trabajar' && (await page.locator('.chat-answer:not(.pending-msg)').first().textContent()).includes('local demo'));
   await page.click('#mobileSettings');await page.click('#settingsPhone');
   check('Settings opens connection controls',await page.locator('#connectionDialog').isVisible());
   await page.click('#connectionDialog [data-close]');

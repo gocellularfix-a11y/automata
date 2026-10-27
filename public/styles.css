@@ -963,3 +963,22 @@ select option { background: #15171b; color: var(--ink); }
   .git-actions .button { min-height: 30px; padding: 0 10px; font-size: 11.5px; }
   .project-source-picker { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* P3: from an idea to a project */
+.idea-modal textarea { width: 100%; }
+.idea-working { display: flex; align-items: center; gap: 12px; margin: 18px 0; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); color: var(--muted); font-size: 13px; }
+.idea-card { display: grid; gap: 14px; margin-top: 8px; }
+.idea-card section { padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.idea-card h3 { margin: 0 0 4px; font-size: 20px; }
+.idea-card h4 { margin: 0 0 6px; font: 500 10.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.idea-card p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--ink); overflow-wrap: anywhere; }
+.idea-head p { color: var(--muted); }
+.idea-list, .idea-plan { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; line-height: 1.55; color: var(--ink); overflow-wrap: anywhere; }
+.idea-plan small { display: block; color: var(--dim); font-size: 11.5px; }
+.idea-small { margin-top: 6px !important; font-size: 11.5px !important; color: var(--dim) !important; }
+.idea-risks { border-color: #eab96847 !important; }
+.idea-questions { border-color: #e8d5a647 !important; }
+.idea-card code { font: 12px var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.idea-card pre { margin: 6px 0 0; font: 12px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.idea-approval { padding: 12px 14px; border-radius: 12px; border: 1px solid #74d39a40; background: #74d39a10; color: var(--ink) !important; }
+.idea-error:empty { display: none; }

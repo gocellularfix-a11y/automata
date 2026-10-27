@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { chromium } from "playwright-core";
 import { createServer } from "../server/index.mjs";
 import { AuthManager } from "../server/auth.mjs";
@@ -7,10 +8,12 @@ import { GitHubProjects } from "../server/github.mjs";
 import { runProcess } from "../server/agents.mjs";
 
 const output = path.resolve("artifacts", "github-" + Date.now());
-const origin = path.join(output, "fixture-origin.git"), destination = path.join(output, "clock"), local = path.join(output, "local");
+const work = fs.mkdtempSync(path.join(os.tmpdir(), "automata-smoke-github-"));
+fs.mkdirSync(output, { recursive: true });
+const origin = path.join(work, "fixture-origin.git"), destination = path.join(work, "clock"), local = path.join(work, "local");
 fs.mkdirSync(destination, { recursive: true });
 fs.mkdirSync(local);
-await runProcess("git", ["init", "--bare", origin], { cwd: output });
+await runProcess("git", ["init", "--bare", origin], { cwd: work });
 const auth = new AuthManager({
   find: role => ({ command: role, args: [] }),
   run: async role => ({ code: 0, stdout: role === "coder" ? '{"loggedIn":true,"authMethod":"claude.ai"}' : "", stderr: role === "auditor" ? "Logged in using ChatGPT" : role === "github" ? "Logged in to github.com account test-user" : "" })

@@ -202,7 +202,10 @@ export class Coordinator extends EventEmitter {
       const p = this.projects.find((project) => project.id === projectId);
       this.planStats[projectId] = this.remember("leer", () => this.plan.stats(projectId, p?.criteria ?? [])) ?? { total: 0, active: 0, done: 0, byCriterion: [] };
     }
-    return this.planStats[projectId];
+    // What is being built right now, in words the person understands.
+    const taskId = this.runs.find((r) => r.projectId === projectId)?.taskId;
+    const current = taskId ? this.remember("leer", () => this.plan.get(projectId, taskId)) : null;
+    return { ...this.planStats[projectId], current: current ? { id: current.id, title: current.title, status: current.status } : null };
   }
   planChanged(projectId) {
     delete this.planStats[projectId];

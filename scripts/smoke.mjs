@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { createServer } from "../server/index.mjs";
@@ -65,8 +66,8 @@ try {
   check("sin errores JavaScript", errors.length === 0, errors);
   check("interfaz sin solicitudes externas", external.length === 0, external);
   live = await createServer({ port: 0, dataDir: path.join(output, "live-data") });
-  const projectDir = path.join(output, "live-project");
-  fs.mkdirSync(projectDir);
+  // Outside Automata: the folder rules refuse projects inside Automata's own folder (P3).
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "automata-smoke-project-"));
   await page.setViewportSize({ width: 1480, height: 1020 });
   await page.goto(live.origin + "/#token=" + live.token);
   await page.waitForFunction(() => document.querySelector("#connection").textContent.includes("Conectado"));
