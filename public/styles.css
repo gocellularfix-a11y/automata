@@ -982,3 +982,16 @@ select option { background: #15171b; color: var(--ink); }
 .idea-card pre { margin: 6px 0 0; font: 12px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
 .idea-approval { padding: 12px 14px; border-radius: 12px; border: 1px solid #74d39a40; background: #74d39a10; color: var(--ink) !important; }
 .idea-error:empty { display: none; }
+/* Delivery (P4): the guide shown to the person, and the bar row for the finished app. */
+.delivery-guide { max-height: 280px; overflow: auto; padding-right: 6px; }
+.delivery-guide h5 { margin: 12px 0 2px; font: 600 13px var(--sans, inherit); color: var(--ink); }
+.delivery-guide h5:first-child { margin-top: 0; }
+.delivery-guide p { margin: 2px 0 !important; }
+.delivery-row .app-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
+@media (max-width: 720px) {
+  /* Three buttons do not fit beside the text on a phone: they go below it, side by side. */
+  .delivery-row { flex-wrap: wrap; }
+  .delivery-row .git-text { flex-basis: calc(100% - 90px); }
+  .delivery-row .git-actions { flex: 1 1 100%; flex-wrap: wrap; }
+  .delivery-row .git-actions .button { flex: 1 1 auto; justify-content: center; }
+}

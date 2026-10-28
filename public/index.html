@@ -54,7 +54,7 @@
       <div class="usage"><span id="roundCount">RONDA —</span><span id="planCount" title="Tareas hechas del plan">PLAN —</span><span id="tokenCount">TOKENS —</span></div>
       <div class="run-controls"><button class="icon-button" id="stopButton" title="Detener ahora" aria-label="Detener"><svg><use href="#i-stop"/></svg></button><button class="icon-button" id="pauseButton" title="Pausar al terminar la operación actual" aria-label="Pausar"><svg><use href="#i-pause"/></svg></button><button class="button primary" id="startButton"><svg><use href="#i-play"/></svg><span>Iniciar trabajo</span></button></div>
     </section>
-    <section class="gitbar" id="gitBar" aria-label="Aprobaciones de Git" hidden><header class="gitbar-head"><svg><use href="#i-branch"/></svg><strong>El director propone</strong><span class="gitbar-note">Tú decides si se ejecuta.</span></header><div class="gitbar-items" id="gitItems"></div></section>
+    <section class="gitbar" id="gitBar" aria-label="Aprobaciones de Git" hidden><header class="gitbar-head"><svg><use href="#i-branch"/></svg><strong id="gitBarTitle">El director propone</strong><span class="gitbar-note" id="gitBarNote">Tú decides si se ejecuta.</span></header><div class="gitbar-items" id="gitItems"></div></section>
     <section class="workspace">
       <h1 class="sr-only">Automata</h1>
       <div class="mobile-tabs" role="tablist" aria-label="Agente"><button role="tab" aria-selected="true" data-agent-tab="coder">Claude <span>Codificador</span></button><button role="tab" aria-selected="false" data-agent-tab="auditor">Codex <span>Director</span></button></div>
@@ -133,6 +133,10 @@
   <form id="ideaAdjustForm" class="memory-add" hidden><input id="ideaAdjust" maxlength="4000" placeholder="¿Qué quieres cambiar? Por ejemplo: también quiero avisos cuando quede poco de un producto" aria-label="Ajustes"><button class="button primary compact" type="submit">Enviar</button></form>
   <p id="ideaError" class="form-error idea-error" role="alert"></p>
   <div class="modal-actions" id="ideaActions" hidden><button type="button" class="button quiet" id="ideaDiscard">Descartar</button><button type="button" class="button quiet" id="ideaAdjustOpen">Ajustar</button><button type="button" class="button primary" id="ideaAccept"><span>Crear y empezar</span><svg><use href="#i-arrow"/></svg></button></div>
+</dialog>
+<dialog id="deliveryDialog" class="modal memory-modal" aria-labelledby="deliveryTitle">
+  <div class="modal-heading"><div><div class="eyebrow">TU APLICACIÓN</div><h2 id="deliveryTitle" data-user-content>Tu aplicación.</h2><p>Todo lo que necesitas para abrirla, usarla y cuidar tus datos.</p></div><button type="button" class="icon-button" data-close aria-label="Cerrar"><svg><use href="#i-close"/></svg></button></div>
+  <div id="deliveryContent" class="idea-card"></div>
 </dialog>
 <dialog id="planDialog" class="modal memory-modal" aria-labelledby="planTitle">
   <div class="modal-heading"><div><div class="eyebrow">PLAN DEL PROYECTO</div><h2 id="planTitle" data-user-content>Lo que falta por hacer.</h2><p>El director mantiene estas tareas y las confirma con evidencia. Puedes agregar, corregir, reordenar y descartar; nada se borra.</p></div><button type="button" class="icon-button" data-close aria-label="Cerrar"><svg><use href="#i-close"/></svg></button></div>

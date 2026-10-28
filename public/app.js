@@ -174,15 +174,54 @@ function appRow(app) {
   ].join("");
   return `<div class="app-panel"><div class="git-item app-row"><span class="git-kind app-kind${running ? " live" : ""}">${t("APP")}</span><span class="git-text app-text"><span>${status}</span><code data-user-content title="${esc(app.command)}">${esc(app.command)}</code>${app.url ? `<small data-user-content>${esc(app.url)}</small>` : ""}</span><span class="git-actions">${actions}</span></div>${appOutputOpen ? `<pre class="app-output" data-user-content>${esc(app.output || app.error || t("Sin salida todavía."))}</pre>` : ""}</div>`;
 }
+// ───────── Delivery: the app is ready to be handed to a person (P4) ─────────
+// Only the latest work of the project speaks: a new one that has not delivered yet hides the old row.
+const deliveries = () => state.runs.filter((r) => r.projectId === selected).slice(-1).filter((r) => ["ready", "failed"].includes(r.delivery?.status)).map((r) => ({ ...r.delivery, runId: r.id }));
+function deliveryRow(d) {
+  if (d.status === "failed") return `<div class="git-item uncertain" data-run="${esc(d.runId)}"><span class="git-kind">${t("ENTREGA")}</span><span class="git-text" data-user-content title="${esc((d.problems ?? []).join(" "))}">${esc(t("Todavía no está lista para entregarse"))} · ${esc(d.problems?.[0] ?? "")}</span></div>`;
+  // Opening something on the screen is for the PC where Automata runs; a phone only reads the guide.
+  const here = !onAndroid;
+  return `<div class="git-item delivery-row" data-run="${esc(d.runId)}"><span class="git-kind app-kind">${t("ENTREGA")}</span><span class="git-text app-text"><span>${t("Tu aplicación está lista")}</span><small data-user-content title="${esc(d.folder)}">${esc(t("Se guardó en"))} ${esc(d.folder)}</small></span><span class="git-actions">${here ? `<button type="button" class="button small primary" data-delivery="open">${t("Abrir aplicación")}</button>` : ""}<button type="button" class="button small quiet" data-delivery="details">${t("Guía y detalles")}</button>${here ? `<button type="button" class="button small quiet" data-delivery="folder">${t("Abrir carpeta")}</button>` : ""}</span></div>`;
+}
+// How each check is told to the person: what it means for them, not what was run.
+const stepText = { launcher: "El lanzador está y no instala nada", guide: "La guía tiene todas sus secciones", page: "La página principal existe", files: "Los archivos que usa están completos", start: "La aplicación arrancó", browser: "Se abrió en el navegador sin errores" };
+const guideHtml = (text) => text.split(/\r?\n/).map((line) => { const h = /^#{1,4}\s+(.*)$/.exec(line); return h ? `<h5>${esc(h[1])}</h5>` : line.trim() ? `<p>${esc(line.replace(/^\s*[-*]\s+/, "• "))}</p>` : ""; }).join("");
+function deliveryHtml(d, guide) {
+  const how = d.open?.type === "url" ? "Haz doble clic en Abrir.cmd, o usa el botón «Abrir aplicación»: se enciende y se abre en tu navegador." : "Haz doble clic en Abrir.cmd, o usa el botón «Abrir aplicación»: se abre en tu navegador.";
+  const checked = (d.steps ?? []).map((s) => `<li>${esc(t(stepText[s.name] ?? s.name))}${s.ok ? "" : " ✗"}</li>`).join("");
+  const unseen = d.browser && !d.browser.ran ? `<p class="idea-small">${esc(t("No se pudo abrir en un navegador de prueba; se revisaron los archivos y el arranque."))}</p>` : "";
+  return `<section><h4>${esc(t("Dónde está"))}</h4><p><code data-user-content>${esc(d.folder)}</code></p><p class="idea-small">${esc(t(how))}</p></section>
+    <section><h4>${esc(t("Qué funciona"))}</h4>${d.works?.length ? `<ul class="idea-list">${d.works.map((w) => `<li data-user-content>${esc(w.criterion)}</li>`).join("")}</ul>` : `<p class="idea-small">${esc(t("Sin detalle."))}</p>`}</section>
+    <section class="idea-risks"><h4>${esc(t("Qué queda pendiente"))}</h4>${d.pending?.length ? `<ul class="idea-list">${d.pending.map((x) => `<li data-user-content>${esc(x)}</li>`).join("")}</ul>` : `<p class="idea-small">${esc(t("Nada anotado."))}</p>`}</section>
+    <section><h4>${esc(t("Guía para usarla"))}</h4><div class="delivery-guide" data-user-content>${guide ? guideHtml(guide) : `<p class="idea-small">${esc(t("Cargando la guía…"))}</p>`}</div></section>
+    <details><summary>${esc(t("Cómo se comprobó"))}</summary><ul class="idea-list">${checked}</ul>${d.checks?.total ? `<p class="idea-small">${esc(t("Pruebas automáticas del proyecto"))}: ${d.checks.passed}/${d.checks.total}</p>` : ""}${unseen}<p class="idea-small">${esc(t("Que las pruebas pasen no garantiza calidad comercial."))}</p></details>`;
+}
+async function openDelivery(runId) {
+  const d = state.runs.find((r) => r.id === runId)?.delivery;
+  if (!d) return;
+  $("#deliveryTitle").textContent = d.name;
+  $("#deliveryContent").innerHTML = deliveryHtml(d, "");
+  showDialog("#deliveryDialog");
+  let guide;
+  try { guide = (await api("delivery", { method: "POST", body: { runId, action: "guide" } })).text; } catch (error) { guide = error.message; }
+  if ($("#deliveryDialog").open) {
+    $("#deliveryContent").innerHTML = deliveryHtml(d, guide);
+    i18n.translateDom($("#deliveryContent"));
+  }
+}
 function renderGitBar() {
-  const items = pendingGit(), offers = pendingRuns(), app = state.app, bar = $("#gitBar");
-  bar.hidden = !items.length && !offers.length && !app;
+  const items = pendingGit(), offers = pendingRuns(), app = state.app, bar = $("#gitBar"), delivered = deliveries();
+  bar.hidden = !items.length && !offers.length && !app && !delivered.length;
   if (bar.hidden) {
     $("#gitItems").innerHTML = "";
     return;
   }
+  // The header says what the bar is about: decisions for the director's proposals, or the finished app.
+  const onlyDelivery = delivered.length && !items.length && !offers.length && !app;
+  $("#gitBarTitle").textContent = t(onlyDelivery ? "Entrega" : "El director propone");
+  $("#gitBarNote").textContent = t(onlyDelivery ? "Tu aplicación, lista para usar." : "Tú decides si se ejecuta.");
   const output = $("#gitItems .app-output"), pinned = !output || output.scrollHeight - output.scrollTop - output.clientHeight < 30;
-  $("#gitItems").innerHTML = (app ? appRow(app) : "") + offers.map(runOfferRow).join("") + items.map((item) => {
+  $("#gitItems").innerHTML = delivered.map(deliveryRow).join("") + (app ? appRow(app) : "") + offers.map(runOfferRow).join("") + items.map((item) => {
     const uncertain = item.status === "uncertain", failed = item.status === "failed";
     const text = failed ? `⚠ ${t("No se pudo guardar")} · ${item.error ?? ""}` : uncertain ? `⚠ ${t("Resultado incierto")} · ${gitText(item)}` : gitText(item);
     // Unsaved changes at the end of the work: save them, or decide to leave them (never both silently).
@@ -193,6 +232,23 @@ function renderGitBar() {
   if (next) next.scrollTop = pinned ? next.scrollHeight : output.scrollTop;
 }
 $("#gitItems").addEventListener("click", async (event) => {
+  const deliveryButton = event.target.closest("[data-delivery]");
+  if (deliveryButton) {
+    const action = deliveryButton.dataset.delivery, runId = deliveryButton.closest(".git-item").dataset.run;
+    if (action === "details") return void openDelivery(runId);
+    deliveryButton.disabled = true;
+    try {
+      const result = await api("delivery", { method: "POST", body: { runId, action } });
+      if (result.opened === "url") window.open(result.url, "_blank", "noopener");
+      state = await api("state");
+      render();
+      toast(action === "folder" ? "Abriendo la carpeta." : "Abriendo la aplicación en tu navegador.");
+    } catch (error) {
+      toast(error.message);
+    }
+    deliveryButton.disabled = false;
+    return;
+  }
   const appButton = event.target.closest("[data-app]");
   if (appButton) {
     const action = appButton.dataset.app, row = appButton.closest(".git-item");
@@ -506,7 +562,7 @@ function renderIdea() {
   $("#ideaCard").innerHTML = `<div class="idea-head"><h3 data-user-content>${esc(d.name)}</h3><p data-user-content>${esc(d.summary)}</p></div>
     <section><h4>${esc(t("Lo que hará"))}</h4>${list(d.features)}</section>
     <section><h4>${esc(t("Cómo sabremos que funciona"))}</h4>${list(d.criteria)}<p class="idea-small">${esc(t("Automata lo comprobará con pruebas automáticas y una revisión independiente. Que las pruebas pasen no garantiza calidad comercial."))}</p></section>
-    <section><h4>${esc(t("Dónde se usará"))}</h4><p data-user-content>${esc(d.platform)}</p></section>
+    <section><h4>${esc(t("Dónde se usará"))}</h4><p data-user-content>${esc(d.platform)}</p>${p.delivery?.note ? `<p class="idea-small" data-user-content>${esc(p.delivery.note)}</p>` : ""}${p.delivery && !p.delivery.verified && p.delivery.missing?.length ? `<p class="idea-small" data-user-content>${esc(t("En esta PC falta:"))} ${esc(p.delivery.missing.join(" "))}</p>` : ""}</section>
     <section><h4>${esc(t("Pasos del plan"))}</h4><ol class="idea-plan">${d.plan.map((task) => `<li><span data-user-content>${esc(task.title)}</span>${task.dependsOn.length ? `<small>${esc(t("después de"))} ${task.dependsOn.map((ref) => `«${esc(byIndex[Number(ref.slice(1)) - 1] ?? ref)}»`).join(", ")}</small>` : ""}</li>`).join("")}</ol></section>
     ${d.risks.length ? `<section class="idea-risks"><h4>${esc(t("Ten en cuenta"))}</h4>${list(d.risks)}</section>` : ""}
     ${d.questions.length ? `<section class="idea-questions"><h4>${esc(t("Preguntas del director"))}</h4>${list(d.questions)}<p class="idea-small">${esc(t("Respóndelas con Ajustar, o crea el proyecto con lo que propuso."))}</p></section>` : ""}

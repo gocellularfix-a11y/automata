@@ -256,7 +256,46 @@
     "Claude alcanzó el máximo de turnos. Se verifica el trabajo parcial y el director decide cómo seguir.": "Claude ran out of turns. The partial work is checked and the director decides how to go on.",
     "Claude alcanzó el límite de tiempo de la llamada. Se verifica el trabajo parcial y el director decide cómo seguir.": "Claude hit the call time limit. The partial work is checked and the director decides how to go on.",
     "Detén o continúa el trabajo que está esperando antes de usar otro.": "Stop or continue the waiting run before using another one.",
-    "maxRetries: usa un número entre 0 y 10.": "maxRetries: enter a number between 0 and 10."
+    "maxRetries: usa un número entre 0 y 10.": "maxRetries: enter a number between 0 and 10.",
+    "ENTREGA": "DELIVERY",
+    "Entrega": "Delivery",
+    "Tu aplicación, lista para usar.": "Your app, ready to use.",
+    "Tu aplicación está lista": "Your app is ready",
+    "Se guardó en": "Saved in",
+    "Abrir aplicación": "Open app",
+    "Guía y detalles": "Guide and details",
+    "Abrir carpeta": "Open folder",
+    "Todavía no está lista para entregarse": "Not ready to hand over yet",
+    "TU APLICACIÓN": "YOUR APP",
+    "Tu aplicación.": "Your app.",
+    "Todo lo que necesitas para abrirla, usarla y cuidar tus datos.": "Everything you need to open it, use it and look after your data.",
+    "Dónde está": "Where it is",
+    "Qué funciona": "What works",
+    "Qué queda pendiente": "What is still pending",
+    "Guía para usarla": "How to use it",
+    "Cómo se comprobó": "How it was checked",
+    "Sin detalle.": "No detail.",
+    "Nada anotado.": "Nothing noted.",
+    "Cargando la guía…": "Loading the guide…",
+    "Haz doble clic en Abrir.cmd, o usa el botón «Abrir aplicación»: se abre en tu navegador.": "Double-click Abrir.cmd, or use the “Open app” button: it opens in your browser.",
+    "Haz doble clic en Abrir.cmd, o usa el botón «Abrir aplicación»: se enciende y se abre en tu navegador.": "Double-click Abrir.cmd, or use the “Open app” button: it starts and opens in your browser.",
+    "El lanzador está y no instala nada": "The launcher is there and installs nothing",
+    "La guía tiene todas sus secciones": "The guide has all its sections",
+    "La página principal existe": "The main page exists",
+    "Los archivos que usa están completos": "The files it uses are all there",
+    "La aplicación arrancó": "The app started",
+    "Se abrió en el navegador sin errores": "It opened in the browser without errors",
+    "Pruebas automáticas del proyecto": "The project's automatic tests",
+    "Que las pruebas pasen no garantiza calidad comercial.": "Passing tests do not guarantee commercial quality.",
+    "No se pudo abrir en un navegador de prueba; se revisaron los archivos y el arranque.": "It could not be opened in a test browser; the files and the start were checked.",
+    "En esta PC falta:": "This PC is missing:",
+    "Abriendo la carpeta.": "Opening the folder.",
+    "Abriendo la aplicación en tu navegador.": "Opening the app in your browser.",
+    "Comprobando que la aplicación se pueda abrir con un doble clic…": "Checking that the app opens with a double-click…",
+    "Esto se abre en la computadora donde está Automata. Hazlo desde esa computadora.": "This opens on the computer where Automata runs. Do it from that computer.",
+    "Esta aplicación todavía no está lista.": "This app is not ready yet.",
+    "Al terminar tendrás un botón para abrirla, una carpeta con un lanzador de doble clic y una guía sencilla.": "When it is ready you will get a button to open it, a folder with a double-click launcher and a simple guide.",
+    "Automata la construye y te dice cómo correrla, pero todavía no comprueba su entrega.": "Automata builds it and shows how to run it, but it does not check its delivery yet."
   };
   const reverse = Object.fromEntries(Object.entries(english).map(([es, en]) => [en, es]));
   let language = localStorage.getItem("automata.language") === "en" ? "en" : "es";
@@ -282,6 +321,9 @@
       .replace(/^La sesión de (Claude|Codex) creció demasiado; se abre una nueva · sigue a las (.+?)(?: \(intento (\d+) de (\d+)\))?\. Motivo: ([\s\S]*)$/, (_m, who, when, n, max, why) => `${who} session grew too large; a new one starts · resumes at ${when}${n ? ` (attempt ${n} of ${max})` : ""}. Reason: ${why}`)
       .replace(/^Poca memoria libre en la PC · sigue a las (.+?)\. Motivo: ([\s\S]*)$/, "Low free memory on this PC · resumes at $1. Reason: $2")
       .replace(/^Ya hay memoria suficiente \(esperó (\d+) min, (\d+) lecturas\): (Claude|Codex|el agente) sigue donde se quedó\.$/, (_m, min, n, who) => `Enough memory again (waited ${min} min, ${n} readings): ${who === "el agente" ? "the agent" : who} continues where it left off.`)
+      .replace(/^La aplicación todavía no está lista para entregarse \(intento (\d+) de (\d+)\)\. ([\s\S]*?) Claude lo corrige y se vuelve a comprobar\.$/, "The app is not ready to hand over yet (attempt $1 of $2). $3 Claude fixes it and it is checked again.")
+      .replace(/^Tu aplicación está lista\. Se guardó en (.+)\. Ábrela con el botón «Abrir aplicación»; la guía (.+) explica cómo usarla\.$/, "Your app is ready. It is saved in $1. Open it with the “Open app” button; the guide $2 explains how to use it.")
+      .replace(/^Abriendo (.+) en el navegador\.$/, "Opening $1 in the browser.")
       .replace(/^Reanudando: (Claude|Codex) vuelve a intentarlo\.$/, "Resuming: $1 tries again.")
       .replace(/^No se pudo reanudar solo: ([\s\S]*)$/, "Could not resume on its own: $1")
       .replace(/^(Claude|Codex) ya había terminado esta operación antes del cierre; se usa su resultado sin repetirla\.$/, "$1 had already finished this operation before the shutdown; its result is used without repeating it.")
