@@ -39,6 +39,8 @@ ${task}
 
 VERIFICACIONES FALLIDAS:
 ${failing.map((check) => `$ ${check.command ?? "(sin comando)"} → código ${check.code ?? "?"}\n${tail(check.output, 2500)}${check.stderr ? "\n" + tail(check.stderr, 800) : ""}`).join("\n\n")}`;
+// The director asking for a person to open the page, click or confirm by hand (seen blocking real runs three times).
+const NEEDS_A_HUMAN_CLICK = /doble clic|abra (?:el archivo |la p[aá]gina |index\.html|la aplicaci[oó]n)|abrir (?:el archivo |la p[aá]gina |index\.html|la aplicaci[oó]n)|(?:alguien|una persona|el usuario|la persona|t[uú])\s+(?:pueda |puede |debe |deber[aá] )?(?:abra|abrir|haga|pruebe|probar|confirme|compruebe)|prueba manual|manualmente|a mano|en un navegador real/i;
 // What the director is told when Automata's delivery check passed, for the pieces that exist so far.
 function deliveryEvidence({ round, browser, parts = {} }) {
   const launcher = parts.launcher !== false, guide = parts.guide !== false;
@@ -1337,6 +1339,9 @@ export class Coordinator extends EventEmitter {
         const review = validateReview(result.review, project, phase);
         // Approving a repository with unsaved changes and no commit: asked once; the apply stage has the last word.
         if (review.decision === "complete" && attempt === 1 && !this.demo && (options.team?.index ?? 0) === 0 && options.git?.mode !== "off" && options.git?.info?.repo && options.git.info.dirty && !normalizeGit(review.git).commit) throw invalidReview("Marcas el objetivo completo pero hay cambios sin confirmar en Git y no pediste el commit. Entrega la revisión de nuevo con git.commit=true y un mensaje convencional (feat:, fix:, test:, docs:) para que la persona conserve la versión; si no corresponde guardarlos, dilo en summary.");
+        // The director cannot open a window or double-click: blocking for that is not a missing condition of the world,
+        // it is evidence Claude can produce. Asked once; if the director insists, the person decides.
+        if (review.decision === "blocked" && attempt === 1 && !this.demo && NEEDS_A_HUMAN_CLICK.test(`${review.summary} ${review.nextPrompt}`)) throw invalidReview("Marcaste decision=blocked porque nadie puede abrir la aplicación, hacer doble clic o probarla a mano, pero eso no es una condición externa que falte: tú eres de solo lectura y no puedes hacerlo, y la persona no tiene que hacerlo por ti. Claude puede añadir pruebas automáticas (node --test, sin dependencias) de la lógica y del controlador de la interfaz, y Automata abre la página en un navegador real y te muestra el resultado en la sección ENTREGA de la evidencia cuando existe. Si lo que falta es evidencia, entrega decision=continue con una tarea concreta para Claude que la produzca, o marca el criterio con lo que sí está comprobado. Mantén blocked solo si hace falta una decisión o un dato de la persona.");
         if (review.decision === "complete" && this.active.checks.some((c) => !c.passed)) throw invalidReview("El auditor intentó aprobar con verificaciones fallidas. Revisa la evidencia antes de continuar.");
         // The plan is the last check: a decision that breaks it rolls back whole and comes back here.
         const planResult = this.applyPlanDecision(review, phase, index, project);

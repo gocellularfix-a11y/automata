@@ -48,14 +48,18 @@ const creator = (root) => async (input) => { const directory = path.join(root, "
 const passing = async (p) => p.checks.map((command) => ({ command, passed: true, code: 0, output: "ok" }));
 
 // coderWrites(dir, n): what Claude leaves in the folder on its n-th call. reviews: the director's prompts, for the evidence.
-function setup(t, { platform, coderWrites, tasks = platform && !/web/i.test(platform) ? 4 : 6, seedPlan = false } = {}) {
+function setup(t, { platform, coderWrites, tasks = platform && !/web/i.test(platform) ? 4 : 6, seedPlan = false, director = null } = {}) {
   const dir = fixture(), calls = { coder: [], auditor: [] }, opened = [];
+  let reviews = 0;
   const c = new Coordinator(new Store(path.join(dir, "data")), { evidence: async () => "", checks: passing, resumeDelayMs: 0, detect: async () => ENV, opener: (target) => opened.push(target), resources: null, agents: { async run(a) {
     calls[a.role]?.push({ phase: a.phase, prompt: a.prompt });
     if (a.phase === "define") return { proposal: proposal(platform) };
     if (a.role === "coder") { coderWrites?.(a.project.directory, calls.coder.length); return { text: "Hecho" }; }
     // A project with no plan yet (it did not come from an idea) gets one from the director, a task per criterion.
     const added = seedPlan ? { plan: { add: a.project.criteria.map((criterion) => ({ title: "Cumplir: " + criterion.slice(0, 40), detail: "", criterion, dependsOn: [] })), update: [] } } : {};
+    // A test can script the director's answer to the n-th review; returning nothing leaves the usual one.
+    const scripted = a.phase === "review" ? director?.(a, ++reviews) : null;
+    if (scripted) return { review: scripted };
     return { review: a.phase === "plan" ? reviewOf(a.project, "continue", 0, { task: seedPlan ? "N1" : "T1", ...added }) : reviewOf(a.project, "complete", tasks) };
   } } });
   c.updateSettings({ ...c.settings, projectsRoot: path.join(dir, "projects"), gitMode: "off", maxRounds: 8 });
@@ -235,4 +239,35 @@ test("con solo el lanzador escrito (la guía es la tarea siguiente), el director
   assert.doesNotMatch(first.prompt, /sigue pendiente; no apruebes/, "faltar la guía todavía no es un problema de entrega en pleno trabajo");
   assert.equal(c.active.status, "complete", c.active.error);
   assert.equal(c.active.delivery.status, "ready", "la compuerta final sí exige las dos cosas");
+});
+
+// What the real director wrote when it blocked three real runs (P4 drills of 28 Oct).
+const REAL_BLOCKS = [
+  "Abrir.cmd contiene el comando esperado, pero no se ha comprobado que abra la aplicación en Windows. La comprobación requiere que una persona haga doble clic en el archivo.",
+  "T2: falta que alguien abra index.html, guarde el gasto de prueba y confirme que aparece con los datos indicados.",
+  "Cuando alguien pueda hacer doble clic en Abrir.cmd y confirmar si aparece la página de gastos, registra el resultado."
+];
+test("si el director bloquea porque nadie puede abrir la página, se le devuelve una vez; si insiste, el bloqueo se respeta", async (t) => {
+  for (const text of REAL_BLOCKS) {
+    const { c, dir, calls } = setup(t, { coderWrites: (folder, n) => { writeApp(folder); writeDelivery(folder); }, director: (a, n) => n === 1 ? reviewOf(a.project, "blocked", 0, { summary: text, nextPrompt: text }) : null });
+    await create(c, dir);
+    await settled(c);
+    const reviews = calls.auditor.filter((x) => x.phase === "review");
+    assert.equal(c.active.status, "complete", `${text.slice(0, 40)}… → ${c.active.error}`);
+    assert.equal(reviews.length, 2, "se le pidió de nuevo, una sola vez");
+    assert.match(reviews[1].prompt, /Marcaste decision=blocked porque nadie puede abrir la aplicación[\s\S]*Claude puede añadir pruebas automáticas/);
+    assert.ok(c.events.some((e) => /Revisión no válida \(1\/3\): Marcaste decision=blocked/.test(e.text)));
+  }
+  // It insists: the person is the one who decides.
+  const { c, dir, calls } = setup(t, { coderWrites: (folder) => { writeApp(folder); writeDelivery(folder); }, director: (a) => reviewOf(a.project, "blocked", 0, { summary: REAL_BLOCKS[1], nextPrompt: REAL_BLOCKS[1] }) });
+  await create(c, dir);
+  await settled(c);
+  assert.equal(c.active.status, "blocked");
+  assert.equal(calls.auditor.filter((x) => x.phase === "review").length, 2, "no se insiste más: la segunda vez el bloqueo vale");
+  // A block about something only the person can decide is not touched.
+  const real = setup(t, { coderWrites: (folder) => { writeApp(folder); writeDelivery(folder); }, director: (a, n) => n === 1 ? reviewOf(a.project, "blocked", 0, { summary: "Falta saber en qué moneda debe mostrar los importes.", nextPrompt: "Decide la moneda." }) : null });
+  await create(real.c, real.dir);
+  await settled(real.c);
+  assert.equal(real.c.active.status, "blocked");
+  assert.equal(real.calls.auditor.filter((x) => x.phase === "review").length, 1, "un bloqueo legítimo no se cuestiona");
 });
