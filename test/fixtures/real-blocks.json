@@ -1,0 +1,65 @@
+[
+  {
+    "label": "run 2",
+    "source": "real-idea-2026-10-28T20-05-04-943Z/round-19",
+    "decision": "blocked",
+    "summary": "Abrir.cmd contiene el comando esperado, pero no se ha comprobado que abra la aplicación en Windows. La comprobación requiere que una persona haga doble clic en el archivo o que se autorice su ejecución; el entorno actual es de solo lectura y los intentos reportados fueron rechazados. COMO_USAR.md conserva la nota de que esa prueba está pendiente. Las 32 pruebas reportadas pasaron, pero no verifican el arranque con doble clic.",
+    "nextPrompt": "Cuando una persona pueda hacer doble clic en Abrir.cmd desde el Explorador y confirmar que index.html se abre en el navegador, retoma T10: actualiza COMO_USAR.md según el resultado y audita T10 y T11.",
+    "task": "T10",
+    "plan": {
+      "add": [],
+      "update": [
+        {
+          "id": 10,
+          "status": "blocked",
+          "evidence": "Abrir.cmd contiene el comando esperado, pero no se ejecutó ni se observó abrirse la página en el navegador.",
+          "note": "Falta una comprobación humana mediante doble clic en Windows o autorización para ejecutar el archivo; esta sesión es de solo lectura."
+        },
+        {
+          "id": 11,
+          "status": "todo",
+          "evidence": "COMO_USAR.md contiene las secciones requeridas y aún señala que el doble clic no se ha probado.",
+          "note": "Depende de T10; retomar cuando se compruebe el arranque."
+        }
+      ]
+    }
+  },
+  {
+    "label": "run 3",
+    "source": "real-idea-2026-10-28T20-21-27-419Z/round-19",
+    "decision": "blocked",
+    "summary": "T11 sigue sin poder verificarse. La inspección confirma que Abrir.cmd contiene el comando previsto y que index.html carga gastos.js y app.js con scripts clásicos, pero no hay evidencia de que el archivo abra la página en Windows. El reporte confirma que los intentos de ejecución quedaron bloqueados. T12 depende de T11.",
+    "nextPrompt": "Cuando alguien pueda hacer doble clic en Abrir.cmd y confirmar si aparece la página de gastos, registra el resultado. Si arranca, continúa con T12: escribe COMO_USAR.md con las seis secciones exigidas.",
+    "task": "T11",
+    "plan": {
+      "add": [],
+      "update": [
+        {
+          "id": 11,
+          "status": "blocked",
+          "evidence": "Abrir.cmd contiene el comando previsto e index.html carga los scripts clásicos necesarios. El arranque no se pudo observar; el reporte indica que los intentos quedaron bloqueados.",
+          "note": "Falta una comprobación externa: que una persona haga doble clic en Abrir.cmd y confirme que aparece la página en el navegador. T12 depende de T11."
+        }
+      ]
+    }
+  },
+  {
+    "label": "run 4",
+    "source": "real-idea-2026-10-28T20-36-44-240Z/round-08",
+    "decision": "blocked",
+    "summary": "La inspección previa confirma que el controlador conecta los campos con la lógica y dibuja los gastos válidos. En esta ronda no hubo cambios ni pruebas nuevas y no se comprobó el caso en navegador. T2 permanece sin verificar hasta obtener una prueba manual del caso en la interfaz.",
+    "nextPrompt": "T2: falta que alguien abra index.html, guarde el gasto de prueba y confirme que aparece con los datos indicados. Comparte el resultado observado para continuar la auditoría; las pruebas de lógica reportadas no verifican la interfaz.",
+    "task": "T2",
+    "plan": {
+      "add": [],
+      "update": [
+        {
+          "id": 2,
+          "status": "blocked",
+          "evidence": "La inspección previa confirmó la conexión del formulario y el renderizado en código; no hubo prueba de navegador ni ejecución de pruebas en esta ronda.",
+          "note": "Falta una prueba manual en navegador que confirme el caso de T2."
+        }
+      ]
+    }
+  }
+]

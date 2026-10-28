@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { platformKind, VERIFIED_TARGETS } from "./environment.mjs";
 import { checkInBrowser } from "./browsercheck.mjs";
 import { AppRunner } from "./apprun.mjs";
+import { SCENARIO_FILE } from "./scenarios.mjs";
 
 export const LAUNCHER = "Abrir.cmd";
 export const GUIDE = "COMO_USAR.md";
@@ -95,18 +96,18 @@ export function parseGuide(text) {
 }
 const TECHNICAL = /\b(?:npm|npx|node(?:\.js)?\s+\S+\.m?js|powershell|cmd\.exe|git\s+\w+|pip|python\s+\S+)\b/i;
 export function checkGuide(text, language = "es") {
-  const problems = [];
-  if (text == null) return { ok: false, found: [], problems: [`Falta ${GUIDE} en la carpeta del proyecto.`] };
-  const sections = parseGuide(text), en = language === "en", found = [];
+  const problems = [], en = language === "en";
+  if (text == null) return { ok: false, found: [], problems: [en ? `${GUIDE} is missing from the project folder.` : `Falta ${GUIDE} en la carpeta del proyecto.`] };
+  const sections = parseGuide(text), found = [];
   for (const wanted of GUIDE_SECTIONS) {
     const section = sections.find((s) => wanted.test.test(s.title));
     const name = en ? wanted.en : wanted.es;
-    if (!section) { problems.push(`En ${GUIDE} falta la sección «${name}».`); continue; }
-    if (section.body.replace(/\s+/g, "").length < 20) { problems.push(`En ${GUIDE} la sección «${section.title}» está vacía o es demasiado corta.`); continue; }
+    if (!section) { problems.push(en ? `${GUIDE} has no «${name}» section.` : `En ${GUIDE} falta la sección «${name}».`); continue; }
+    if (section.body.replace(/\s+/g, "").length < 20) { problems.push(en ? `In ${GUIDE} the «${section.title}» section is empty or too short.` : `En ${GUIDE} la sección «${section.title}» está vacía o es demasiado corta.`); continue; }
     found.push({ key: wanted.key, title: section.title });
     if (wanted.key === "open") {
-      if (!new RegExp(LAUNCHER.replace(".", "\\."), "i").test(section.body)) problems.push(`En ${GUIDE} la sección «${section.title}» debe decir que se abre con doble clic en ${LAUNCHER}.`);
-      if (TECHNICAL.test(section.body)) problems.push(`En ${GUIDE} la sección «${section.title}» pide escribir comandos; para una persona sin conocimientos técnicos debe bastar un doble clic en ${LAUNCHER}.`);
+      if (!new RegExp(LAUNCHER.replace(".", "\\."), "i").test(section.body)) problems.push(en ? `In ${GUIDE} the «${section.title}» section must say it opens by double-clicking ${LAUNCHER}.` : `En ${GUIDE} la sección «${section.title}» debe decir que se abre con doble clic en ${LAUNCHER}.`);
+      if (TECHNICAL.test(section.body)) problems.push(en ? `In ${GUIDE} the «${section.title}» section asks to type commands; for someone non-technical a double-click on ${LAUNCHER} must be enough.` : `En ${GUIDE} la sección «${section.title}» pide escribir comandos; para una persona sin conocimientos técnicos debe bastar un doble clic en ${LAUNCHER}.`);
     }
   }
   return { ok: problems.length === 0, found, problems };
@@ -114,14 +115,14 @@ export function checkGuide(text, language = "es") {
 
 // ---- The launcher ----
 // Commands that change the PC or download things have no place in something a person double-clicks.
-const FORBIDDEN = [[/\bnpm\s+(?:install|i|ci)\b|\byarn\s+(?:add|install)\b|\bpip\s+install\b/i, "instala paquetes"], [/\bwinget\b|\bchoco\b|\bscoop\b|\bmsiexec\b/i, "instala programas"], [/\bcurl\b|invoke-webrequest|\biwr\b|bitsadmin|\bwget\b/i, "descarga archivos"], [/\breg\s+(?:add|delete)\b|\bschtasks\b|\bsc\s+create\b|\bnetsh\b/i, "cambia la configuración de Windows"], [/\brmdir\s+\/s\b|\bdel\s+\/[sq]\b|\bformat\s+[a-z]:|\brd\s+\/s\b/i, "borra archivos"]];
+const FORBIDDEN = [[/\bnpm\s+(?:install|i|ci)\b|\byarn\s+(?:add|install)\b|\bpip\s+install\b/i, "instala paquetes", "installs packages"], [/\bwinget\b|\bchoco\b|\bscoop\b|\bmsiexec\b/i, "instala programas", "installs programs"], [/\bcurl\b|invoke-webrequest|\biwr\b|bitsadmin|\bwget\b/i, "descarga archivos", "downloads files"], [/\breg\s+(?:add|delete)\b|\bschtasks\b|\bsc\s+create\b|\bnetsh\b/i, "cambia la configuración de Windows", "changes Windows settings"], [/\brmdir\s+\/s\b|\bdel\s+\/[sq]\b|\bformat\s+[a-z]:|\brd\s+\/s\b/i, "borra archivos", "deletes files"]];
 const ABSOLUTE_PATH = /(?<![%\w])[a-z]:\\(?!\\)/i;
-export function parseLauncher(text) {
-  const problems = [];
-  if (text == null) return { ok: false, problems: [`Falta ${LAUNCHER} en la carpeta del proyecto.`] };
-  if (text.replace(/\s+/g, "").length < 10) return { ok: false, problems: [`${LAUNCHER} está vacío.`] };
-  for (const [pattern, what] of FORBIDDEN) if (pattern.test(text)) problems.push(`${LAUNCHER} ${what}; un lanzador de doble clic no debe hacerlo.`);
-  if (ABSOLUTE_PATH.test(text)) problems.push(`${LAUNCHER} usa una ruta absoluta de esta PC (como C:\\…); usa %~dp0 para que funcione desde cualquier carpeta.`);
+export function parseLauncher(text, language = "es") {
+  const problems = [], en = language === "en";
+  if (text == null) return { ok: false, problems: [en ? `${LAUNCHER} is missing from the project folder.` : `Falta ${LAUNCHER} en la carpeta del proyecto.`] };
+  if (text.replace(/\s+/g, "").length < 10) return { ok: false, problems: [en ? `${LAUNCHER} is empty.` : `${LAUNCHER} está vacío.`] };
+  for (const [pattern, what, whatEn] of FORBIDDEN) if (pattern.test(text)) problems.push(en ? `${LAUNCHER} ${whatEn}; a double-click launcher must not do that.` : `${LAUNCHER} ${what}; un lanzador de doble clic no debe hacerlo.`);
+  if (ABSOLUTE_PATH.test(text)) problems.push(en ? `${LAUNCHER} uses an absolute path of this PC (like C:\\…); use %~dp0 so it works from any folder.` : `${LAUNCHER} usa una ruta absoluta de esta PC (como C:\\…); usa %~dp0 para que funcione desde cualquier carpeta.`);
   const file = /\bstart\s+(?:\/\w+\s+)*""?\s*"?%~dp0([^"\r\n&|<>]+?\.html?)"?\s*(?:$|[\r\n&|])/im.exec(text);
   const url = /https?:\/\/(?:localhost|127\.0\.0\.1):(\d{2,5})(?:\/[^\s"'&|<>)]*)?/i.exec(text);
   if (file && !/^(?:https?:)/i.test(file[1])) return { ok: problems.length === 0, mode: "static", target: file[1].replace(/\\/g, "/"), problems };
@@ -130,7 +131,7 @@ export function parseLauncher(text) {
     const script = /\bnode\s+"?(?:%~dp0)?([^\s"&|<>]+\.[cm]?js)"?/i.exec(text);
     return { ok: problems.length === 0, mode: "server", url: url[0], port: Number(url[1]), command: script ? `node ${script[1].replace(/\\/g, "/")}` : /\bnpm\s+(?:run\s+)?start\b/i.exec(text)?.[0] ?? null, problems };
   }
-  problems.push(`${LAUNCHER} no abre nada reconocible: para una página usa  start "" "%~dp0index.html"  y para una app con servidor, abre http://localhost:PUERTO.`);
+  problems.push(en ? `${LAUNCHER} does not open anything recognisable: for a page use  start "" "%~dp0index.html"  and for an app with a server, open http://localhost:PORT.` : `${LAUNCHER} no abre nada reconocible: para una página usa  start "" "%~dp0index.html"  y para una app con servidor, abre http://localhost:PUERTO.`);
   return { ok: false, mode: null, problems };
 }
 
@@ -161,62 +162,97 @@ async function answers(url, fetchImpl = fetch) {
     return { ok: response.status === 200 && body.trim().length > 0, status: response.status };
   } catch { return { ok: false, status: 0 }; }
 }
+// The page the launcher opens, read as files and then opened in a real browser. Shared by the final delivery check and
+// by the evidence the director gets while the work is still going on (when only index.html exists).
+// Returns { ok, page, problems, notes, steps, open, browser } and never throws.
+export async function checkStaticPage({ directory, target, env = null, language = "es", browser = checkInBrowser, scenarios = [] }) {
+  const en = language === "en", problems = [], notes = [], steps = [];
+  const step = (name, ok, detail = "") => steps.push({ name, ok, detail });
+  const out = { ok: false, page: null, problems, notes, steps, open: null, browser: null };
+  const html = path.resolve(directory, target), root = path.resolve(directory);
+  if (!html.toLowerCase().startsWith(root.toLowerCase() + path.sep)) { problems.push(en ? `${LAUNCHER} points outside the project folder.` : `${LAUNCHER} apunta fuera de la carpeta del proyecto.`); return out; }
+  if (!fs.existsSync(html)) { problems.push(en ? `${LAUNCHER} opens ${target}, but that file does not exist.` : `${LAUNCHER} abre ${target}, pero ese archivo no existe.`); return out; }
+  const page = readText(html);
+  step("page", true, target);
+  const refs = pageReferences(page);
+  const missing = refs.local.filter((r) => !fs.existsSync(path.resolve(path.dirname(html), r.ref.replace(/^\/+/, ""))) || r.ref.startsWith("/"));
+  for (const r of refs.local.filter((x) => x.ref.startsWith("/"))) problems.push(en ? `${target} loads «${r.ref}» with a path that starts with «/»; opened by double-click it is not found. Use relative paths (for example «${r.ref.replace(/^\/+/, "")}»).` : `${target} carga «${r.ref}» con una ruta que empieza con «/»; al abrir el archivo con doble clic no se encuentra. Usa rutas relativas (por ejemplo «${r.ref.replace(/^\/+/, "")}»).`);
+  for (const r of missing.filter((x) => !x.ref.startsWith("/"))) problems.push(en ? `${target} loads «${r.ref}», but that file does not exist.` : `${target} carga «${r.ref}», pero ese archivo no existe.`);
+  // Opened by double-click, a page without a declared encoding shows accents as broken characters.
+  const texts = [page, ...refs.local.filter((x) => /\.(?:js|css)$/i.test(x.ref) && !x.ref.startsWith("/")).map((x) => readText(path.resolve(path.dirname(html), x.ref), 300000) ?? "")];
+  if (texts.some((x) => /[^\x00-\x7F]/.test(x)) && !/<meta[^>]+charset\s*=\s*["']?utf-?8/i.test(page.slice(0, 4096))) problems.push(en ? `${target} has accents or special characters but does not declare its encoding; in the browser they would show broken. Add <meta charset="utf-8"> inside <head>.` : `${target} tiene acentos o caracteres especiales pero no declara la codificación; en el navegador se verían rotos. Agrega <meta charset="utf-8"> dentro de <head>.`);
+  for (const r of refs.local.filter((x) => x.module)) notes.push(en ? `«${r.ref}» is a module; opened by double-click some browsers block it.` : `«${r.ref}» es un módulo; al abrir con doble clic algunos navegadores lo bloquean.`);
+  step("files", missing.length === 0, missing.length ? (en ? `${missing.length} missing` : `faltan ${missing.length}`) : (en ? `${refs.local.length} linked files` : `${refs.local.length} archivos enlazados`));
+  if (refs.remote.length) notes.push(en ? `The page uses Internet resources (${clip(refs.remote.slice(0, 2).join(", "), 120)}); offline it may look incomplete.` : `La página usa recursos de Internet (${clip(refs.remote.slice(0, 2).join(", "), 120)}); sin conexión puede verse incompleta.`);
+  out.open = { type: "file", target, path: html };
+  out.page = page;
+  if (!missing.length) await runInBrowser(new URL(`file:///${html.replace(/\\/g, "/")}`).href, { env, language, browser, scenarios, out, step });
+  out.ok = problems.length === 0;
+  return out;
+}
+// Opens the page in the PC's browser; what it saw goes into out (problems, notes, the report for the evidence).
+async function runInBrowser(url, { env, language, browser, scenarios, out, step }) {
+  const en = language === "en";
+  const executable = env?.tools?.browser?.found ? env.tools.browser.path : null;
+  const seen = await browser(url, { executable, scenarios, language });
+  out.report = seen;
+  out.browser = seen.ok === null ? { ran: false, note: seen.skipped } : { ran: true, name: seen.browser, title: seen.title, controls: seen.controls };
+  if (seen.ok === null) { out.notes.push(en ? `${seen.skipped} The files were checked, but the app was not seen open on a screen.` : `${seen.skipped} Se revisaron los archivos, pero no se vio abierta en pantalla.`); step("browser", true, en ? "not available" : "no disponible"); return; }
+  step("browser", seen.ok, seen.ok ? seen.title || (en ? "opens without errors" : "abre sin errores") : seen.problems[0]);
+  out.problems.push(...(seen.problems ?? []).map((p) => en ? `When opening the app in the browser: ${p}` : `Al abrir la aplicación en el navegador: ${p}`));
+  // A scenario that fails is a behaviour the project promised and does not deliver.
+  if (seen.scenarios?.length) step("scenarios", !seen.scenarioProblems.length, en ? `${seen.scenarios.filter((x) => x.ok).length} of ${seen.scenarios.length}` : `${seen.scenarios.filter((x) => x.ok).length} de ${seen.scenarios.length}`);
+  out.problems.push(...(seen.scenarioProblems ?? []).map((p) => en ? `Interface scenarios (${SCENARIO_FILE}): ${p}` : `Escenarios de interfaz (${SCENARIO_FILE}): ${p}`));
+}
 // directory: the project folder. runCommand: what the director said starts the app (optional).
 // env: detectEnvironment() result (for the browser). Returns the whole picture; ok means a person can open it.
-export async function verifyDelivery({ directory, runCommand = "", env = null, language = "es", appFactory = () => new AppRunner(), fetchImpl = fetch, bootTimeoutMs = 20000, browser = checkInBrowser, parts = { launcher: true, guide: true } } = {}) {
+// scenarios: the validated interface scenarios (scenarios.mjs), run in the browser after the page opens.
+export async function verifyDelivery({ directory, runCommand = "", env = null, language = "es", appFactory = () => new AppRunner(), fetchImpl = fetch, bootTimeoutMs = 20000, browser = checkInBrowser, parts = { launcher: true, guide: true }, scenarios = [], scenarioIssues = [], entry = null } = {}) {
+  const en = language === "en";
   const steps = [], problems = [], notes = [];
+  // A ui-check.json that cannot be read is a problem of the delivery: nobody could run it.
+  problems.push(...scenarioIssues.map((p) => en ? `Interface scenarios (${SCENARIO_FILE}): ${p}` : `Escenarios de interfaz (${SCENARIO_FILE}): ${p}`));
   const step = (name, ok, detail = "") => steps.push({ name, ok, detail });
-  const result = { kind: "web", mode: null, ok: false, steps, problems, notes, launcher: LAUNCHER, guide: GUIDE, open: null, browser: null, checkedAt: new Date().toISOString() };
+  const result = { kind: "web", mode: null, ok: false, steps, problems, notes, launcher: LAUNCHER, guide: GUIDE, open: null, browser: null, report: null, checkedAt: new Date().toISOString() };
 
   // parts: while the work is going on each piece is checked as soon as it exists; the final check asks for both.
   const launcherName = parts.launcher ? findFile(directory, LAUNCHER) : null;
-  const launcher = parts.launcher ? parseLauncher(launcherName ? readText(path.join(directory, launcherName), 20000) : null) : { ok: true, mode: null, problems: [] };
+  const launcher = parts.launcher ? parseLauncher(launcherName ? readText(path.join(directory, launcherName), 20000) : null, language) : { ok: true, mode: null, problems: [] };
   if (parts.launcher) { step("launcher", launcher.ok, launcher.ok ? LAUNCHER : launcher.problems[0] ?? ""); problems.push(...launcher.problems); }
   const guideName = parts.guide ? findFile(directory, GUIDE) : null;
   const guide = parts.guide ? checkGuide(guideName ? readText(path.join(directory, guideName), 100000) : null, language) : { ok: true, found: [], problems: [] };
-  if (parts.guide) { step("guide", guide.ok, guide.ok ? `${guide.found.length} secciones` : guide.problems[0]); problems.push(...guide.problems); }
+  if (parts.guide) { step("guide", guide.ok, guide.ok ? (en ? `${guide.found.length} sections` : `${guide.found.length} secciones`) : guide.problems[0]); problems.push(...guide.problems); }
   result.guideSections = guide.found.map((s) => s.title);
+  // Neither piece exists yet but the page does: what the director can already be told about it.
+  if (!parts.launcher && !parts.guide && entry) {
+    const checked = await checkStaticPage({ directory, target: entry, env, language, browser, scenarios });
+    problems.push(...checked.problems);
+    notes.push(...checked.notes);
+    steps.push(...checked.steps);
+    Object.assign(result, { mode: "static", open: checked.open, browser: checked.browser, report: checked.report ?? null });
+    return finish(result);
+  }
   if (!parts.launcher || !launcher.mode) return finish(result);
   result.mode = launcher.mode;
-  const browserPath = env?.tools?.browser?.found ? env.tools.browser.path : null;
-  const inBrowser = async (url) => {
-    const seen = await browser(url, { executable: browserPath });
-    result.browser = seen.ok === null ? { ran: false, note: seen.skipped } : { ran: true, name: seen.browser, title: seen.title, controls: seen.controls };
-    if (seen.ok === null) { notes.push(`${seen.skipped} Se revisaron los archivos, pero no se vio abierta en pantalla.`); step("browser", true, "no disponible"); return; }
-    step("browser", seen.ok, seen.ok ? seen.title || "abre sin errores" : seen.problems[0]);
-    problems.push(...(seen.problems ?? []).map((p) => `Al abrir la aplicación en el navegador: ${p}`));
-  };
 
   if (launcher.mode === "static") {
-    const html = path.resolve(directory, launcher.target), root = path.resolve(directory);
-    if (!html.toLowerCase().startsWith(root.toLowerCase() + path.sep)) problems.push(`${LAUNCHER} apunta fuera de la carpeta del proyecto.`);
-    else if (!fs.existsSync(html)) problems.push(`${LAUNCHER} abre ${launcher.target}, pero ese archivo no existe.`);
-    else {
-      const page = readText(html);
-      step("page", true, launcher.target);
-      const refs = pageReferences(page);
-      const missing = refs.local.filter((r) => !fs.existsSync(path.resolve(path.dirname(html), r.ref.replace(/^\/+/, ""))) || r.ref.startsWith("/"));
-      for (const r of refs.local.filter((x) => x.ref.startsWith("/"))) problems.push(`${launcher.target} carga «${r.ref}» con una ruta que empieza con «/»; al abrir el archivo con doble clic no se encuentra. Usa rutas relativas (por ejemplo «${r.ref.replace(/^\/+/, "")}»).`);
-      for (const r of missing.filter((x) => !x.ref.startsWith("/"))) problems.push(`${launcher.target} carga «${r.ref}», pero ese archivo no existe.`);
-      // Opened by double-click, a page without a declared encoding shows accents as broken characters.
-      const texts = [page, ...refs.local.filter((x) => /\.(?:js|css)$/i.test(x.ref) && !x.ref.startsWith("/")).map((x) => readText(path.resolve(path.dirname(html), x.ref), 300000) ?? "")];
-      if (texts.some((x) => /[^\x00-\x7F]/.test(x)) && !/<meta[^>]+charset\s*=\s*["']?utf-?8/i.test(page.slice(0, 4096))) problems.push(`${launcher.target} tiene acentos o caracteres especiales pero no declara la codificación; en el navegador se verían rotos. Agrega <meta charset="utf-8"> dentro de <head>.`);
-      for (const r of refs.local.filter((x) => x.module)) notes.push(`«${r.ref}» es un módulo; al abrir con doble clic algunos navegadores lo bloquean.`);
-      step("files", missing.length === 0, missing.length ? `faltan ${missing.length}` : `${refs.local.length} archivos enlazados`);
-      if (refs.remote.length) notes.push(`La página usa recursos de Internet (${clip(refs.remote.slice(0, 2).join(", "), 120)}); sin conexión puede verse incompleta.`);
-      result.open = { type: "file", target: launcher.target, path: html };
-      if (!missing.length) await inBrowser(new URL(`file:///${html.replace(/\\/g, "/")}`).href);
-    }
+    const checked = await checkStaticPage({ directory, target: launcher.target, env, language, browser, scenarios });
+    problems.push(...checked.problems);
+    notes.push(...checked.notes);
+    steps.push(...checked.steps);
+    result.open = checked.open;
+    result.browser = checked.browser;
+    result.report = checked.report ?? null;
     return finish(result);
   }
 
   // A page served by a local server: really start it and ask for the page the way the launcher does.
   const command = runCommand || launcher.command || (() => { try { return JSON.parse(readText(path.join(directory, "package.json")) ?? "{}").scripts?.start ? "npm start" : ""; } catch { return ""; } })();
-  if (!command) { problems.push(`No encuentro cómo se arranca el servidor de la aplicación: define "scripts.start" en package.json o indica el comando que usa ${LAUNCHER}.`); return finish(result); }
+  if (!command) { problems.push(en ? `I cannot find how the app's server starts: define "scripts.start" in package.json or say the command ${LAUNCHER} uses.` : `No encuentro cómo se arranca el servidor de la aplicación: define "scripts.start" en package.json o indica el comando que usa ${LAUNCHER}.`); return finish(result); }
   result.open = { type: "url", target: launcher.url, command };
   if ((await answers(launcher.url, fetchImpl)).ok) {
-    notes.push(`El puerto ${launcher.port} ya estaba en uso en esta PC; no se pudo comprobar el arranque desde cero.`);
-    step("start", true, "puerto ocupado");
+    notes.push(en ? `Port ${launcher.port} was already in use on this PC; the start could not be checked from scratch.` : `El puerto ${launcher.port} ya estaba en uso en esta PC; no se pudo comprobar el arranque desde cero.`);
+    step("start", true, en ? "port in use" : "puerto ocupado");
     return finish(result);
   }
   const runner = appFactory();
@@ -233,17 +269,17 @@ export async function verifyDelivery({ directory, runCommand = "", env = null, l
     if (!up) {
       const other = runner.state?.url && runner.state.url !== launcher.url && (await answers(runner.state.url, fetchImpl)).ok;
       problems.push(other
-        ? `${LAUNCHER} abre ${launcher.url}, pero la aplicación está escuchando en ${runner.state.url}. Haz que coincidan.`
+        ? (en ? `${LAUNCHER} opens ${launcher.url}, but the app is listening on ${runner.state.url}. Make them match.` : `${LAUNCHER} abre ${launcher.url}, pero la aplicación está escuchando en ${runner.state.url}. Haz que coincidan.`)
         : runner.state?.status !== "running"
-          ? `El servidor de la aplicación se cerró al arrancar (${command}). ${output ? "Dijo: " + output : ""}`
-          : `El servidor de la aplicación no respondió en ${launcher.url} tras ${Math.round(bootTimeoutMs / 1000)} segundos (${command}). ${output ? "Dijo: " + output : ""}`);
+          ? (en ? `The app's server closed on start (${command}). ${output ? "It said: " + output : ""}` : `El servidor de la aplicación se cerró al arrancar (${command}). ${output ? "Dijo: " + output : ""}`)
+          : (en ? `The app's server did not answer at ${launcher.url} after ${Math.round(bootTimeoutMs / 1000)} seconds (${command}). ${output ? "It said: " + output : ""}` : `El servidor de la aplicación no respondió en ${launcher.url} tras ${Math.round(bootTimeoutMs / 1000)} segundos (${command}). ${output ? "Dijo: " + output : ""}`));
       step("start", false, command);
     } else {
       step("start", true, launcher.url);
-      await inBrowser(launcher.url);
+      await runInBrowser(launcher.url, { env, language, browser, scenarios, out: result, step });
     }
   } catch (error) {
-    problems.push(`No se pudo arrancar la aplicación (${command}): ${clip(error.message, 160)}`);
+    problems.push(en ? `The app could not be started (${command}): ${clip(error.message, 160)}` : `No se pudo arrancar la aplicación (${command}): ${clip(error.message, 160)}`);
     step("start", false, command);
   } finally {
     await runner.stop().catch(() => {});

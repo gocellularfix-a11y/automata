@@ -255,3 +255,25 @@ test("el navegador no queda abierto ni deja perfiles temporales", { skip: !chrom
   assert.equal(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("automata-browser-")).length, before);
   assert.equal((await checkInBrowser("file:///x", { executable: "C:/no/existe.exe" })).skipped, "No hay un navegador compatible para abrir la aplicación.");
 });
+
+// P4 stabilization: the problems that go back to Claude are in the language the person configured.
+test("en inglés el lanzador, la guía y la página explican sus problemas en inglés; en español no cambia nada", async (t) => {
+  assert.match(parseLauncher(null, "en").problems[0], /Abrir\.cmd is missing from the project folder\./);
+  assert.match(parseLauncher(null).problems[0], /Falta Abrir\.cmd en la carpeta del proyecto\./);
+  assert.match(parseLauncher("@echo off\r\nnpm install\r\nstart \"\" \"%~dp0index.html\"\r\n", "en").problems[0], /installs packages; a double-click launcher must not do that\./);
+  assert.match(parseLauncher("@echo off\r\necho hola mundo\r\n", "en").problems[0], /does not open anything recognisable/);
+  assert.match(parseLauncher("@echo off\r\nstart \"\" \"C:\\Users\\yo\\index.html\"\r\n", "en").problems.join(" "), /uses an absolute path of this PC/);
+  assert.match(checkGuide(null, "en").problems[0], /COMO_USAR\.md is missing from the project folder\./);
+  assert.match(checkGuide("# Solo un título\n## Abrir\nCorto", "en").problems.join(" "), /has no «Install» section[\s\S]*the «Abrir» section is empty or too short/);
+  assert.match(checkGuide("# Solo un título\n## Abrir\nCorto").problems.join(" "), /falta la sección «Instalar»[\s\S]*la sección «Abrir» está vacía o es demasiado corta/);
+  const dir = project(t, { [LAUNCHER]: '@echo off\r\nstart "" "%~dp0index.html"\r\n', "index.html": '<title>x</title><script src="falta.js"></script><script src="/raiz.js"></script>\u00e9' });
+  const en = await verifyDelivery({ directory: dir, language: "en", parts: { launcher: true, guide: false } });
+  assert.deepEqual(en.problems.map((p) => p.replace(/«[^»]*»/g, "«…»")), [
+    "index.html loads «…» with a path that starts with «…»; opened by double-click it is not found. Use relative paths (for example «…»).",
+    "index.html loads «…», but that file does not exist.",
+    "index.html has accents or special characters but does not declare its encoding; in the browser they would show broken. Add <meta charset=\"utf-8\"> inside <head>."
+  ]);
+  const es = await verifyDelivery({ directory: dir, parts: { launcher: true, guide: false } });
+  assert.match(es.problems.join(" "), /carga «\/raiz\.js» con una ruta que empieza con «\/»/);
+  assert.match(deliveryFixPrompt(en.problems, "en"), /^The app is not ready to be handed to a person yet\./);
+});
