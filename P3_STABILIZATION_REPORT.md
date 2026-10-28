@@ -1,10 +1,12 @@
 # P3 · Estabilización: reporte
 
-Fecha: 27 oct 2026, actualizado el 28 oct (validación final en la sección 6) · Rama: `feature/p3-idea-to-project` (sobre `868d2dc`) · Sin push, sin merge, sin P4.
+Fecha: 27 oct 2026, actualizado el 28 oct (validación final en la sección 6; ajuste de la espera por memoria en la sección 7) · Rama: `feature/p3-idea-to-project` (sobre `868d2dc`) · Sin push, sin merge, sin P4.
 
 ## Veredicto
 
 **P3 queda validado y listo para tu aprobación; no hice push ni merge ni empecé P4.** Con agentes reales, el ciclo completo (idea → propuesta → una aprobación → construcción → `complete`) se ejecutó dos veces el 28 oct (4 y 12 rondas, 8/8 y 9/9 tareas, 7 y 2 commits locales hechos por el flujo de Automata, árbol limpio, sin procesos residuales). La validación final (sección 6) añadió: las dos calculadoras entregadas abiertas en Chrome y usadas de verdad, 12 pruebas de interfaz en Chrome (incluida una nueva para los botones de Git), `npm test` en 195 de 195, la prueba de las correcciones del script de ensayo y la corrección del merge de `main` hacia `main`. La primera corrida del 27 oct (detenida por el arnés por memoria crítica) queda como antecedente.
+
+**Ajuste previo a publicar (28 oct, sección 7):** una espera por falta de memoria ya no consume los reintentos de P1 ni la cuota de esperas; el trabajo queda en `waiting` con todo su estado, sondea cada 10 minutos como máximo, sobrevive a un reinicio, respeta Pausar y Detener y continúa solo al volver la memoria. Validado con reloj controlado (8 horas simuladas), `npm test` en 201 de 201 y `smoke-waiting` 12 de 12. Los errores reales siguen limitados.
 
 **Fallos y límites que siguen** (detalle en la sección 6.7): una de las calculadoras no avisa con importe 0 ni con propina inválida (no lo exigía su lista de criterios); el script de ensayo se refactorizó y **no se volvió a ejecutar de punta a punta** con agentes; no se ejecutaron `smoke-phone` (necesita un teléfono Android por adb), `smoke-desktop`, `smoke-recovery` y `smoke-console` (Electron y el `.exe` empaquetado); el cierre con Git sucio en vivo y el recordatorio al director solo se probaron con director simulado, porque en los ciclos reales el árbol quedó limpio.
 
@@ -254,22 +256,68 @@ Las cuatro correcciones quedaron en `scripts/real-idea-checks.mjs` y se prueban 
 - No se ejecutaron `smoke-phone`, `smoke-desktop`, `smoke-recovery` ni `smoke-console` (6.2).
 - El script de ensayo no se reejecutó de punta a punta tras corregirlo (6.4).
 - El cierre con Git sucio y el recordatorio al director no se vieron con agentes reales, solo con director simulado (sección 2).
-- Una sola idea pequeña; no se probaron proyectos grandes ni la espera larga por memoria (las esperas por memoria consumen los reintentos de P1 y tras ≈ 17 min pasan a `error`).
+- Una sola idea pequeña; no se probaron proyectos grandes. La espera larga por memoria, que entonces consumía los reintentos de P1 y a los ≈ 17 min pasaba a `error`, se corrigió después (sección 7).
 - No hay límite duro de memoria (6.1).
 - `package-lock.json` sigue sin versionarse, a propósito.
 
+## 7. Ajuste previo a publicar: la espera por memoria ya no gasta reintentos (28 oct)
+
+Tras revisar el cierre, pediste corregir un defecto antes de publicar P3. **Defecto confirmado en el código:** una lectura de poca memoria (`requireResources`) se lanzaba como fallo «pasajero». `recover()` lo trataba igual que un corte de red de Claude: sumaba `attempts.transient` y `recovery.waits`, esperaba 30 s, 2, 5 y 10 min y, al pasar `maxRetries` (4), dejaba el trabajo en `error`: unos 17 minutos sin memoria bastaban para cortar un ciclo. Además, cada reintento reabría el ciclo, escribía un evento «Reanudando…», una línea en el registro de recuperación y, con el hook del servidor, un aviso cada 5 minutos.
+
+### 7.1 Qué cambió (mínimo, sobre la recuperación de P1)
+
+Cuatro archivos de código y una prueba nueva; no se tocó ninguna otra recuperación.
+
+- `server/coordinator.mjs`
+  - `recover()` desvía el error de memoria (`reason: "memory"`) a `holdForMemory()` **antes** de clasificarlo: no suma `attempts`, no suma `waits`, no pasa por `planWait` (así tampoco le aplica el tope de 40 esperas por trabajo). El trabajo queda en `waiting` con su etapa, ronda, informe del codificador, sesiones, plan y cola de Git intactos; no se abrió ningún agente, así que no hay nada que repetir.
+  - `resumeNow()` mira la memoria **antes** de lanzar el ciclo (con el hook del servidor, que ya la comprueba, o por sí mismo si no hay hook). Si sigue faltando, solo mueve la cita; no abre ciclo, ni agente, ni evento, ni línea de registro. Esto vale también para el reinicio de Automata (`startup`): antes, con poca memoria al arrancar, un trabajo interrumpido se quedaba en `interrupted` esperando que pulsaras Continuar; ahora pasa a `waiting` por memoria y sigue solo.
+  - Un fallo real (Claude, Codex o verificaciones) cierra la espera por memoria y se cuenta con sus reintentos de siempre.
+  - **Pausar y Detener mandan:** pausar o detener una espera la cancelan y la mueven al historial; si el usuario ya había pedido Pausar y la memoria falta justo entonces, el trabajo queda `paused`, no `waiting`.
+- `server/recovery.mjs`: `DEFAULT_BACKOFF.memory` = 1, 2, 5 y luego **cada 10 minutos** (≈ 51 lecturas en 8 horas, frente a 480 si se sondeara cada minuto).
+- Historial acotado: **un registro por espera** (`recovery.memoryWait`: inicio, lecturas, mínimos de RAM libre y de memoria virtual, última razón) y, al terminar, una entrada de `recovery.memoryWaits` (máximo 20, con duración y cómo acabó: `auto`, `manual`, `pause`, `stop`, `error`). En el registro de recuperación y en los eventos solo hay **una línea al empezar** y **otra al terminar**, y un hecho en la memoria del proyecto al empezar; no una por lectura. Se persiste con el resto del trabajo, así que sobrevive al reinicio.
+- `public/app.js` e `i18n.js`: la espera por memoria se muestra como «Poca memoria libre en la PC · sigue a las HH:MM» (antes la interfaz la mostraba como «Fallo pasajero de Codex»), sin «intento X de Y», y con su traducción al inglés.
+
+### 7.2 Validación
+
+Con reloj controlado: `Date` y `setTimeout` los mueve la prueba a mano (`test/memory-wait.test.mjs`, con los intervalos reales de producción), sin esperar tiempo real.
+
+| Qué se pidió | Resultado |
+|---|---|
+| Varias horas de espera sin gastar reintentos P1 | **8 horas simuladas** en 276 ms. Seguía `waiting`, `attempts.transient` = 0, `waits` = 0, 51 lecturas, 0 agentes abiertos, ≤ 1 evento nuevo, ≤ 3 líneas de registro. Con memoria otra vez: continuó desde `checks` sin repetir a Claude y terminó `complete` (esperó 488 min). |
+| Persistencia tras reinicio | 3 h de espera, cierre, arranque 2 h después con la memoria aún corta: el trabajo se recuperó del disco con la misma espera (mismo `since`), mismo id, etapa, ronda e informe; 2 h más sin abrir agentes y sin gastar nada; al volver la memoria terminó sola. |
+| Pausa, detención y reanudación | Pausar y Detener cancelan la espera; con memoria otra vez disponible y 3 h más de reloj, **no** se reanuda ni se lee nada. Continuar con memoria corta vuelve a esperar sin gastar; Continuar con memoria disponible termina. Pausa pedida mientras falta memoria: queda `paused`. |
+| Errores reales con límite | Dos fallos reales de Claude, 3 h sin memoria en medio, y luego fallos hasta el tope: **5 llamadas en total (1 + 4 reintentos)**, estado `error`, «Claude falló 5 veces seguidas». La espera por memoria no suma ni resta. |
+| Las pruebas detectan el defecto | Contra el código anterior, 4 de las 6 pruebas nuevas fallan (las otras dos son de seguridad: pausa y Continuar, que ya funcionaban). |
+| `npm test` | **201 de 201** (195 + 6 nuevas), todas ligeras. |
+| Interfaz en Chrome | `smoke-waiting`: **12 de 12**. |
+
+### 7.3 Límites de este ajuste
+
+- El texto «Poca memoria libre en la PC» en la interfaz es una rama de una línea que **no se vio en un navegador con una espera por memoria real**: `smoke-waiting` usa el modo demo (sin comprobación de memoria) y una espera por límite de uso. El cambio está cubierto por la prueba de la espera, no por una captura.
+- `smoke-recovery` (arranque nativo de Electron) no pudo abrir la ventana nativa en esta máquina («Native startup did not recover»); ya figuraba como no ejecutada en la sección 6.2 y este ajuste no toca el arranque nativo. No se ejecutaron `smoke-phone`, `smoke-desktop` ni `smoke-console`, por la misma razón que antes.
+- No se hizo una espera de horas real con agentes reales; la lógica se validó con el reloj controlado y agentes simulados, como se pidió. La lectura real de la memoria (`readMemory`) no cambió.
+- La espera por memoria no tiene tope: si la PC nunca recupera memoria, el trabajo sigue en `waiting` leyendo cada 10 minutos hasta que Pausar, Detener o Continuar lo cambien. Es lo pedido; la lectura es ligera (un `Get-CimInstance` por lectura).
+- Con «Continuar» manual y memoria corta, `index.mjs` sigue respondiendo el error al usuario sin cambiar el estado (comportamiento anterior).
+
+### 7.4 Decisiones aplicadas y trabajo diferido
+
+- **Renovación de sesiones:** se mantiene Codex = 3, Claude = 8 (decisión 4 cerrada).
+- **Criterios omitidos:** no se generan tareas genéricas para ellos (decisión 3 cerrada); la propuesta sigue rechazándose y se reintenta, como hoy.
+- **Procesos de otros proyectos:** no se cierran; se mantiene el cierre de lo que Automata abrió, nada más.
+- **Mantenimiento posterior de la calculadora B** (`calculadora-de-propinas-2`, NO mezclado con esta corrección, no se tocó): (1) importe 0 muestra 0.00/0.00/0.00 sin aviso; (2) propina negativa oculta el resultado sin ningún mensaje; (3) propina de texto oculta el resultado sin ningún mensaje. Detalle en 6.3.
+
 ## Pruebas (resumen)
 
-`npm test`: **195 de 195** (180 al cerrar la estabilización inicial, 188 con el presupuesto de RAM y 195 con la validación final). Las pruebas de interfaz en Chrome (`smoke-*`) **sí se ejecutaron** en la validación final: 12 de 12 con código 0 (sección 6.2), salvo las que necesitan teléfono o Electron. Ya no queda ningún cambio de `public/` sin verse en un navegador.
+`npm test`: **201 de 201** (180 al cerrar la estabilización inicial, 188 con el presupuesto de RAM, 195 con la validación final y 201 con el ajuste de la espera por memoria). Las pruebas de interfaz en Chrome (`smoke-*`) **sí se ejecutaron** en la validación final: 12 de 12 con código 0 (sección 6.2), salvo las que necesitan teléfono o Electron. Ya no queda ningún cambio de `public/` sin verse en un navegador.
 
 ## Decisiones que necesito de ti
 
 1. **Aprobar el cierre de P3** (rama `feature/p3-idea-to-project`, sin push ni merge) o indicar qué falta. No empiezo P4 ni hago push hasta tu autorización.
 2. Las dos calculadoras entregadas tienen huecos menores (6.3): ¿pedimos a Automata que los corrija como un trabajo nuevo, o se dejan como prueba de que el director puede pasar por alto detalles que su lista no exigía?
-3. ¿Creo automáticamente la tarea «Comprobar: …» para criterios omitidos por el director? (Causa dominante de rechazos de propuestas.)
-4. ¿Mantienes Codex en 3 rondas? Con contextos de 37 000 a 39 000 en una ventana de 258 400, la renovación no es necesaria por tamaño; en el último ciclo hubo 5 renovaciones.
-5. ¿Aceptas que se cierre lo que un agente deja corriendo al terminar su llamada?
-6. ¿Hago que las esperas por falta de memoria no consuman los reintentos de P1 y se repitan sin límite? Hoy a los ≈ 17 minutos pasan a `error`.
+3. ~~¿Creo automáticamente la tarea «Comprobar: …» para criterios omitidos?~~ **Resuelta: no** (sección 7.4).
+4. ~~¿Mantienes Codex en 3 rondas?~~ **Resuelta: Codex = 3, Claude = 8** (sección 7.4).
+5. ¿Aceptas que se cierre lo que un agente deja corriendo al terminar su llamada? (Hecho solo sobre procesos que Automata abrió; no se cierra nada de otros proyectos.)
+6. ~~¿Hago que las esperas por falta de memoria no consuman los reintentos de P1?~~ **Hecho** (sección 7).
 7. ¿Fijo `AUTOMATA_RAM_BUDGET_MB=30720` como variable de usuario de Windows? Hoy no hace falta: el valor por defecto ya es 30 720.
 8. ¿Subes el mínimo de RAM libre del sistema de 1 536 MB a unos 4 096 MB? Con el entrenamiento ya terminado no estorba, pero mientras entrene sí.
 9. Job Objects: sigo sin probarlos; solo con tu permiso de PowerShell para ese experimento.

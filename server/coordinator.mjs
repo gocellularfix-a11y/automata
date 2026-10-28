@@ -490,10 +490,16 @@ export class Coordinator extends EventEmitter {
       }
       return;
     }
+    if (e.reason === "memory") {
+      this.holdForMemory(r, e);
+      return;
+    }
     const verdict = classifyError(e);
     const role = e.role ?? (r.stage === "code" ? "coder" : ["plan", "review"].includes(r.stage) ? "auditor" : "system");
     verdict.role = role;
     r.recovery ??= { attempts: {}, log: [], waits: 0 };
+    // A real failure means the memory was there when the agent started.
+    this.endMemoryWait(r, "error");
     const key = verdict.kind === "context" ? "transient" : verdict.kind;
     const attempt = (r.recovery.attempts[key] ?? 0) + 1;
     r.recovery.attempts[key] = attempt;
@@ -528,6 +534,52 @@ export class Coordinator extends EventEmitter {
     this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "recovery", text: `Ronda ${r.round}, etapa ${entry.stage}: ${text}. Motivo: ${clip(e.message, 160)}`, source: "automata", runId: r.id, round: r.round }));
     this.scheduleWait(r);
   }
+  // Lacking memory is not a failure of Claude, Codex or a check, so it spends neither their retries nor the run's
+  // wait quota: the run stays in "waiting" with its task, plan, stage and Git state untouched and looks again after
+  // a growing pause (backoff.memory), without opening anything. One record per wait (counters, lowest readings)
+  // instead of one line per reading, so a wait of hours leaves no long log.
+  holdForMemory(r, e) {
+    r.recovery ??= { attempts: {}, log: [], waits: 0 };
+    // Pausar was already asked: it wins over any wait.
+    if (r.status === "pausing") {
+      this.endMemoryWait(r, "pause");
+      r.status = "paused";
+      r.resumeAt = null;
+      this.event({ role: "system", kind: "pause", text: "Trabajo pausado en un punto seguro. Puedes continuar desde aquí." });
+      return;
+    }
+    const role = e.role ?? (r.stage === "code" ? "coder" : ["plan", "review"].includes(r.stage) ? "auditor" : "system");
+    const first = !r.recovery.memoryWait;
+    const w = r.recovery.memoryWait ??= { since: now(), checks: 0, stage: r.stage, round: r.round, minFreeMB: null, minCommitFreeMB: null };
+    const low = (a, b) => b == null ? a : a == null ? b : Math.min(a, b);
+    w.checks++;
+    w.lastAt = now();
+    w.lastReason = clip(e.message, 300);
+    w.minFreeMB = low(w.minFreeMB, e.memory?.freeMB);
+    w.minCommitFreeMB = low(w.minCommitFreeMB, e.memory?.commitFreeMB);
+    const steps = this.backoff.memory ?? this.backoff.transient;
+    const resumeAt = new Date(Date.now() + steps[Math.min(w.checks, steps.length) - 1]).toISOString();
+    r.status = "waiting";
+    r.waiting = { kind: "transient", memory: true, role, reason: clip(e.message, 400), resumeAt, reliable: false, stage: r.stage, round: r.round, since: w.since, checks: w.checks };
+    r.resumeAt = resumeAt;
+    if (first) {
+      r.recovery.log = [...r.recovery.log, { at: w.since, kind: "memory", role, stage: r.stage, round: r.round, message: w.lastReason }].slice(-60);
+      const text = describeWait(r.waiting, r.settings.language);
+      this.event({ role: "system", kind: "wait", text: `${text}. Motivo: ${clip(e.message, 240)}`, waiting: r.waiting });
+      this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "recovery", text: `Ronda ${r.round}, etapa ${r.stage}: ${text}. Motivo: ${clip(e.message, 160)}`, source: "automata", runId: r.id, round: r.round }));
+    }
+    this.scheduleWait(r);
+  }
+  // The wait is over (memory came back, the user continued, paused or stopped, or something else failed): it moves
+  // to a short history, so the next one starts its own count.
+  endMemoryWait(r, how) {
+    const w = r.recovery?.memoryWait;
+    if (!w) return null;
+    delete r.recovery.memoryWait;
+    const done = { ...w, until: now(), ms: Math.max(0, Date.now() - Date.parse(w.since)), how };
+    r.recovery.memoryWaits = [...(r.recovery.memoryWaits ?? []), done].slice(-20);
+    return done;
+  }
   giveUpText(verdict, attempt, message) {
     const who = agentName(verdict.role);
     if (verdict.kind === "limit") return `El límite de uso de ${who} no se liberó tras ${attempt} esperas. Revisa tu plan y pulsa Continuar cuando quieras reintentar. Último mensaje: ${clip(message, 300)}`;
@@ -557,10 +609,21 @@ export class Coordinator extends EventEmitter {
   }
   async resumeNow(r, how) {
     if (this.busy || !["waiting", "interrupted"].includes(r.status) || !this.settings.autoResume && how !== "manual") return;
-    if (this.beforeResume && how !== "manual") {
+    if (how !== "manual") {
       try {
-        await this.beforeResume(r);
+        // The server's hook checks the accounts and the memory; without it the memory is looked at here.
+        // Nothing is launched until there is room, so a long wait makes no loop, no agent call and no log line.
+        if (this.beforeResume) await this.beforeResume(r);
+        else await this.requireResources();
       } catch (error) {
+        if (error.reason === "memory") {
+          if (["waiting", "interrupted"].includes(r.status)) {
+            this.holdForMemory(r, error);
+            this.persist();
+            this.notify();
+          }
+          return;
+        }
         // Accounts are not ready: try again in a few minutes without consuming attempts.
         if (r.status === "waiting") {
           r.waiting.resumeAt = new Date(Date.now() + 5 * 6e4).toISOString();
@@ -577,8 +640,9 @@ export class Coordinator extends EventEmitter {
     }
     this.active = r;
     r.recovery ??= { attempts: {}, log: [], waits: 0 };
-    r.recovery.log = [...r.recovery.log, { at: now(), kind: "resume", how, stage: r.stage, round: r.round }].slice(-60);
-    this.event({ role: "system", kind: "start", text: how === "startup" ? "Automata reanuda el trabajo interrumpido." : how === "manual" ? "Continuando ahora, sin esperar." : `Reanudando: ${agentName(r.waiting?.role)} vuelve a intentarlo.`, runId: r.id, projectId: r.projectId });
+    const waited = this.endMemoryWait(r, how);
+    r.recovery.log = [...r.recovery.log, { at: now(), kind: "resume", how, stage: r.stage, round: r.round, ...waited ? { memoryWaitMs: waited.ms, checks: waited.checks } : {} }].slice(-60);
+    this.event({ role: "system", kind: "start", text: waited && how !== "manual" ? `Ya hay memoria suficiente (esperó ${Math.max(1, Math.round(waited.ms / 6e4))} min, ${waited.checks} lecturas): ${agentName(r.waiting?.role)} sigue donde se quedó.` : how === "startup" ? "Automata reanuda el trabajo interrumpido." : how === "manual" ? "Continuando ahora, sin esperar." : `Reanudando: ${agentName(r.waiting?.role)} vuelve a intentarlo.`, runId: r.id, projectId: r.projectId });
     delete r.error;
     this.launch();
     this.persist();
@@ -1377,6 +1441,7 @@ ${state}`;
       if (r.status === "waiting") {
         // Pause beats any retry: the appointment is dropped and nothing resumes until the user says so.
         this.clearWait();
+        this.endMemoryWait(r, "pause");
         r.status = "paused";
         r.resumeAt = null;
         this.event({ role: "system", kind: "pause", text: "Espera cancelada. El trabajo queda en pausa hasta que pulses Continuar." });
@@ -1387,6 +1452,7 @@ ${state}`;
       }
     } else if (action === "stop") {
       this.clearWait();
+      this.endMemoryWait(r, "stop");
       this.controller?.abort();
       r.status = "stopped";
       r.resumeAt = null;
@@ -1408,6 +1474,7 @@ ${state}`;
       if (r.recovery) r.recovery.attempts = {};
       delete r.error;
       this.clearWait();
+      this.endMemoryWait(r, "manual");
       this.launch();
     } else throw new Error("Acción desconocida.");
     this.persist();

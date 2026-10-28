@@ -8,7 +8,7 @@ const kindNames = { phase: "TAREA", report: "REPORTE", review: "AUDITORÍA", too
 // Why Automata waits, which agent is affected and when it will try again (mirrors describeWait on the server).
 function waitText(w) {
   const who = w.role === "coder" ? "Claude" : "Codex";
-  const reason = w.kind === "limit" ? `${t("Límite de uso de")} ${who}${w.reliable ? "" : " · " + t("sin hora confiable")}` : w.kind === "context" ? `${t("Sesión de")} ${who} ${t("demasiado larga")}` : `${t("Fallo pasajero de")} ${who}`;
+  const reason = w.memory ? t("Poca memoria libre en la PC") : w.kind === "limit" ? `${t("Límite de uso de")} ${who}${w.reliable ? "" : " · " + t("sin hora confiable")}` : w.kind === "context" ? `${t("Sesión de")} ${who} ${t("demasiado larga")}` : `${t("Fallo pasajero de")} ${who}`;
   const at = w.resumeAt ? new Date(w.resumeAt) : null;
   const clock = at ? at.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) + (at.toDateString() === new Date().toDateString() ? "" : " " + at.toLocaleDateString(i18n.language, { day: "numeric", month: "short" })) : "";
   return `${reason} · ${t("sigue a las")} ${clock}${w.maxAttempts ? ` (${t("intento")} ${w.attempt}/${w.maxAttempts})` : ""}`;

@@ -63,6 +63,8 @@ El consumo real de Automata con agentes es **menos de 1 GB**, no los 1 a 3 GB qu
 - **Política segura al excederse:** informar y no iniciar procesos nuevos. La llamada de Claude o Codex en curso se deja terminar; no se pausa, no se cierra y no se reduce. El mensaje lo dice así.
 - **Qué nunca hace:** cerrar o modificar procesos por memoria, tocar procesos ajenos, o tratar la lectura de memoria como una orden. La limpieza de P3 (hijos propios verificados por id, momento de inicio y programa) sigue siendo la única que cierra algo, y solo cierra lo que Automata abrió.
 
+**Actualización del 28 oct: esto ya no es así.** Las esperas por memoria no gastan reintentos y no se rinden (ver `P3_STABILIZATION_REPORT.md`, sección 7). Lo que sigue describe el comportamiento anterior.
+
 **Una consecuencia que debes conocer:** las esperas por memoria usan los 4 reintentos de P1 (≈ 17 minutos en total). Si el entrenamiento no libera memoria en ese tiempo, el trabajo queda en `error` con «Pulsa Continuar» y se puede continuar sin perder nada, pero **no esperaría toda la noche por sí solo**. Ver «Decisiones».
 
 ## 4. ¿Existe un límite duro?

@@ -18,6 +18,8 @@ export const MAX_WAIT_MS = 24 * 36e5;
 export const DEFAULT_BACKOFF = {
   transient: [3e4, 12e4, 3e5, 6e5],
   limit: [5, 15, 30, 60, 60, 60, 60, 60].map((minutes) => minutes * 6e4),
+  // Between readings while the PC lacks memory: 1, 2, 5, then every 10 minutes for as long as it takes.
+  memory: [1, 2, 5, 10].map((minutes) => minutes * 6e4),
   // Added after a reset time the CLI gave, so the first request lands after the window really opened.
   margin: 6e4
 };
