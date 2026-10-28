@@ -102,7 +102,7 @@ test("el director aprueba sin lanzador ni guía: la entrega vuelve al ciclo con 
   assert.equal(reviews.length, 2);
   assert.doesNotMatch(reviews[0].prompt, /ENTREGA \(la comprobó/, "sin lanzador ni guía todavía no hay nada que comprobar");
   // Round 2: both files exist, so Automata checks them before the director decides, and tells it that it cannot double-click.
-  assert.match(reviews[1].prompt, /ENTREGA \(la comprobó Automata en la ronda 2: el lanzador Abrir\.cmd, la guía COMO_USAR\.md y el arranque real\): correcta[\s\S]*no pidas que una persona lo haga ni marques blocked por eso/);
+  assert.match(reviews[1].prompt, /ENTREGA \(la comprobó Automata en la ronda 2: el lanzador Abrir\.cmd y el arranque real y la guía COMO_USAR\.md\): correcta[\s\S]*no pidas que una persona lo haga ni marques blocked por eso/);
   assert.equal(r.deliveryChecks.length, 2);
   assert.deepEqual(r.deliveryChecks.map((x) => x.ok), [false, true]);
   assert.equal(r.deliveryAttempts, 0);
@@ -224,4 +224,15 @@ test("con el lanzador y la guía ya escritos, el director recibe la comprobació
   assert.equal(c.active.status, "complete", c.active.error);
   assert.equal(c.active.deliveryCheck.ok, true);
   assert.equal(c.active.checks.length, 1, "la lista de verificaciones del proyecto no cambia de tamaño");
+});
+
+test("con solo el lanzador escrito (la guía es la tarea siguiente), el director ya recibe su comprobación como evidencia", async (t) => {
+  const { c, dir, calls } = setup(t, { coderWrites: (folder, n) => { writeApp(folder); fs.writeFileSync(path.join(folder, LAUNCHER), '@echo off\r\nstart "" "%~dp0index.html"\r\n'); if (n >= 2) fs.writeFileSync(path.join(folder, GUIDE), GUIDE_TEXT); } });
+  await create(c, dir);
+  await settled(c);
+  const first = calls.auditor.find((x) => x.phase === "review");
+  assert.match(first.prompt, /ENTREGA \(la comprobó Automata en la ronda 1: el lanzador Abrir\.cmd y el arranque real\): correcta\. Es la evidencia de el criterio del lanzador \(la guía todavía no existe/);
+  assert.doesNotMatch(first.prompt, /sigue pendiente; no apruebes/, "faltar la guía todavía no es un problema de entrega en pleno trabajo");
+  assert.equal(c.active.status, "complete", c.active.error);
+  assert.equal(c.active.delivery.status, "ready", "la compuerta final sí exige las dos cosas");
 });

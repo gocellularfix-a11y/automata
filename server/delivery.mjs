@@ -163,21 +163,20 @@ async function answers(url, fetchImpl = fetch) {
 }
 // directory: the project folder. runCommand: what the director said starts the app (optional).
 // env: detectEnvironment() result (for the browser). Returns the whole picture; ok means a person can open it.
-export async function verifyDelivery({ directory, runCommand = "", env = null, language = "es", appFactory = () => new AppRunner(), fetchImpl = fetch, bootTimeoutMs = 20000, browser = checkInBrowser } = {}) {
+export async function verifyDelivery({ directory, runCommand = "", env = null, language = "es", appFactory = () => new AppRunner(), fetchImpl = fetch, bootTimeoutMs = 20000, browser = checkInBrowser, parts = { launcher: true, guide: true } } = {}) {
   const steps = [], problems = [], notes = [];
   const step = (name, ok, detail = "") => steps.push({ name, ok, detail });
   const result = { kind: "web", mode: null, ok: false, steps, problems, notes, launcher: LAUNCHER, guide: GUIDE, open: null, browser: null, checkedAt: new Date().toISOString() };
 
-  const launcherName = findFile(directory, LAUNCHER);
-  const launcher = parseLauncher(launcherName ? readText(path.join(directory, launcherName), 20000) : null);
-  step("launcher", launcher.ok, launcher.ok ? LAUNCHER : launcher.problems[0] ?? "");
-  problems.push(...launcher.problems);
-  const guideName = findFile(directory, GUIDE);
-  const guide = checkGuide(guideName ? readText(path.join(directory, guideName), 100000) : null, language);
-  step("guide", guide.ok, guide.ok ? `${guide.found.length} secciones` : guide.problems[0]);
-  problems.push(...guide.problems);
+  // parts: while the work is going on each piece is checked as soon as it exists; the final check asks for both.
+  const launcherName = parts.launcher ? findFile(directory, LAUNCHER) : null;
+  const launcher = parts.launcher ? parseLauncher(launcherName ? readText(path.join(directory, launcherName), 20000) : null) : { ok: true, mode: null, problems: [] };
+  if (parts.launcher) { step("launcher", launcher.ok, launcher.ok ? LAUNCHER : launcher.problems[0] ?? ""); problems.push(...launcher.problems); }
+  const guideName = parts.guide ? findFile(directory, GUIDE) : null;
+  const guide = parts.guide ? checkGuide(guideName ? readText(path.join(directory, guideName), 100000) : null, language) : { ok: true, found: [], problems: [] };
+  if (parts.guide) { step("guide", guide.ok, guide.ok ? `${guide.found.length} secciones` : guide.problems[0]); problems.push(...guide.problems); }
   result.guideSections = guide.found.map((s) => s.title);
-  if (!launcher.mode) return finish(result);
+  if (!parts.launcher || !launcher.mode) return finish(result);
   result.mode = launcher.mode;
   const browserPath = env?.tools?.browser?.found ? env.tools.browser.path : null;
   const inBrowser = async (url) => {

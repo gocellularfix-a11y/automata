@@ -39,6 +39,13 @@ ${task}
 
 VERIFICACIONES FALLIDAS:
 ${failing.map((check) => `$ ${check.command ?? "(sin comando)"} → código ${check.code ?? "?"}\n${tail(check.output, 2500)}${check.stderr ? "\n" + tail(check.stderr, 800) : ""}`).join("\n\n")}`;
+// What the director is told when Automata's delivery check passed, for the pieces that exist so far.
+function deliveryEvidence({ round, browser, parts = {} }) {
+  const launcher = parts.launcher !== false, guide = parts.guide !== false;
+  const what = [launcher && `el lanzador ${LAUNCHER} y el arranque real${browser ? ", abriendo la página en un navegador" : ""}`, guide && `la guía ${GUIDE}`].filter(Boolean).join(" y ");
+  const criteria = launcher && guide ? "los criterios del lanzador y de la guía" : launcher ? "el criterio del lanzador (la guía todavía no existe: es otra tarea del plan, no la pidas aquí)" : "el criterio de la guía";
+  return `ENTREGA (la comprobó Automata en la ronda ${round}: ${what}): correcta. Es la evidencia de ${criteria}.`;
+}
 const gitView = ({ kind, message, branch, into, push }) => ({ kind, message, branch, into, push });
 // A stored result of an interrupted operation: read back only if it belongs to the attempt that was in flight.
 function completedAttempt(inflight) {
@@ -1122,10 +1129,13 @@ export class Coordinator extends EventEmitter {
   async checkDeliveryEvidence(r) {
     if (!this.deliveryManaged(r)) return;
     const dir = r.project.directory, has = (name) => { try { return fs.readdirSync(dir).some((f) => f.toLowerCase() === name.toLowerCase()); } catch { return false; } };
-    if (!has(LAUNCHER) || !has(GUIDE)) { delete r.deliveryCheck; return; }
+    // Each piece is checked as soon as it exists: the plan builds the launcher and the guide in different tasks, and the
+    // director reviews the first one before the second is written.
+    const parts = { launcher: has(LAUNCHER), guide: has(GUIDE) };
+    if (!parts.launcher && !parts.guide) { delete r.deliveryCheck; return; }
     const env = await this.detect().catch(() => null);
-    const result = await this.verify({ directory: dir, runCommand: r.review?.run?.ready ? r.review.run.command : "", env, language: r.settings.language ?? this.settings.language });
-    r.deliveryCheck = { at: now(), round: r.round, ok: result.ok, browser: !!result.browser?.ran };
+    const result = await this.verify({ directory: dir, runCommand: r.review?.run?.ready ? r.review.run.command : "", env, language: r.settings.language ?? this.settings.language, parts });
+    r.deliveryCheck = { at: now(), round: r.round, ok: result.ok, browser: !!result.browser?.ran, parts };
     if (result.ok) delete r.deliveryProblems;
     else r.deliveryProblems = result.problems;
   }
@@ -1383,7 +1393,7 @@ ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige ev
 ENTREGA (la comprobó Automata y sigue pendiente; no apruebes el objetivo hasta que esté resuelta):
 ${r.deliveryProblems.map((x) => "- " + x).join("\n")}` : r.deliveryCheck?.ok ? `
 
-ENTREGA (la comprobó Automata en la ronda ${r.deliveryCheck.round}: el lanzador Abrir.cmd, la guía COMO_USAR.md y el arranque real${r.deliveryCheck.browser ? ", abriendo la página en un navegador" : ""}): correcta. Es la evidencia de los criterios del lanzador y de la guía. Eres de solo lectura y no puedes hacer doble clic ni ejecutar el lanzador: no pidas que una persona lo haga ni marques blocked por eso.` : ""}`;
+${deliveryEvidence(r.deliveryCheck)} Eres de solo lectura y no puedes hacer doble clic ni ejecutar el lanzador: no pidas que una persona lo haga ni marques blocked por eso.` : ""}`;
         const evidenceFull = `CAMBIOS PREVIOS:
 ${r.baseline}
 
