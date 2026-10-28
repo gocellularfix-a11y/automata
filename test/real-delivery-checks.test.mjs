@@ -41,3 +41,17 @@ test("el uso real de una página entregada distingue una calculadora que avisa, 
   assert.match(broken.errors.join(" "), /error de programa: Error: se rompió|se rompió/);
   assert.ok(broken.pageErrorsOnInvalid >= 1);
 });
+
+test("la prueba de uso no pulsa «Eliminar»: el gasto recién guardado sigue a la vista", { skip: !chrome && "no hay Chrome ni Edge" }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "automata-rdc-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "gastos.html");
+  fs.writeFileSync(file, page('<label>Fecha <input type="date" id="fecha"></label><label>Importe <input id="importe"></label><button id="guardar">Guardar</button><button id="eliminar">Eliminar todo</button><ul id="lista"></ul><p id="aviso"></p>', `const lista = document.getElementById("lista"); document.getElementById("guardar").onclick = () => { const n = Number(document.getElementById("importe").value); if (!document.getElementById("fecha").value) { aviso.textContent = "La fecha es obligatoria."; return; } if (!(n > 0)) { aviso.textContent = "Importe inválido."; return; } aviso.textContent = ""; lista.insertAdjacentHTML("beforeend", "<li>Gasto " + n + "</li>"); }; document.getElementById("eliminar").onclick = () => { lista.innerHTML = ""; };`));
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  t.after(() => browser.close());
+  const p = await browser.newPage();
+  const result = await exercisePage(p, pathToFileURL(file).href);
+  assert.match(result.valid, /Gasto 100/, "con fecha válida se guarda y se ve");
+  assert.doesNotMatch(result.valid, /obligatoria/, "el campo de fecha se llena con una fecha");
+  assert.equal(result.invalidHandled, true);
+});

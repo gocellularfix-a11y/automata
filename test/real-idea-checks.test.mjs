@@ -73,4 +73,11 @@ test("una página estática se comprueba por el archivo que abre el comando entr
   assert.equal(checkStaticPage("start .\\falta.html", dir), null, "un archivo que no existe no se da por bueno");
   assert.equal(checkStaticPage("node server.js", dir), null);
   assert.equal(checkStaticPage(undefined, dir), null);
+  // P4: the command the director offers is the double-click launcher; the page it opens is what is checked.
+  fs.writeFileSync(path.join(dir, "Abrir.cmd"), '@echo off\r\nstart "" "%~dp0index.html"\r\n');
+  assert.deepEqual(checkStaticPage("Abrir.cmd", dir), { answered: "file", title: "Calculadora", inputs: 3 });
+  fs.writeFileSync(path.join(dir, "Roto.cmd"), '@echo off\r\nstart "" "%~dp0falta.html"\r\n');
+  assert.equal(checkStaticPage("Roto.cmd", dir), null, "un lanzador que abre un archivo inexistente no se da por bueno");
+  fs.writeFileSync(path.join(dir, "Nada.cmd"), "@echo off\r\necho hola\r\n");
+  assert.equal(checkStaticPage("Nada.cmd", dir), null);
 });

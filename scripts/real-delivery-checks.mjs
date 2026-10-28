@@ -4,6 +4,7 @@
 const PEOPLE = /persona|people|comensal|divid|integrante|cantidad de/i;
 const PERCENT = /propina|tip|porcent|%|descuento|iva|impuesto/i;
 const TEXT = /nombre|concepto|descripci|categor|detalle|name|title|t[ií]tulo|producto|gasto|nota/i;
+const DESTRUCTIVE = /elimin|borr|delet|quitar|remove|limpiar|reset|clear|vaciar/i;
 const clip = (text, max = 400) => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
 // page: a Playwright page. Returns what happened with valid and with invalid data.
@@ -34,11 +35,16 @@ export async function exercisePage(page, url) {
     const all = await buttons.count();
     for (let i = 0; i < all; i++) {
       const button = buttons.nth(i);
+      // A button that deletes what was just saved would hide the result; the person would not press it either.
+      const label = await button.evaluate((e) => `${e.innerText} ${e.value ?? ""} ${e.getAttribute("aria-label") ?? ""}`).catch(() => "");
+      if (DESTRUCTIVE.test(label)) continue;
       if (await button.isVisible().catch(() => false)) await button.click({ timeout: 2000 }).catch(() => {});
       await page.waitForTimeout(120);
     }
   };
-  const valid = (info) => PEOPLE.test(info.hint) ? "4" : PERCENT.test(info.hint) ? "10" : TEXT.test(info.hint) && info.type !== "number" ? "Prueba" : "100";
+  const today = new Date().toISOString().slice(0, 10);
+  const typed = { date: today, month: today.slice(0, 7), time: "12:00", email: "prueba@ejemplo.com", tel: "5551234567", url: "https://ejemplo.com" };
+  const valid = (info) => typed[info.type] ? typed[info.type] : PEOPLE.test(info.hint) ? "4" : PERCENT.test(info.hint) ? "10" : TEXT.test(info.hint) && info.type !== "number" ? "Prueba" : "100";
   await fill(valid);
   await press();
   const validText = await body();

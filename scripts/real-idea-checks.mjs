@@ -37,6 +37,12 @@ export function classifyPushOrMerge(gitQueue = [], reflog = []) {
 
 // A static page has no address: the file the command opens must exist and look like a page.
 export function checkStaticPage(command, directory) {
+  // A double-click launcher (Abrir.cmd): the page it opens is the one that counts.
+  const launcher = /([\w./\\-]+\.(?:cmd|bat))/i.exec(command ?? "")?.[1];
+  if (launcher && fs.existsSync(path.resolve(directory, launcher))) {
+    const target = /%~dp0([^"\r\n&|<>]+?\.html?)/i.exec(fs.readFileSync(path.resolve(directory, launcher), "utf8"))?.[1];
+    return target ? checkStaticPage(target.replace(/\\/g, "/"), directory) : null;
+  }
   const file = /([\w./\\-]+\.html?)/i.exec(command ?? "")?.[1];
   const full = file ? path.resolve(directory, file) : null;
   if (!full || !fs.existsSync(full)) return null;
