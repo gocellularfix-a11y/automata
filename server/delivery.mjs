@@ -4,6 +4,7 @@
 // criteria, and checks the result without trusting anyone's report. Nothing here publishes, installs or deletes.
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { platformKind, VERIFIED_TARGETS } from "./environment.mjs";
 import { checkInBrowser } from "./browsercheck.mjs";
 import { AppRunner } from "./apprun.mjs";
@@ -150,6 +151,9 @@ export function pageReferences(html) {
 
 // ---- The check ----
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+export async function pageAnswers(url, fetchImpl = fetch) {
+  return (await answers(url, fetchImpl)).ok;
+}
 async function answers(url, fetchImpl = fetch) {
   try {
     const response = await fetchImpl(url, { signal: AbortSignal.timeout(2500) });
@@ -250,6 +254,14 @@ export async function verifyDelivery({ directory, runCommand = "", env = null, l
 function finish(result) {
   result.ok = result.problems.length === 0;
   return result;
+}
+// Shows a file or a folder the way double-clicking it would (the default browser for a page, Explorer for a folder).
+// It only starts the program the person already has for that; it never runs the file itself.
+export function openWithSystem(target) {
+  const win = process.platform === "win32";
+  const child = spawn(win ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open", [target], { detached: true, stdio: "ignore", windowsHide: false });
+  child.on("error", () => {});
+  child.unref();
 }
 // What Claude receives to fix: plain, specific, and without touching anything else.
 export function deliveryFixPrompt(problems, language = "es") {

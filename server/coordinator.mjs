@@ -15,6 +15,8 @@ import { PlanStore, invalidPlan } from "./plan.mjs";
 import { isCasual, casualAnswer } from "./chat.mjs";
 import { consumed } from "./usage.mjs";
 import { sharedChecker } from "./resources.mjs";
+import { describeEnvironment, sharedDetector, platformKind, VERIFIED_TARGETS } from "./environment.mjs";
+import { addDeliveryCriteria, deliveryPlan, deliveryCriteria, verifyDelivery, deliveryFixPrompt, openWithSystem, pageAnswers, LAUNCHER, GUIDE, MAX_DELIVERY_ATTEMPTS } from "./delivery.mjs";
 import { classifyError, planWait, describeWait, agentName, DEFAULT_BACKOFF, MAX_REVIEW_FIXES, MAX_LIMIT_WAITS } from "./recovery.mjs";
 const LIVE = /* @__PURE__ */ new Set(["running", "pausing"]);
 // Statuses the user can continue from. "waiting" continues on its own; Continuar just skips the wait.
@@ -49,8 +51,12 @@ function completedAttempt(inflight) {
   }
 }
 export class Coordinator extends EventEmitter {
-  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app, memory, backoff, beforeResume = null, resumeDelayMs = 1500, resources, monitorMs = 20000 } = {}) {
+  constructor(store, { demo = false, agents, checks = runChecks, evidence = gitEvidence, git, app, memory, backoff, beforeResume = null, resumeDelayMs = 1500, resources, monitorMs = 20000, detect = sharedDetector, verify = verifyDelivery, opener = openWithSystem } = {}) {
     super();
+    // What this PC has to build and deliver, how a delivery is checked and how a file or folder is shown to the person.
+    this.detect = detect;
+    this.verify = verify;
+    this.opener = opener;
     this.store = store;
     this.demo = demo;
     // One SQLite file per project, next to the rest of Automata's data and outside the project folder.
@@ -279,8 +285,11 @@ export class Coordinator extends EventEmitter {
     const { sessionId, ...rest } = proposal;
     return rest;
   }
-  environment() {
-    return `Windows, Node.js ${process.versions.node}, Git y PowerShell. Sin otros lenguajes instalados garantizados, sin cuentas de servicios y sin publicar en Internet.`;
+  // What the director is told about this PC (read-only detection, environment.mjs). The demo reads nothing.
+  async environment() {
+    if (this.demo) return { info: null, text: "" };
+    const info = await this.detect().catch(() => null);
+    return { info, text: info ? describeEnvironment(info, { language: this.settings.language }) : "" };
   }
   // Starts (or adjusts) a proposal. The director works read-only in an empty scratch folder.
   propose({ idea, adjustments = "", id = null } = {}) {
@@ -324,14 +333,17 @@ export class Coordinator extends EventEmitter {
     fs.mkdirSync(dir, { recursive: true });
     const team = teamOf(this.settings, "auditor");
     let fix = "";
+    const env = await this.environment();
     for (let attempt = 1; attempt <= MAX_REVIEW_FIXES; attempt++) {
-      const prompt = proposalPrompt(proposal.idea, this.settings, { adjustments, previous: adjustments ? proposal.draft : null, environment: this.environment() }) + (fix ? `\nRESPUESTA ANTERIOR RECHAZADA (intento ${attempt - 1} de ${MAX_REVIEW_FIXES}): ${fix}` : "");
+      const prompt = proposalPrompt(proposal.idea, this.settings, { adjustments, previous: adjustments ? proposal.draft : null, environment: env.text }) +(fix ? `\nRESPUESTA ANTERIOR RECHAZADA (intento ${attempt - 1} de ${MAX_REVIEW_FIXES}): ${fix}` : "");
       try {
         const result = await this.agents.run({ role: "auditor", phase: "define", prompt, fallbackPrompt: prompt, project: { name: "Propuesta", directory: workspace, objective: proposal.idea, criteria: [], checks: [] }, settings: { ...this.settings }, directory: dir, signal: this.chatController.signal, agent: { ...team[0], index: 0, count: 1, label: agentLabel("auditor", team, 0), resume: null }, emit: (e) => this.event({ ...e, runId: null, projectId: null, proposalId: proposal.id }) });
         const u = result.usage;
         // Every attempt opens its own session, so the thread's total is this call's consumption.
         if (u) proposal.usage.push({ at: now(), input: u.input_tokens ?? 0, cached: u.cached_input_tokens ?? u.cache_read_input_tokens ?? 0, output: u.output_tokens ?? 0, context: result.contextPeak ?? null, requests: result.requests ?? null });
-        proposal.draft = validateProposal(result.proposal);
+        proposal.draft = addDeliveryCriteria(validateProposal(result.proposal), this.settings.language);
+        // What the person is told about their platform before approving: honest about what is delivered today.
+        proposal.delivery = deliveryPlan(proposal.draft.platform, env.info, this.settings.language);
         // How many times the director was asked, and the references that were resolved instead of asked again.
         proposal.attempts = attempt;
         if (proposal.draft.adjusted?.length) this.event({ role: "system", kind: "success", text: `La propuesta citaba criterios de forma distinta a la lista; Automata los enlazó sin pedirla de nuevo (${proposal.draft.adjusted.length}).`, runId: null, projectId: null, proposalId: proposal.id });
@@ -1096,6 +1108,111 @@ export class Coordinator extends EventEmitter {
     this.notify();
     return false;
   }
+  // ---- Delivery (P4) ----
+  // Only projects created from an idea for a local web page, with the delivery criteria in their list (older ones
+  // are not surprised with new requirements).
+  deliveryManaged(r) {
+    const p = r.project;
+    if (this.demo || !p.platform || platformKind(p.platform) !== "web" || !VERIFIED_TARGETS.includes("web")) return false;
+    return ["es", "en"].some((l) => p.criteria.includes(deliveryCriteria(l).launcher));
+  }
+  // Returns "skip" (not managed), "ready", "retry" (the director's approval is turned into a task for the coder with
+  // the problems) or "blocked" (the person is needed after MAX_DELIVERY_ATTEMPTS tries).
+  async deliveryGate(r, review) {
+    if (!this.deliveryManaged(r)) return "skip";
+    const tag = { runId: r.id, projectId: r.projectId }, language = r.settings.language ?? this.settings.language;
+    this.event({ role: "system", kind: "phase", text: "Comprobando que la aplicación se pueda abrir con un doble clic…", ...tag });
+    // Starting a server and a browser is heavy too: the same look at memory as before an agent.
+    await this.requireResources();
+    const env = await this.detect().catch(() => null);
+    const result = await this.verify({ directory: r.project.directory, runCommand: review.run?.ready ? review.run.command : "", env, language });
+    if (this.controller?.signal.aborted) throw Object.assign(new Error("Detenido"), { name: "AbortError" });
+    r.deliveryChecks = [...(r.deliveryChecks ?? []), { at: now(), round: r.round, ok: result.ok, mode: result.mode, problems: result.problems }].slice(-6);
+    if (result.ok) {
+      r.deliveryAttempts = 0;
+      delete r.deliveryProblems;
+      r.delivery = this.buildDelivery(r, review, result);
+      for (const offer of r.runOffers ?? []) if (offer.status === "pending") offer.status = "superseded";
+      this.event({ role: "system", kind: "success", text: `Tu aplicación está lista. Se guardó en ${r.project.directory}. Ábrela con el botón «Abrir aplicación»; la guía ${GUIDE} explica cómo usarla.`, ...tag });
+      this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "note", text: `Entrega comprobada en la ronda ${r.round}: se abre con ${LAUNCHER} (${result.mode === "server" ? "servidor local" : "página " + result.open?.target}) y se explica en ${GUIDE}.`, source: "automata", runId: r.id, round: r.round }));
+      return "ready";
+    }
+    r.deliveryAttempts = (r.deliveryAttempts ?? 0) + 1;
+    r.deliveryProblems = result.problems;
+    const exhausted = r.deliveryAttempts >= MAX_DELIVERY_ATTEMPTS;
+    r.delivery = { status: exhausted ? "failed" : "fixing", kind: "web", at: now(), folder: r.project.directory, problems: result.problems, attempts: r.deliveryAttempts };
+    const shown = result.problems.slice(0, 3).join(" ");
+    if (exhausted) {
+      r.status = "blocked";
+      r.stage = "review";
+      this.event({ role: "system", kind: "warning", text: `Se necesita tu intervención: la aplicación no quedó lista para entregarse tras ${r.deliveryAttempts} intentos. ${shown}`, ...tag });
+      return "blocked";
+    }
+    this.event({ role: "system", kind: "warning", text: `La aplicación todavía no está lista para entregarse (intento ${r.deliveryAttempts} de ${MAX_DELIVERY_ATTEMPTS}). ${shown} Claude lo corrige y se vuelve a comprobar.`, ...tag });
+    review.decision = "continue";
+    review.nextPrompt = deliveryFixPrompt(result.problems, language);
+    review.summary = `${review.summary} · Entrega pendiente: ${shown}`.slice(0, 1500);
+    // The plan already says everything is done: this round is not a plan task, and must not reopen one.
+    r.taskId = null;
+    r.files = [];
+    return "retry";
+  }
+  // What the person sees when the app is ready: where it is, how to open it, what works and what is still pending.
+  buildDelivery(r, review, result) {
+    const proposal = this.proposals.find((x) => x.id === r.project.proposalId);
+    const met = (review.criteria ?? []).filter((c) => c.met);
+    const pending = [
+      ...(review.criteria ?? []).filter((c) => !c.met).map((c) => `Sin cumplir: ${clip(c.criterion, 200)}`),
+      ...(proposal?.draft?.risks ?? []).map((x) => clip(x, 240)),
+      ...(review.findings ?? []).map((f) => clip(`${f.description}${f.file ? ` (${f.file})` : ""}`, 240)),
+      ...result.notes.map((x) => clip(x, 240)),
+      "Las pruebas aprobadas demuestran los criterios de la lista; no garantizan calidad comercial ni que esté libre de errores."
+    ];
+    const passed = r.checks.filter((c) => c.passed).length;
+    return {
+      status: "ready", kind: "web", mode: result.mode, at: now(), name: r.project.name, folder: r.project.directory, launcher: LAUNCHER, guide: GUIDE,
+      open: { type: result.open.type, target: result.open.target, ...result.open.command ? { command: result.open.command } : {} },
+      works: met.slice(0, 20).map((c) => ({ criterion: clip(c.criterion, 300), evidence: clip(c.evidence, 300) })),
+      pending: [...new Set(pending)].slice(0, 12),
+      checks: { passed, total: r.checks.length },
+      steps: result.steps.map(({ name, ok }) => ({ name, ok })),
+      browser: result.browser, guideSections: result.guideSections ?? [], round: r.round
+    };
+  }
+  // The buttons of the «Tu aplicación está lista» row. «local» is true only for requests from this PC: opening
+  // something on the screen belongs to the person sitting at it, never to a phone on the network.
+  async deliveryAction(runId, action, { local = false } = {}) {
+    const r = this.runs.find((run) => run.id === runId);
+    if (!r) throw new Error("No se encontró ese trabajo.");
+    const d = r.delivery, dir = r.project.directory;
+    if (d?.status !== "ready") throw new Error("Esta aplicación todavía no está lista.");
+    if (action === "guide") {
+      const name = (() => { try { return fs.readdirSync(dir).find((f) => f.toLowerCase() === GUIDE.toLowerCase()); } catch { return null; } })();
+      if (!name) throw new Error(`No encuentro ${GUIDE} en la carpeta del proyecto.`);
+      return { name, text: fs.readFileSync(path.join(dir, name), "utf8").slice(0, 60000) };
+    }
+    if (!["open", "folder"].includes(action)) throw new Error("Acción desconocida.");
+    if (!local) throw new Error("Esto se abre en la computadora donde está Automata. Hazlo desde esa computadora.");
+    const tag = { runId: r.id, projectId: r.projectId };
+    if (action === "folder") {
+      this.opener(dir);
+      return { opened: "folder", folder: dir };
+    }
+    if (d.open.type === "file") {
+      const file = path.resolve(dir, d.open.target);
+      if (!file.toLowerCase().startsWith(path.resolve(dir).toLowerCase() + path.sep) || !fs.existsSync(file)) throw new Error("No encuentro la página de la aplicación en la carpeta.");
+      this.opener(file);
+      this.event({ role: "system", kind: "start", text: `Abriendo ${d.name} en el navegador.`, ...tag });
+      return { opened: "file" };
+    }
+    // A server app: started here (the person pressed Abrir), shown in the APP row with its Detener button.
+    const view = this.app.view();
+    if (!(view?.status === "running" && view.projectId === r.projectId)) this.app.start({ directory: dir, command: d.open.command, url: d.open.target, projectId: r.projectId, runId: r.id });
+    for (let i = 0; i < 40 && !(await pageAnswers(d.open.target)); i++) await new Promise((resolve) => setTimeout(resolve, 300));
+    this.event({ role: "system", kind: "start", text: `Abriendo ${d.name} en el navegador.`, ...tag });
+    this.notify();
+    return { opened: "url", url: d.open.target };
+  }
   // The person answered about the unsaved changes: the work can finish now (the loop checks again).
   finishAfterChanges(r) {
     if (this.busy || r.status !== "blocked" || r.stage !== "apply" || r.review?.decision !== "complete") return;
@@ -1248,7 +1365,10 @@ ${evidence}
 
 VERIFICACIONES:
 ${JSON.stringify(r.checks)}
-${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige evidencia explícita."}`;
+${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige evidencia explícita."}${r.deliveryProblems?.length ? `
+
+ENTREGA (la comprobó Automata y sigue pendiente; no apruebes el objetivo hasta que esté resuelta):
+${r.deliveryProblems.map((x) => "- " + x).join("\n")}` : ""}`;
         const evidenceFull = `CAMBIOS PREVIOS:
 ${r.baseline}
 
@@ -1324,7 +1444,10 @@ ${state}`;
         if (review.decision !== "blocked") await this.applyGit(review);
         // The work does not end with changes nobody decided about.
         if (review.decision === "complete" && !await this.settleChanges(r, review)) break;
-        if (review.decision !== "blocked") this.offerRun(r, review);
+        // A local web app is finished when a person can open it: launcher, guide and a real start (P4).
+        if (review.decision === "complete" && await this.deliveryGate(r, review) === "blocked") break;
+        // Once the delivery is ready its own button opens the app; the question «¿Correr la app?» would only repeat it.
+        if (review.decision !== "blocked" && !(review.decision === "complete" && r.delivery?.status === "ready")) this.offerRun(r, review);
         if (review.decision === "complete") {
           r.status = "complete";
           r.stage = "complete";
@@ -1472,6 +1595,7 @@ ${state}`;
       }
       // Continuar after an error starts the retry counters over: the user decided to try again.
       if (r.recovery) r.recovery.attempts = {};
+      r.deliveryAttempts = 0;
       delete r.error;
       this.clearWait();
       this.endMemoryWait(r, "manual");

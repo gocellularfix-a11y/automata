@@ -147,7 +147,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
           const catalog = demo ? { source: "builtin", models: MODELS.auditor } : await codexModels.list({ force: url.searchParams.has("refresh") });
           // "Open with Windows" only makes sense for the packaged desktop app (a dev run would register electron.exe).
           const loginItem = !!process.versions.electron && !process.defaultApp && process.platform === "win32";
-          return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"], autoResume: true, loginItem, plan: true, conversations: true, ideas: true }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: { coder: MODELS.coder, auditor: catalog.models }, modelSource: catalog.source, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
+          return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"], autoResume: true, loginItem, plan: true, conversations: true, ideas: true, delivery: true }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: { coder: MODELS.coder, auditor: catalog.models }, modelSource: catalog.source, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
         }
         if (url.pathname === "/api/pairing" && req.method === "GET") {
           if (!loopback(req.socket.remoteAddress)) return send(403, { error: "Abre la conexión de Android desde la PC." });
@@ -191,6 +191,12 @@ data: ${JSON.stringify(coordinator.snapshot())}
           if (["approve", "reject"].includes(data.decision)) return send(200, coordinator.resolveRun(String(data.runId ?? ""), String(data.offerId ?? ""), data.decision));
           return send(200, await coordinator.appControl(data.action));
         }
+        // The «Tu aplicación está lista» row: open it, show its folder, read its guide. Opening is for this PC only.
+        if (url.pathname === "/api/delivery" && req.method === "POST") {
+          const data = await body();
+          return send(200, await coordinator.deliveryAction(String(data.runId ?? ""), String(data.action ?? ""), { local: loopback(req.socket.remoteAddress) }));
+        }
+        if (url.pathname === "/api/environment" && req.method === "GET") return send(200, await coordinator.detect({ force: url.searchParams.has("refresh") }));
         if (url.pathname === "/api/memory" && req.method === "POST") return send(200, coordinator.memoryAction(await body()));
         if (url.pathname === "/api/plan" && req.method === "POST") return send(200, coordinator.planAction(await body()));
         // From an idea to a project: propose (the director, read-only), adjust, discard, and accept once.
