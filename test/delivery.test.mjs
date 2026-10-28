@@ -42,6 +42,16 @@ const staticFiles = (extra = {}) => ({ "index.html": '<!doctype html><title>Prop
 const seeing = (result = { ok: true, title: "Propinas", controls: 2, browser: "chrome.exe" }) => async () => result;
 const withBrowser = { tools: { browser: { found: true, name: "Chrome", path: "C:/chrome.exe" } } };
 const freePort = () => new Promise((resolve) => { const s = net.createServer().listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
+// A port nobody answers on right now. The operating system can hand the same port to another test's server between
+// closing the probe and starting the app (the suite runs files in parallel); asking again removes that coincidence.
+const quietPort = async () => {
+  for (let i = 0; i < 5; i++) {
+    const port = await freePort();
+    const busy = await fetch(`http://127.0.0.1:${port}`, { signal: AbortSignal.timeout(500) }).then(() => true, () => false);
+    if (!busy) return port;
+  }
+  throw new Error("No encontré un puerto libre.");
+};
 
 test("el lanzador se reconoce por lo que abre y se rechaza lo que cambia la PC o descarga cosas", () => {
   const page = parseLauncher('@echo off\r\nstart "" "%~dp0index.html"\r\n');
@@ -138,15 +148,17 @@ test("una página con acentos necesita declarar su codificación o se vería rot
 });
 
 test("una app con servidor se arranca de verdad, se pide su página y se detiene", async (t) => {
-  const port = await freePort();
+  const port = await quietPort();
   const server = `import http from "node:http"; http.createServer((q, r) => { r.setHeader("content-type", "text/html"); r.end("<title>Hola</title><body><p>Hola</p></body>"); }).listen(${port}, "127.0.0.1", () => console.log("http://localhost:${port}"));`;
   const dir = project(t, { "server.mjs": server, "package.json": '{"scripts":{"start":"node server.mjs"}}', [LAUNCHER]: `@echo off\r\nstart /min "" node "%~dp0server.mjs"\r\ntimeout /t 2 >nul\r\nstart "" http://localhost:${port}\r\n`, [GUIDE]: GOOD_GUIDE });
   const opened = [];
   const result = await verifyDelivery({ directory: dir, runCommand: "node server.mjs", env: withBrowser, browser: async (url) => { opened.push(url); return { ok: true, title: "Hola", controls: 0, browser: "chrome.exe" }; }, bootTimeoutMs: 15000 });
-  assert.deepEqual(result.problems, []);
-  assert.equal(result.mode, "server");
-  assert.deepEqual(result.open, { type: "url", target: `http://localhost:${port}`, command: "node server.mjs" });
-  assert.deepEqual(opened, [`http://localhost:${port}`]);
+  // If this ever fails again, the failure explains itself: what the check saw, not only which line broke.
+  const seen = JSON.stringify({ port, problems: result.problems, notes: result.notes, steps: result.steps, mode: result.mode, open: result.open, opened });
+  assert.deepEqual(result.problems, [], seen);
+  assert.equal(result.mode, "server", seen);
+  assert.deepEqual(result.open, { type: "url", target: `http://localhost:${port}`, command: "node server.mjs" }, seen);
+  assert.deepEqual(opened, [`http://localhost:${port}`], seen);
   assert.equal(result.steps.find((s) => s.name === "start").ok, true);
   const after = await fetch(`http://127.0.0.1:${port}`, { signal: AbortSignal.timeout(1500) }).then(() => "sigue", () => "detenido");
   assert.equal(after, "detenido", "el servidor de la prueba no queda corriendo");

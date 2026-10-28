@@ -13,7 +13,7 @@ import { Coordinator } from "../server/coordinator.mjs";
 import { createServer } from "../server/index.mjs";
 import { CliAgents } from "../server/agents.mjs";
 import { validateProject } from "../server/config.mjs";
-import { installCheckScript, allowedCheckTool, CHECK_SCRIPT, CHECK_ENDPOINT_PATH, MAX_AGENT_CHECK_CALLS } from "../server/agenttools.mjs";
+import { installCheckScript, plainDirectory, allowedCheckTool, CHECK_SCRIPT, CHECK_ENDPOINT_PATH, MAX_AGENT_CHECK_CALLS } from "../server/agenttools.mjs";
 import { coderPrompt, verifySection } from "../server/prompts.mjs";
 
 const dirs = [];
@@ -37,10 +37,33 @@ test("el script se escribe en una carpeta sin espacios y la regla de permiso es 
   assert.equal(fs.readFileSync(tool.path, "utf8"), CHECK_SCRIPT);
   fs.writeFileSync(tool.path, "// alterado");
   assert.equal(fs.readFileSync(installCheckScript([base]).path, "utf8"), CHECK_SCRIPT, "una copia alterada se reescribe");
-  assert.equal(installCheckScript([path.join(base, "con espacio ")]), null, "una carpeta con espacios no sirve para una regla literal");
   assert.equal(installCheckScript([]), null);
   assert.equal(allowedCheckTool(null), null);
   assert.doesNotMatch(CHECK_SCRIPT, /process\.argv/, "no acepta argumentos: Claude no elige qué corre");
+});
+
+test("una carpeta con espacios (un nombre como «Ana María») se usa por su nombre corto: la misma carpeta, la misma regla literal y sin quotes", { skip: process.platform !== "win32" && "los nombres cortos son de Windows" }, (t) => {
+  const base = path.join(fixture(), "Ana María");
+  fs.mkdirSync(base, { recursive: true });
+  const tool = installCheckScript([base]);
+  if (!tool) return t.skip("este disco no tiene nombres cortos (8.3): Claude solo recibiría la orden de esperar a Automata");
+  assert.doesNotMatch(tool.command, /\s.*\s/, "sin espacios dentro del comando salvo el que separa node de la ruta");
+  assert.doesNotMatch(tool.path, /\s/);
+  assert.equal(fs.readFileSync(tool.path, "utf8"), CHECK_SCRIPT);
+  assert.equal(fs.realpathSync.native(path.dirname(tool.path)).toLowerCase(), fs.realpathSync.native(path.join(base, "automata-tools")).toLowerCase(), "es la carpeta con espacios, no otra");
+  assert.equal(allowedCheckTool(tool), `Bash(${tool.command})`, "la autorización sigue siendo un solo comando literal");
+});
+
+test("un nombre corto que no lleva a la misma carpeta, o que sigue teniendo espacios, se descarta y se prueba la siguiente carpeta", (t) => {
+  const withSpace = path.join(fixture(), "con espacio"), other = fixture(), good = fixture();
+  fs.mkdirSync(withSpace, { recursive: true });
+  assert.equal(plainDirectory(withSpace, { short: () => other }), null, "otro lugar: no se acepta");
+  assert.equal(plainDirectory(withSpace, { short: () => path.join(other, "tambien con espacio") }), null);
+  assert.equal(plainDirectory(withSpace, { short: () => null }), null);
+  assert.equal(plainDirectory(good), good, "sin espacios se usa tal cual");
+  const tool = installCheckScript([withSpace, good], { short: () => null });
+  assert.ok(tool.path.startsWith(good.replace(/\\/g, "/")), "pasó a la carpeta siguiente");
+  assert.equal(installCheckScript([withSpace], { short: () => null }), null, "si ninguna sirve, no se promete herramienta");
 });
 
 test("el agente real recibe el permiso extra y las variables solo cuando hay herramienta; el resto de sus permisos no cambia", async (t) => {

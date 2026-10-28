@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 export const CHECK_ENDPOINT_PATH = "/api/agent-checks";
 export const MAX_AGENT_CHECK_CALLS = 8;
@@ -27,16 +28,32 @@ try {
 }
 `;
 
-// Writes the script to a folder without spaces (a permission rule is matched literally and a path with spaces needs
-// quotes that the rule does not match). Returns { path, command } or null when no such folder exists: Claude is then
-// simply told that Automata runs the checks after its turn.
-export function installCheckScript(baseDirs = [os.tmpdir()]) {
+// A permission rule is matched literally and a path with spaces needs quotes that the rule does not match, so the
+// script must live at a path without whitespace. A folder with spaces (a user name like «Ana María») is used through
+// its Windows short name (8.3) when the PC has one: the same folder, checked below by resolving both to the same place.
+export function plainDirectory(directory, { short = shortName } = {}) {
+  if (!/\s/.test(directory)) return directory;
+  const alias = short(directory);
+  if (!alias || /\s/.test(alias)) return null;
+  try { return fs.realpathSync.native(alias).toLowerCase() === fs.realpathSync.native(directory).toLowerCase() ? alias : null; } catch { return null; }
+}
+function shortName(directory) {
+  if (process.platform !== "win32") return null;
+  try {
+    return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AUTOMATA_FOLDER).ShortPath"], { encoding: "utf8", windowsHide: true, timeout: 15000, env: { ...process.env, AUTOMATA_FOLDER: directory } }).trim() || null;
+  } catch { return null; }
+}
+// Writes the script where the rule can name it. Returns { path, command } or null when no such folder exists: Claude is
+// then simply told that Automata runs the checks after its turn.
+export function installCheckScript(baseDirs = [os.tmpdir(), path.join(os.homedir(), ".automata")], { short } = {}) {
   for (const base of baseDirs) {
-    if (!base || /\s/.test(base)) continue;
+    if (!base) continue;
     try {
       const directory = path.join(base, "automata-tools");
       fs.mkdirSync(directory, { recursive: true });
-      const file = path.join(directory, "automata-check.mjs");
+      const plain = plainDirectory(directory, short ? { short } : undefined);
+      if (!plain) continue;
+      const file = path.join(plain, "automata-check.mjs");
       if (!fs.existsSync(file) || fs.readFileSync(file, "utf8") !== CHECK_SCRIPT) fs.writeFileSync(file, CHECK_SCRIPT);
       const forward = file.replace(/\\/g, "/");
       return { path: forward, command: `node ${forward}` };
