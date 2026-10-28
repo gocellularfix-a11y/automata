@@ -11,6 +11,9 @@ import { chromium } from "playwright-core";
 import { listProcesses } from "../server/procs.mjs";
 import { readMemory } from "../server/resources.mjs";
 import { descend, chromeProcesses, findLeftovers, classifyPushOrMerge, checkStaticPage } from "./real-idea-checks.mjs";
+import { exercisePage } from "./real-delivery-checks.mjs";
+import { parseLauncher, checkGuide, deliveryCriteria } from "../server/delivery.mjs";
+import { pathToFileURL } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
 const arg = (name, fallback) => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : fallback; };
@@ -153,13 +156,47 @@ try {
     try { execFileSync("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" }); } catch {}
   }
   if (offer?.ready && !offer.url) Object.assign(report.verification.app, checkStaticPage(offer.command, project.directory) ?? {});
+  // P4: the delivery, judged apart from Automata's own check: what the person got in the folder and in the interface,
+  // and the delivered page used in a real browser (by file://, as a double-click does), with good and bad data.
+  const wanted = proposal.delivery?.verified === true;
+  const shown = final.run.delivery ?? null;
+  const delivery = report.verification.delivery = { expected: wanted, proposalNote: proposal.delivery?.note ?? null, proposalHasCriteria: [deliveryCriteria("es").launcher, deliveryCriteria("es").guide].every((c) => proposal.draft.criteria.includes(c)), status: shown?.status ?? null, readyInRound: shown?.round ?? null, attempts: (final.run.deliveryChecks ?? []).map((c) => ({ round: c.round, ok: c.ok, problems: c.problems })) };
+  if (shown?.status === "ready") {
+    const read = (name) => { try { return fs.readFileSync(path.join(project.directory, name), "utf8"); } catch { return null; } };
+    const launcherText = read("Abrir.cmd"), guideText = read("COMO_USAR.md");
+    delivery.launcher = { exists: launcherText !== null, ...parseLauncher(launcherText), text: launcherText?.slice(0, 600) };
+    delivery.guide = { exists: guideText !== null, ...checkGuide(guideText), chars: guideText?.length ?? 0 };
+    delivery.committed = execFileSync("git", ["ls-files"], { cwd: project.directory, encoding: "utf8" }).split("\n").filter((f) => /^(Abrir\.cmd|COMO_USAR\.md)$/i.test(f.trim()));
+    delivery.works = shown.works?.length ?? 0;
+    delivery.pending = shown.pending ?? [];
+    delivery.open = shown.open;
+    delivery.browser = shown.browser;
+    // The interface: the row, its buttons and the details with the guide inside.
+    await page.waitForSelector(".delivery-row", { timeout: 20e3 });
+    delivery.row = (await page.locator(".delivery-row").innerText()).replace(/\s+/g, " ");
+    await page.locator(".delivery-row [data-delivery=details]").click();
+    await page.waitForFunction(() => document.querySelector("#deliveryContent")?.textContent.includes("Guía para usarla") && !document.querySelector("#deliveryContent").textContent.includes("Cargando la guía"), null, { timeout: 20e3 });
+    delivery.details = (await page.locator("#deliveryContent").innerText()).replace(/\s+/g, " ").slice(0, 1500);
+    await page.locator("#deliveryDialog").screenshot({ path: path.join(output, "05-entrega-detalles.png") });
+    await page.click("#deliveryDialog [data-close]");
+    await shot("06-entrega-lista");
+    if (shown.open?.type === "file") {
+      const appPage = await browser.newPage({ viewport: { width: 1100, height: 800 } });
+      try {
+        delivery.use = await exercisePage(appPage, pathToFileURL(path.join(project.directory, shown.open.target)).href);
+        await appPage.screenshot({ path: path.join(output, "07-app-entregada.png") });
+      } catch (error) { delivery.use = { error: error.message }; } finally { await appPage.close(); }
+    }
+  }
   report.verification.files = execFileSync("git", ["ls-files"], { cwd: project.directory, encoding: "utf8" }).trim().split("\n");
   report.verification.othersUntouched = Object.entries(before).every(([dir, value]) => gitState(dir) === value);
   report.verification.changed = Object.entries(before).filter(([dir, value]) => gitState(dir) !== value).map(([dir]) => dir);
   log("verificación independiente", report.verification);
   report.ok = final.run.status === "complete" && report.verification.checks.every((c) => c.code === 0) && report.verification.othersUntouched
     && report.verification.gitStatus === "" && report.verification.gitLog.length > 1 && report.verification.gitRemotes === "" && report.verification.pushOrMerge.length === 0
-    && (!report.verification.app.offered || report.verification.app.answered === 200 || report.verification.app.answered === "file");
+    && (!report.verification.app.offered || report.verification.app.answered === 200 || report.verification.app.answered === "file")
+    // A web app must come with the delivery ready and real: launcher and guide in the folder and saved in Git, and no errors when used.
+    && (!report.verification.delivery.expected || report.verification.delivery.status === "ready" && report.verification.delivery.launcher?.ok && report.verification.delivery.guide?.ok && report.verification.delivery.committed?.length === 2 && report.verification.delivery.proposalHasCriteria && !(report.verification.delivery.use?.errors?.length));
 } catch (error) {
   report.ok = false;
   report.error = error.message;
