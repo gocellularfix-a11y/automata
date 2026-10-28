@@ -40,6 +40,21 @@ Qué **no** tengo todavía: el consumo real del árbol de Automata con Claude y 
 
 Qué se mide y se guarda por ejecución (`run.memory`, visible en el estado): máximo de RAM del árbol, de Claude y de Codex, máximo de memoria privada y de procesos, **mínimo** de RAM libre del sistema, **mínimo** de margen de memoria virtual, número de muestras, cuántas veces estuvo excedido el presupuesto y el estado actual (`off`, `ok`, `near`, `over`).
 
+### 2.1 Medición real con agentes (28 oct, 1:36 am)
+
+Con el entrenamiento de AI-DJ terminado (sin procesos Python, GPU en reposo, 52 683 MB de RAM libre) y con tu autorización para esa noche, se ejecutó un ciclo completo de P3 con Claude y Codex reales (detalle en `P3_STABILIZATION_REPORT.md`, sección 5.1). La corrida con el presupuesto en 61 440 MB midió, durante unos 10 minutos y 12 rondas:
+
+| Medida | Valor real |
+|---|---|
+| Máximo del árbol de Automata (memoria física) | **577 MB** (868 MB de memoria privada) |
+| Máximo de Claude / Codex | 308 MB / 190 MB |
+| Máximo de procesos en el árbol | 13 |
+| RAM libre del sistema, mínimo | 51 501 MB |
+| Margen de memoria virtual libre, mínimo | 46 025 MB |
+| Estado del presupuesto | `ok` en las 66 muestras de Automata, 0 excesos |
+
+El consumo real de Automata con agentes es **menos de 1 GB**, no los 1 a 3 GB que estimé: 30 GiB es un techo muy holgado para este tipo de trabajo. Límites: es un ciclo de una idea pequeña (una página web) y 10 minutos; un proyecto grande, con pruebas pesadas o varias aplicaciones corriendo, puede consumir más. El presupuesto en 0 **desactiva la medición** además del tope: la primera corrida (con 0) no guardó `run.memory`. Para medir, conviene dejar un valor alto, no 0.
+
 ## 3. Protección preventiva
 
 - **Antes de lanzar algo:** se comprueban (1) el margen del sistema y (2) que el árbol propio más la reserva quepa en el presupuesto. Se aplica antes de preparar o aceptar una propuesta, iniciar o continuar un trabajo, consultar a un agente, abrir **cada** agente dentro de un trabajo y ejecutar las **verificaciones**.
@@ -84,7 +99,10 @@ Se ajustaron los textos esperados de 2 pruebas antiguas por el mensaje nuevo.
 
 **No probado:** el campo nuevo de Ajustes en un navegador (solo sintaxis); `smoke-settings` y `smoke-plan` no se ejecutaron; el consumo real de Claude y Codex bajo Automata; Job Objects.
 
-## 7. Pendiente para esta noche
+## 7. Pendiente para esta noche (resuelto el 28 oct: ver 2.1)
+
+Lo siguiente se hizo la madrugada del 28 oct; se conserva como estaba escrito:
+
 
 1. Cuando AI-DJ termine y haya memoria libre (el sistema debe quedar con más de 1 536 MB libres; mejor varios GB), repetir el ciclo real de estabilización. Ahora también guardará `run.memory`:
    ```powershell

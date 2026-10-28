@@ -4,7 +4,7 @@ Fecha: 27 oct 2026 · Rama: `feature/p3-idea-to-project` (sobre `868d2dc`) · Si
 
 ## Veredicto
 
-Las secciones 1 a 4 están implementadas y probadas (180 pruebas automáticas en verde). **La sección 5, el ciclo real completo de validación, NO se completó**: el ciclo llegó a la ronda 11 con 6 de 8 tareas hechas y 5 commits locales, y Claude Code lo detuvo por memoria crítica del sistema antes de terminar. No lo relancé, porque su aviso lo prohíbe mientras la memoria siga corta. Por eso **no apruebo P3 para avanzar a P4**: falta ver un trabajo llegar a `complete` con el cierre de Git nuevo y con una medición de RAM completa.
+Las secciones 1 a 4 están implementadas y probadas (188 pruebas automáticas en verde). **Actualización del 28 oct, 1:36 am: el ciclo real completo de la sección 5 ya se ejecutó dos veces con agentes reales y las dos llegaron a `complete`** (4 y 12 rondas, 8/8 y 9/9 tareas, commits locales, árbol limpio, sin push ni merge, sin procesos residuales). La primera corrida del 27 oct (detenida por el arnés por memoria crítica) queda como antecedente. Quedan límites reales (sección 5): la aplicación entregada se comprobó por sus archivos y sus pruebas, no abriéndola en un navegador; y los agentes se probaron con una sola idea pequeña.
 
 Lo que sí quedó probado con agentes reales, con números abajo: la renovación independiente (Codex 3, Claude 8), el contexto real medido, los commits locales en hitos, la comprobación de memoria actuando sola y la ausencia de procesos residuales. Y tres correcciones al reporte P3 anterior:
 
@@ -106,7 +106,50 @@ Se resuelven además, sin pedir otra propuesta: otra mayúscula, acento o puntua
 
 **Límite:** la limpieza de hijos se probó con procesos reales, pero no se observó a Claude ni a Codex dejando procesos en segundo plano, así que no sé con qué frecuencia actúa. Es un cambio de comportamiento: lo que un agente deje corriendo al terminar su llamada se cierra; para probar la app, Automata la ofrece.
 
-## 5. Validación real (incompleta)
+## 5. Validación real
+
+### 5.1 Ciclos del 28 oct (1:36 am, entrenamiento de AI-DJ ya terminado, 52 GB libres)
+
+Misma frase, misma configuración y segunda instancia (puerto 4796, datos propios). La RAM estaba libre porque terminó el entrenamiento; se lanzó con tu autorización para esa noche y solo Claude hacía pruebas. Dos corridas:
+
+| | Corrida A (presupuesto apagado) | Corrida B (presupuesto 61 440 MB) |
+|---|---|---|
+| Propuesta | 34 s, 7 criterios, 8 tareas | 28 s, 8 criterios, 9 tareas |
+| Fin | `complete`, ronda 4, plan 8/8, ≈ 3,5 min | `complete`, ronda 12, plan 9/9, ≈ 10 min |
+| Commits locales | 2 (+ el inicial), árbol limpio | 7 (+ el inicial), árbol limpio |
+| Pruebas del proyecto | 21 de 21 | 3 de 3 |
+| Intervenciones de la persona | 2 (idea y «Crear y empezar») | 2 |
+| Renovaciones de sesión | 1 (Codex) | 5 (Codex 4 en rondas 3, 6, 9, 12; Claude 1 en la ronda 9) |
+| Contexto máx. real | Claude 66 633 · Codex 26 573 | Claude **92 017** · Codex **36 649** (ventana 258 400) |
+| Recuperación | ninguna | 1 respuesta del revisor inválida («plan.update: la tarea T0 no existe»), reintentada y resuelta sin intervención |
+| Push / merge ejecutados | ninguno | ninguno; el director **pidió** un merge a `main` y quedó `pending` esperando tu aprobación (correcto) |
+| Procesos residuales | 2 «restos» (`powershell.exe` y `conhost.exe`), ya inexistentes al revisar; casi seguro el PowerShell del muestreo del propio script (no lo pude demostrar) y corregido | ninguno |
+
+**RAM medida en la corrida B** (primera medición real de un ciclo completo; 106 muestras del script cada 6 s y 66 del propio Automata cada 20 s):
+
+| | |
+|---|---|
+| Máximo del árbol de Automata (Claude + Codex + node + git, memoria física) | **577 MB** (script: 469 MB) |
+| Máximo de memoria privada | 868 MB |
+| Máximo de Claude / Codex | 308 MB / 190 MB |
+| Máximo de procesos en el árbol | 13 |
+| RAM libre del sistema, mínimo | 51 501 MB (de 64 912) |
+| Margen de memoria virtual libre, mínimo | 46 025 MB |
+| Estado del presupuesto | `ok` en todas las muestras, 0 excesos |
+| Chrome del script (no es de Automata) | hasta 1 150 MB |
+
+Conclusión sobre memoria: el consumo propio de Automata con agentes reales es **menos de 1 GB**, muy por debajo de los 30 GiB; mi estimación previa de 1 a 3 GB era alta. El presupuesto sirve como red de seguridad, no como restricción en la práctica.
+
+**Qué faltó o salió distinto:**
+- `ok: false` en las dos corridas lo puso el **script**, no Automata: contaba su propio PowerShell como resto; se cortaba el muestreo al abrir Chrome (`browser.process()` no existe en Playwright; la corrida A quedó con 1 muestra); trataba como fallo un merge solo *pedido* y pendiente de aprobación; y no sabía comprobar una página estática sin dirección. Los cuatro puntos están corregidos en `scripts/real-idea.mjs` pero **no se volvió a ejecutar el script con esas correcciones** (la verificación de la aplicación se hizo a mano, ver abajo).
+- Con el presupuesto en 0, Automata **no mide** por ejecución (`run.memory` queda vacío): es el comportamiento diseñado, pero por eso la corrida A no sirve para RAM.
+- **La aplicación entregada** se comprobó por sus archivos: ambas tienen `index.html` con título, 3 campos y los scripts enlazados, y sus pruebas pasan. **No la abrí en un navegador ni probé el cálculo en pantalla.**
+- El director pidió un merge a `main` aunque el proyecto solo tiene `main`: no se ejecutó (requiere aprobación). Es un comportamiento por revisar del prompt del director, no un daño.
+- Una sola idea, pequeña y de una página: no demuestra el comportamiento con proyectos grandes ni con Git ensuciado a propósito en vivo.
+
+Carpetas resultantes: `C:\Users\cellh\Automata Projects\repartidor-de-propina` (A) y `calculadora-de-propinas-2` (B); artefactos en `artifacts\real-idea-2026-10-28T08-36-28-071Z` y `...T08-41-12-371Z`.
+
+### 5.2 Primer ciclo (27 oct, interrumpido)
 
 Ciclo con la frase «Quiero una calculadora de propinas: escribo el total de la cuenta y cuántas personas somos, y me dice cuánto paga cada una», en una segunda instancia (puerto 4796, datos propios), Claude `sonnet`, Codex `gpt-6-luna`, acceso limitado, solo planes, `ask-push`.
 
@@ -118,9 +161,9 @@ Ciclo con la frase «Quiero una calculadora de propinas: escribo el total de la 
 | Commits locales | 5, carpeta limpia |
 | Fin | **Detenido por el arnés a las 15:55 por memoria crítica del sistema** |
 
-Falta, y por eso no está validado: el `complete`, el cierre de Git en vivo, la comprobación funcional de la aplicación entregada, la estabilidad de RAM durante todo el ciclo y el contexto máximo de un ciclo completo. No forcé rondas para cumplir métricas.
+Ese ciclo no llegó al `complete`; lo cubren las corridas de 5.1. No forcé rondas para cumplir métricas.
 
-**Para repetirlo** (cuando haya memoria libre; el script ahora muestrea RAM, procesos de Automata, Chrome y el entrenamiento cada 6 s, comprueba commits, árbol limpio, ausencia de remoto, push y merge, arranca la app entregada y busca procesos residuales):
+**Para repetirlo** (el script muestrea RAM, procesos de Automata, Chrome y el entrenamiento cada 6 s, comprueba commits, árbol limpio, ausencia de remoto, push y merge ejecutados, comprueba la aplicación entregada y busca procesos residuales):
 
 ```powershell
 node scripts/real-idea.mjs --port 4796 --rounds 16 --idea "Quiero una calculadora de propinas: escribo el total de la cuenta y cuántas personas somos, y me dice cuánto paga cada una"
@@ -134,7 +177,7 @@ El proyecto parcial quedó en `C:\Users\cellh\Automata Projects\calculadora-de-p
 
 ## Decisiones que necesito de ti
 
-1. **Repetir el ciclo real** cuando haya memoria libre. Con el entrenamiento ocupando ≈ 58 GB, la PC queda por debajo de nuestro mínimo de 1,5 GB.
+1. **Revisar el resultado de 5.1** y decidir si quieres una tercera corrida con otra idea (con interfaz o varios archivos) y abriendo la aplicación entregada en un navegador. No la hice por mi cuenta.
 2. ¿Creo automáticamente la tarea «Comprobar: …» para criterios omitidos por el director?
 3. ¿Mantienes Codex en 3 rondas? Con contextos de 39 000 en una ventana de 258 400, la renovación no es necesaria por tamaño.
 4. ¿Aceptas que se cierre lo que un agente deja corriendo al terminar su llamada?
