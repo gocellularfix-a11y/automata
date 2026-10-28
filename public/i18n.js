@@ -285,6 +285,7 @@
     "Los archivos que usa están completos": "The files it uses are all there",
     "La aplicación arrancó": "The app started",
     "Se abrió en el navegador sin errores": "It opened in the browser without errors",
+    "Los pasos de uso se hicieron en el navegador y funcionan": "The usage steps were done in the browser and work",
     "Pruebas automáticas del proyecto": "The project's automatic tests",
     "Que las pruebas pasen no garantiza calidad comercial.": "Passing tests do not guarantee commercial quality.",
     "No se pudo abrir en un navegador de prueba; se revisaron los archivos y el arranque.": "It could not be opened in a test browser; the files and the start were checked.",

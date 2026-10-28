@@ -5,6 +5,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createRequire } from "node:module";
 import { MODES, REVIEW_SCHEMA, PROPOSAL_SCHEMA, agentEnv } from "./config.mjs";
+import { allowedCheckTool } from "./agenttools.mjs";
 import { redactTokens, redactSecrets, redactJsonLine } from "./redact.mjs";
 import { classifyError } from "./recovery.mjs";
 import { claudeRequest, summarizeRequests, codexRequests } from "./usage.mjs";
@@ -228,7 +229,7 @@ export class CliAgents {
       return this.attempt({ ...params, prompt: fallbackPrompt ?? prompt, sessionId: null });
     }
   }
-  async attempt({ role, prompt, project, settings, phase, directory, signal, emit, agent, sessionId, attemptId = null }) {
+  async attempt({ role, prompt, project, settings, phase, directory, signal, emit, agent, sessionId, attemptId = null, tool = null }) {
     // A team member brings its own model and reasoning level; callers without one use the role's primary.
     const model = agent?.model ?? settings[role === "auditor" ? "auditorModel" : "coderModel"];
     const effort = agent?.effort ?? settings[role === "auditor" ? "auditorEffort" : "coderEffort"];
@@ -255,7 +256,7 @@ export class CliAgents {
     } else {
       const fullAccess = settings.accessMode !== "limited" && phase !== "chat";
       args = ["-p", ...sessionId ? ["--resume", sessionId] : [], "--model", model, "--output-format", "stream-json", "--verbose", "--max-turns", String(MODES[settings.mode].turns), "--permission-mode", fullAccess ? "bypassPermissions" : phase === "chat" ? "plan" : "acceptEdits"];
-      if (!fullAccess) args.push("--allowedTools", phase === "chat" ? "Read,Glob,Grep" : "Read,Glob,Grep,Edit,Write,Bash(git status *),Bash(git diff *),Bash(git log *)");
+      if (!fullAccess) args.push("--allowedTools", phase === "chat" ? "Read,Glob,Grep" : ["Read,Glob,Grep,Edit,Write,Bash(git status *),Bash(git diff *),Bash(git log *)", allowedCheckTool(tool)].filter(Boolean).join(","));
       if (effort !== "default") args.push("--effort", effort);
     }
     const rawFile = path.join(directory, `${phase}-${role}.jsonl`);
@@ -267,7 +268,7 @@ export class CliAgents {
         cwd: project.directory,
         input: prompt,
         signal,
-        env: { ...executable.env, ...agentEnv(settings, role) },
+        env: { ...executable.env, ...agentEnv(settings, role), ...tool?.env },
         timeoutMs: settings.timeoutMinutes * 6e4,
         track: { role }, reap: true,
         onReaped: (closed) => emit?.({ role: "system", kind: "warning", text: `Se cerraron ${closed.length} proceso(s) que ${role === "coder" ? "Claude" : "Codex"} dejó abiertos al terminar (${[...new Set(closed.map((p) => p.name))].join(", ")}).` }),

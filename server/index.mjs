@@ -1,4 +1,5 @@
 import http from "node:http";
+import { CHECK_ENDPOINT_PATH } from "./agenttools.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -99,6 +100,12 @@ data: ${JSON.stringify(payload)}
       }
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Referrer-Policy", "no-referrer");
+      // The one call that does not use the person's access code: Claude's check tool, with a token that exists for one call
+      // of one task. Only from this PC and never from a web page (a page always sends an Origin).
+      if (url.pathname === CHECK_ENDPOINT_PATH && req.method === "POST") {
+        if (!loopback(req.socket.remoteAddress) || requestOrigin) return send(403, { error: "Solo se puede pedir desde esta PC." });
+        try { return send(200, await coordinator.agentChecks(String(req.headers.authorization ?? "").replace(/^Bearer /, ""))); } catch (e) { return send(e.status ?? 422, { error: e.message }); }
+      }
       if (url.pathname.startsWith("/api/")) {
         const supplied = Buffer.from(String(req.headers.authorization ?? "").replace(/^Bearer /, ""));
         if (supplied.length !== Buffer.byteLength(token) || !timingSafeEqual(supplied, Buffer.from(token))) {
@@ -251,6 +258,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
     throw e;
   }
   origin = `http://127.0.0.1:${server.address().port}`;
+  coordinator.setCheckEndpoint(origin);
   const heartbeat = setInterval(() => {
     for (const c of clients) c.write(": heartbeat\n\n");
   }, 15e3);

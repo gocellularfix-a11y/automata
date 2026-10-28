@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { DEFAULT_SETTINGS, validateProject, validateSettings, validateReview, invalidReview, validateProposal, projectsRootOf, teamOf, agentLabel, combineReviews } from "./config.mjs";
 import { AUTOMATA_ROOT } from "./safety.mjs";
@@ -18,6 +18,11 @@ import { sharedChecker } from "./resources.mjs";
 import { describeEnvironment, sharedDetector, platformKind, VERIFIED_TARGETS } from "./environment.mjs";
 import { addDeliveryCriteria, deliveryPlan, deliveryCriteria, verifyDelivery, deliveryFixPrompt, openWithSystem, pageAnswers, LAUNCHER, GUIDE, MAX_DELIVERY_ATTEMPTS } from "./delivery.mjs";
 import { classifyError, planWait, describeWait, agentName, DEFAULT_BACKOFF, MAX_REVIEW_FIXES, MAX_LIMIT_WAITS } from "./recovery.mjs";
+import { checkProjectText } from "./textcheck.mjs";
+import { loadScenarios } from "./scenarios.mjs";
+import { buildAutomataEvidence, renderAutomataEvidence, summarizePage, summarizeScenarios } from "./evidence.mjs";
+import { installCheckScript, CHECK_ENDPOINT_PATH, MAX_AGENT_CHECK_CALLS } from "./agenttools.mjs";
+import { classifyBlock, reaskMessage, overrideReview, MAX_BLOCK_OVERRIDES, coveredText } from "./humancheck.mjs";
 const LIVE = /* @__PURE__ */ new Set(["running", "pausing"]);
 // Statuses the user can continue from. "waiting" continues on its own; Continuar just skips the wait.
 const RESUMABLE = ["paused", "interrupted", "error", "blocked", "limit", "stopped", "waiting"];
@@ -39,8 +44,6 @@ ${task}
 
 VERIFICACIONES FALLIDAS:
 ${failing.map((check) => `$ ${check.command ?? "(sin comando)"} → código ${check.code ?? "?"}\n${tail(check.output, 2500)}${check.stderr ? "\n" + tail(check.stderr, 800) : ""}`).join("\n\n")}`;
-// The director asking for a person to open the page, click or confirm by hand (seen blocking real runs three times).
-const NEEDS_A_HUMAN_CLICK = /doble clic|abra (?:el archivo |la p[aá]gina |index\.html|la aplicaci[oó]n)|abrir (?:el archivo |la p[aá]gina |index\.html|la aplicaci[oó]n)|(?:alguien|una persona|el usuario|la persona|t[uú])\s+(?:pueda |puede |debe |deber[aá] )?(?:abra|abrir|haga|pruebe|probar|confirme|compruebe)|prueba manual|manualmente|a mano|en un navegador real/i;
 // What the director is told when Automata's delivery check passed, for the pieces that exist so far.
 function deliveryEvidence({ round, browser, parts = {} }) {
   const launcher = parts.launcher !== false, guide = parts.guide !== false;
@@ -867,8 +870,9 @@ export class Coordinator extends EventEmitter {
       }
       // This call's own commands, so failed builds and tests (and their fixes) reach the project memory once.
       const commands = role === "coder" ? [] : null;
+      const tool = role === "coder" && phase === "code" ? this.openCheckTool(r, dir) : null;
       try {
-        result = await this.agents.run({ role, prompt: resume ? short : full, fallbackPrompt: full, phase, directory: dir, project: r.project, settings: { ...r.settings }, agent, attemptId: r.inflight.id, signal: this.controller.signal, emit: (e) => {
+        result = await this.agents.run({ role, prompt: resume ? short : full, fallbackPrompt: full, phase, directory: dir, project: r.project, settings: { ...r.settings }, agent, tool, attemptId: r.inflight.id, signal: this.controller.signal, emit: (e) => {
         if (e.model) {
           r.actualModels ??= {};
           r.actualModels[role] = e.model;
@@ -885,6 +889,7 @@ export class Coordinator extends EventEmitter {
         throw error;
       } finally {
         watcher?.close();
+        this.agentTool = null;
         this.recordCommands(r.projectId, commands, { runId: r.id, round: r.round, directory: r.project.directory });
       }
       r.inflight = null;
@@ -1117,6 +1122,47 @@ export class Coordinator extends EventEmitter {
     this.notify();
     return false;
   }
+  // ---- Authorized checks for Claude (P4 stabilization) ----
+  // Where the loopback endpoint listens, set by the server once it is up. Without it Claude is simply told that
+  // Automata runs the checks after its turn.
+  setCheckEndpoint(url) {
+    this.checkEndpoint = url ? new URL(CHECK_ENDPOINT_PATH, url).href : null;
+  }
+  // What a prompt may promise Claude: the exact command it can run to get the project's checks, or nothing.
+  checkToolCommand(r) {
+    if (this.demo || !this.checkEndpoint || r.settings.accessMode !== "limited" || !r.project.checks.length) return null;
+    this.checkScript ??= installCheckScript();
+    return this.checkScript?.command ?? null;
+  }
+  // One token for one Claude call: it works only while that call is running and only for this run's checks.
+  openCheckTool(r, dir) {
+    const command = this.checkToolCommand(r);
+    if (!command) return null;
+    const token = randomUUID();
+    this.agentTool = { token, runId: r.id, dir, calls: 0, running: false };
+    return { command, env: { AUTOMATA_CHECK_URL: this.checkEndpoint, AUTOMATA_CHECK_TOKEN: token } };
+  }
+  // The project's own checks, run on Claude's request with the function that runs them after its turn. They are the
+  // commands the person approved in the proposal; nothing Claude says can change what runs.
+  async agentChecks(token) {
+    const tool = this.agentTool, r = this.active;
+    const given = Buffer.from(String(token ?? "")), known = Buffer.from(tool?.token ?? "");
+    if (!tool || !r || r.id !== tool.runId || given.length !== known.length || !timingSafeEqual(given, known)) throw Object.assign(new Error("Esta herramienta solo funciona mientras Claude trabaja en una tarea de Automata."), { status: 401 });
+    if (tool.running) throw Object.assign(new Error("Ya hay una verificación en marcha; espera a que termine."), { status: 409 });
+    if (tool.calls >= MAX_AGENT_CHECK_CALLS) throw Object.assign(new Error(`Ya se usaron las ${MAX_AGENT_CHECK_CALLS} verificaciones de esta tarea. Termina y reporta: Automata las vuelve a ejecutar después de tu turno.`), { status: 429 });
+    const check = this.resources ? await this.resources({ budgetMB: this.settings.ramBudgetMB }) : { ok: true };
+    if (!check.ok) throw Object.assign(new Error("Falta memoria en esta PC para ejecutar las verificaciones ahora; Automata las ejecutará después de tu turno."), { status: 503 });
+    tool.running = true;
+    tool.calls++;
+    try {
+      const folder = path.join(tool.dir, `claude-checks-${tool.calls}`);
+      fs.mkdirSync(folder, { recursive: true });
+      const results = await this.checks(r.project, folder, this.controller.signal, (e) => this.event(e));
+      return { passed: results.every((c) => c.passed), checks: results.map((c) => ({ command: c.command, passed: c.passed, code: c.code, output: tail(c.output, 3500), stderr: tail(c.stderr, 1200) })) };
+    } finally {
+      tool.running = false;
+    }
+  }
   // ---- Delivery (P4) ----
   // Only projects created from an idea for a local web page, with the delivery criteria in their list (older ones
   // are not surprised with new requirements).
@@ -1129,28 +1175,50 @@ export class Coordinator extends EventEmitter {
   // Automata checks the delivery as soon as both files exist and says so in the evidence. It is not a failing check
   // (the checks list keeps its size); the gate at completion has the last word.
   async checkDeliveryEvidence(r) {
-    if (!this.deliveryManaged(r)) return;
-    const dir = r.project.directory, has = (name) => { try { return fs.readdirSync(dir).some((f) => f.toLowerCase() === name.toLowerCase()); } catch { return false; } };
-    // Each piece is checked as soon as it exists: the plan builds the launcher and the guide in different tasks, and the
-    // director reviews the first one before the second is written.
-    const parts = { launcher: has(LAUNCHER), guide: has(GUIDE) };
-    if (!parts.launcher && !parts.guide) { delete r.deliveryCheck; return; }
-    const env = await this.detect().catch(() => null);
-    const result = await this.verify({ directory: dir, runCommand: r.review?.run?.ready ? r.review.run.command : "", env, language: r.settings.language ?? this.settings.language, parts });
-    r.deliveryCheck = { at: now(), round: r.round, ok: result.ok, browser: !!result.browser?.ran, parts };
-    if (result.ok) delete r.deliveryProblems;
-    else r.deliveryProblems = result.problems;
+    if (this.demo) return;
+    const dir = r.project.directory, language = r.settings.language ?? this.settings.language;
+    const has = (name) => { try { return fs.readdirSync(dir).some((f) => f.toLowerCase() === name.toLowerCase()); } catch { return false; } };
+    const web = !!r.project.platform && platformKind(r.project.platform) === "web";
+    const managed = this.deliveryManaged(r);
+    // What is true of the text in every project, and what only a web page can show.
+    const encoding = (() => { try { return checkProjectText(dir, { language }); } catch { return null; } })();
+    let page = null, ui = null, delivery = null;
+    if (web) {
+      const env = await this.detect().catch(() => null);
+      const scenarios = loadScenarios(dir, language);
+      // Each piece is checked as soon as it exists: the plan builds the launcher and the guide in different tasks, and the
+      // director reviews the first one before the second is written. Before either exists, the page itself (index.html).
+      const parts = { launcher: managed && has(LAUNCHER), guide: managed && has(GUIDE) };
+      const entry = !parts.launcher && !parts.guide && has("index.html") ? "index.html" : null;
+      if (managed && !parts.launcher && !parts.guide) delete r.deliveryCheck;
+      if (parts.launcher || parts.guide || entry) {
+        const result = await this.verify({ directory: dir, runCommand: r.review?.run?.ready ? r.review.run.command : "", env, language, parts, entry, scenarios: scenarios.scenarios, scenarioIssues: scenarios.problems });
+        if (parts.launcher || parts.guide) {
+          r.deliveryCheck = { at: now(), round: r.round, ok: result.ok, browser: !!result.browser?.ran, parts };
+          if (result.ok) delete r.deliveryProblems;
+          else r.deliveryProblems = result.problems;
+          delivery = { launcher: parts.launcher && result.ok, guide: parts.guide && result.ok };
+        }
+        if (result.report || result.open) {
+          page = result.report ? summarizePage({ ...result.report, target: result.open?.target }) : { status: "failed", target: result.open?.target ?? null, title: "", controls: 0, browser: "", resources: { total: 0, loaded: 0, failed: [], files: [] }, errors: result.problems.slice(0, 4), storageKeys: [] };
+          // The scenarios that ran, or why they did not.
+          ui = summarizeScenarios(scenarios, result.report?.scenarios ?? null, !!result.report && !result.report.skipped);
+        }
+      }
+    }
+    r.autoEvidence = buildAutomataEvidence({ round: r.round, checks: r.checks, page, ui, encoding, delivery, webManaged: web && !!page });
   }
   // Returns "skip" (not managed), "ready", "retry" (the director's approval is turned into a task for the coder with
   // the problems) or "blocked" (the person is needed after MAX_DELIVERY_ATTEMPTS tries).
   async deliveryGate(r, review) {
     if (!this.deliveryManaged(r)) return "skip";
-    const tag = { runId: r.id, projectId: r.projectId }, language = r.settings.language ?? this.settings.language;
-    this.event({ role: "system", kind: "phase", text: "Comprobando que la aplicación se pueda abrir con un doble clic…", ...tag });
+    const tag = { runId: r.id, projectId: r.projectId }, language = r.settings.language ?? this.settings.language, en = language === "en";
+    this.event({ role: "system", kind: "phase", text: en ? "Checking that the app opens with a double-click…" : "Comprobando que la aplicación se pueda abrir con un doble clic…", ...tag });
     // Starting a server and a browser is heavy too: the same look at memory as before an agent.
     await this.requireResources();
     const env = await this.detect().catch(() => null);
-    const result = await this.verify({ directory: r.project.directory, runCommand: review.run?.ready ? review.run.command : "", env, language });
+    const scenarios = loadScenarios(r.project.directory, language);
+    const result = await this.verify({ directory: r.project.directory, runCommand: review.run?.ready ? review.run.command : "", env, language, scenarios: scenarios.scenarios, scenarioIssues: scenarios.problems });
     if (this.controller?.signal.aborted) throw Object.assign(new Error("Detenido"), { name: "AbortError" });
     r.deliveryChecks = [...(r.deliveryChecks ?? []), { at: now(), round: r.round, ok: result.ok, mode: result.mode, problems: result.problems }].slice(-6);
     if (result.ok) {
@@ -1158,7 +1226,7 @@ export class Coordinator extends EventEmitter {
       delete r.deliveryProblems;
       r.delivery = this.buildDelivery(r, review, result);
       for (const offer of r.runOffers ?? []) if (offer.status === "pending") offer.status = "superseded";
-      this.event({ role: "system", kind: "success", text: `Tu aplicación está lista. Se guardó en ${r.project.directory}. Ábrela con el botón «Abrir aplicación»; la guía ${GUIDE} explica cómo usarla.`, ...tag });
+      this.event({ role: "system", kind: "success", text: en ? `Your app is ready. It was saved in ${r.project.directory}. Open it with the «Open app» button; the guide ${GUIDE} explains how to use it.` : `Tu aplicación está lista. Se guardó en ${r.project.directory}. Ábrela con el botón «Abrir aplicación»; la guía ${GUIDE} explica cómo usarla.`, ...tag });
       this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "note", text: `Entrega comprobada en la ronda ${r.round}: se abre con ${LAUNCHER} (${result.mode === "server" ? "servidor local" : "página " + result.open?.target}) y se explica en ${GUIDE}.`, source: "automata", runId: r.id, round: r.round }));
       return "ready";
     }
@@ -1170,13 +1238,13 @@ export class Coordinator extends EventEmitter {
     if (exhausted) {
       r.status = "blocked";
       r.stage = "review";
-      this.event({ role: "system", kind: "warning", text: `Se necesita tu intervención: la aplicación no quedó lista para entregarse tras ${r.deliveryAttempts} intentos. ${shown}`, ...tag });
+      this.event({ role: "system", kind: "warning", text: en ? `Your attention is needed: the app was not ready to hand over after ${r.deliveryAttempts} attempts. ${shown}` : `Se necesita tu intervención: la aplicación no quedó lista para entregarse tras ${r.deliveryAttempts} intentos. ${shown}`, ...tag });
       return "blocked";
     }
-    this.event({ role: "system", kind: "warning", text: `La aplicación todavía no está lista para entregarse (intento ${r.deliveryAttempts} de ${MAX_DELIVERY_ATTEMPTS}). ${shown} Claude lo corrige y se vuelve a comprobar.`, ...tag });
+    this.event({ role: "system", kind: "warning", text: en ? `The app is not ready to hand over yet (attempt ${r.deliveryAttempts} of ${MAX_DELIVERY_ATTEMPTS}). ${shown} Claude fixes it and it is checked again.` : `La aplicación todavía no está lista para entregarse (intento ${r.deliveryAttempts} de ${MAX_DELIVERY_ATTEMPTS}). ${shown} Claude lo corrige y se vuelve a comprobar.`, ...tag });
     review.decision = "continue";
     review.nextPrompt = deliveryFixPrompt(result.problems, language);
-    review.summary = `${review.summary} · Entrega pendiente: ${shown}`.slice(0, 1500);
+    review.summary = `${review.summary} · ${en ? "Delivery pending" : "Entrega pendiente"}: ${shown}`.slice(0, 1500);
     // The plan already says everything is done: this round is not a plan task, and must not reopen one.
     r.taskId = null;
     r.files = [];
@@ -1341,10 +1409,45 @@ export class Coordinator extends EventEmitter {
         if (review.decision === "complete" && attempt === 1 && !this.demo && (options.team?.index ?? 0) === 0 && options.git?.mode !== "off" && options.git?.info?.repo && options.git.info.dirty && !normalizeGit(review.git).commit) throw invalidReview("Marcas el objetivo completo pero hay cambios sin confirmar en Git y no pediste el commit. Entrega la revisión de nuevo con git.commit=true y un mensaje convencional (feat:, fix:, test:, docs:) para que la persona conserve la versión; si no corresponde guardarlos, dilo en summary.");
         // The director cannot open a window or double-click: blocking for that is not a missing condition of the world,
         // it is evidence Claude can produce. Asked once; if the director insists, the person decides.
-        if (review.decision === "blocked" && attempt === 1 && !this.demo && NEEDS_A_HUMAN_CLICK.test(`${review.summary} ${review.nextPrompt}`)) throw invalidReview("Marcaste decision=blocked porque nadie puede abrir la aplicación, hacer doble clic o probarla a mano, pero eso no es una condición externa que falte: tú eres de solo lectura y no puedes hacerlo, y la persona no tiene que hacerlo por ti. Claude puede añadir pruebas automáticas (node --test, sin dependencias) de la lógica y del controlador de la interfaz, y Automata abre la página en un navegador real y te muestra el resultado en la sección ENTREGA de la evidencia cuando existe. Si lo que falta es evidencia, entrega decision=continue con una tarea concreta para Claude que la produzca, o marca el criterio con lo que sí está comprobado. Mantén blocked solo si hace falta una decisión o un dato de la persona.");
+        // On a web page with a browser Automata has: asked twice, then the block becomes a task for Claude (at most
+        // MAX_BLOCK_OVERRIDES times per run). Anywhere else it is asked once and the person has the last word.
+        // A block about a decision, data, a secret, a payment or a publication is never touched.
+        let overridden = null;
+        if (review.decision === "blocked" && !this.demo) {
+          const run = this.active;
+          const block = classifyBlock(review, { evidence: run.autoEvidence, web: !!run.project.platform && platformKind(run.project.platform) === "web" });
+          if (block.humanCheck && !block.sensitive) {
+            if (!block.actionable) {
+              if (attempt === 1) throw invalidReview("Marcaste decision=blocked porque nadie puede abrir la aplicación, hacer doble clic o probarla a mano, pero eso no es una condición externa que falte: tú eres de solo lectura y no puedes hacerlo, y la persona no tiene que hacerlo por ti. Claude puede añadir pruebas automáticas (node --test, sin dependencias) de la lógica y del controlador de la interfaz. Si lo que falta es evidencia, entrega decision=continue con una tarea concreta para Claude que la produzca, o marca el criterio con lo que sí está comprobado. Mantén blocked solo si hace falta una decisión o un dato de la persona.");
+            } else if (attempt < MAX_REVIEW_FIXES) {
+              throw Object.assign(invalidReview(reaskMessage(block, run.autoEvidence)), { brief: "el director pidió que una persona repitiera a mano una comprobación que Automata puede hacer" });
+            } else if ((run.blockOverrides ?? 0) < MAX_BLOCK_OVERRIDES) {
+              overridden = { original: structuredClone(review), covered: coveredText(block, run.autoEvidence) };
+              overrideReview(review, block, run.autoEvidence);
+              // The work continues on the task the director was reviewing when it did not name one.
+              if (!/^T\d+$/i.test(String(review.task ?? "").trim()) && run.taskId) review.task = `T${run.taskId}`;
+            }
+          }
+        }
         if (review.decision === "complete" && this.active.checks.some((c) => !c.passed)) throw invalidReview("El auditor intentó aprobar con verificaciones fallidas. Revisa la evidencia antes de continuar.");
         // The plan is the last check: a decision that breaks it rolls back whole and comes back here.
-        const planResult = this.applyPlanDecision(review, phase, index, project);
+        let planResult;
+        try {
+          planResult = this.applyPlanDecision(review, phase, index, project);
+        } catch (error) {
+          // The task the director named cannot take the work (no open task, a dependency pending): then its block stands.
+          if (!overridden || !error.plan) throw error;
+          Object.assign(review, overridden.original);
+          overridden = null;
+          planResult = this.applyPlanDecision(review, phase, index, project);
+        }
+        if (overridden) {
+          const run = this.active;
+          run.blockOverrides = (run.blockOverrides ?? 0) + 1;
+          run.blockLog = [...run.blockLog ?? [], { at: now(), round: run.round, task: review.task ?? "", covered: overridden.covered }].slice(-10);
+          this.event({ role: "system", kind: "warning", text: `El director pidió que una persona repitiera una comprobación que Automata ya puede hacer${overridden.covered ? ` (ya comprobó: ${overridden.covered})` : ""}. No hace falta tu intervención: Claude recibe la tarea de dejar esa evidencia (${run.blockOverrides} de ${MAX_BLOCK_OVERRIDES}).` });
+          this.remember("guardar", () => this.memory.addFact(run.projectId, { kind: "recovery", text: `Ronda ${run.round}: un bloqueo del director pedía una prueba manual que Automata puede ejecutar; pasó a ser una tarea para Claude.`, source: "automata", runId: run.id, round: run.round }));
+        }
         return { result, review, taskId: planResult.taskId ?? null };
       } catch (error) {
         if (classifyError(error).kind !== "malformed") throw error;
@@ -1353,7 +1456,7 @@ export class Coordinator extends EventEmitter {
         r.recovery.log = [...r.recovery.log, { at: now(), kind: "malformed", role, stage: r.stage, round: r.round, attempt, message: clip(error.message, 300) }].slice(-60);
         this.remember("guardar", () => this.memory.addFact(r.projectId, { kind: "recovery", text: `Ronda ${r.round}: la revisión del director no fue válida (${clip(error.message, 120)}); intento ${attempt} de ${MAX_REVIEW_FIXES}.`, source: "automata", runId: r.id, round: r.round }));
         if (attempt >= MAX_REVIEW_FIXES) throw Object.assign(new Error(`El director no entregó una revisión válida en ${MAX_REVIEW_FIXES} intentos. Último motivo: ${error.message}`), { kind: "fatal", role });
-        this.event({ role: "system", kind: "warning", text: `Revisión no válida (${attempt}/${MAX_REVIEW_FIXES}): ${error.message} Se le pide al director que la corrija.` });
+        this.event({ role: "system", kind: "warning", text: `Revisión no válida (${attempt}/${MAX_REVIEW_FIXES}): ${error.brief ?? error.message} Se le pide al director que la corrija.` });
         fix = error;
         if (this.controller.signal.aborted) throw Object.assign(new Error("Detenido"), { name: "AbortError" });
         if (this.pauseIfRequested()) throw Object.assign(new Error("Pausado"), { name: "AbortError", paused: true });
@@ -1398,7 +1501,9 @@ ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige ev
 ENTREGA (la comprobó Automata y sigue pendiente; no apruebes el objetivo hasta que esté resuelta):
 ${r.deliveryProblems.map((x) => "- " + x).join("\n")}` : r.deliveryCheck?.ok ? `
 
-${deliveryEvidence(r.deliveryCheck)} Eres de solo lectura y no puedes hacer doble clic ni ejecutar el lanzador: no pidas que una persona lo haga ni marques blocked por eso.` : ""}`;
+${deliveryEvidence(r.deliveryCheck)} Eres de solo lectura y no puedes hacer doble clic ni ejecutar el lanzador: no pidas que una persona lo haga ni marques blocked por eso.` : ""}${r.autoEvidence ? `
+
+${renderAutomataEvidence(r.autoEvidence, s.language ?? this.settings.language)}` : ""}`;
         const evidenceFull = `CAMBIOS PREVIOS:
 ${r.baseline}
 
@@ -1527,7 +1632,8 @@ ${state}`;
         if (planText) fs.writeFileSync(path.join(work, "plan-code.txt"), planText);
         // Already normalized by validateReview: relative paths inside the project, no "..".
         const files = r.files ?? [];
-        const prompts = { full: coderPrompt(p, s, task, r.baseline, teamInfo, false, memory, planText, files), short: coderPrompt(p, s, task, r.baseline, teamInfo, true, memory, planText, files) };
+        const extras = { checkCommand: this.checkToolCommand(r), web: !!p.platform && platformKind(p.platform) === "web" };
+        const prompts = { full: coderPrompt(p, s, task, r.baseline, teamInfo, false, memory, planText, files, extras), short: coderPrompt(p, s, task, r.baseline, teamInfo, true, memory, planText, files, extras) };
         this.persist();
         let result;
         try {

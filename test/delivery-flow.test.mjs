@@ -9,7 +9,7 @@ import net from "node:net";
 import { validateProject } from "../server/config.mjs";
 import { Store } from "../server/store.mjs";
 import { Coordinator } from "../server/coordinator.mjs";
-import { LAUNCHER, GUIDE, deliveryCriteria } from "../server/delivery.mjs";
+import { LAUNCHER, GUIDE, deliveryCriteria, verifyDelivery } from "../server/delivery.mjs";
 
 const dirs = [];
 const fixture = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "automata-dflow-")); dirs.push(d); return d; };
@@ -19,6 +19,8 @@ const until = async (condition, ms = 8000) => { const limit = Date.now() + ms; w
 
 // A PC without a browser: the start check looks at files and skips the screen, which the unit tests cover with Chrome.
 const ENV = { system: { name: "Windows 11" }, tools: { node: { version: "24.0.0" }, npm: { found: true }, git: { found: true }, powershell: { found: true }, browser: { found: false } }, targets: { web: { ready: true, missing: [], notes: [] }, windows: { ready: false, missing: ["Una herramienta para crear el instalador."] }, android: { ready: false, missing: ["Java (JDK 17 o 21)."] } } };
+// The same PC with Chrome: the browser itself is replaced by the one the test hands over (the real one is covered in delivery.test.mjs).
+const ENV_BROWSER = { ...ENV, tools: { ...ENV.tools, browser: { found: true, name: "Chrome", path: "C:/chrome.exe" } } };
 const GUIDE_TEXT = `# Propinas
 ## Instalar
 No hay nada que instalar: solo un navegador como Chrome o Edge.
@@ -48,10 +50,10 @@ const creator = (root) => async (input) => { const directory = path.join(root, "
 const passing = async (p) => p.checks.map((command) => ({ command, passed: true, code: 0, output: "ok" }));
 
 // coderWrites(dir, n): what Claude leaves in the folder on its n-th call. reviews: the director's prompts, for the evidence.
-function setup(t, { platform, coderWrites, tasks = platform && !/web/i.test(platform) ? 4 : 6, seedPlan = false, director = null } = {}) {
+function setup(t, { platform, coderWrites, tasks = platform && !/web/i.test(platform) ? 4 : 6, seedPlan = false, director = null, browser = null, language = null } = {}) {
   const dir = fixture(), calls = { coder: [], auditor: [] }, opened = [];
   let reviews = 0;
-  const c = new Coordinator(new Store(path.join(dir, "data")), { evidence: async () => "", checks: passing, resumeDelayMs: 0, detect: async () => ENV, opener: (target) => opened.push(target), resources: null, agents: { async run(a) {
+  const c = new Coordinator(new Store(path.join(dir, "data")), { evidence: async () => "", checks: passing, resumeDelayMs: 0, detect: async () => browser ? ENV_BROWSER : ENV, ...browser ? { verify: (o) => verifyDelivery({ ...o, browser }) } : {}, opener: (target) => opened.push(target), resources: null, agents: { async run(a) {
     calls[a.role]?.push({ phase: a.phase, prompt: a.prompt });
     if (a.phase === "define") return { proposal: proposal(platform) };
     if (a.role === "coder") { coderWrites?.(a.project.directory, calls.coder.length); return { text: "Hecho" }; }
@@ -62,7 +64,7 @@ function setup(t, { platform, coderWrites, tasks = platform && !/web/i.test(plat
     if (scripted) return { review: scripted };
     return { review: a.phase === "plan" ? reviewOf(a.project, "continue", 0, { task: seedPlan ? "N1" : "T1", ...added }) : reviewOf(a.project, "complete", tasks) };
   } } });
-  c.updateSettings({ ...c.settings, projectsRoot: path.join(dir, "projects"), gitMode: "off", maxRounds: 8 });
+  c.updateSettings({ ...c.settings, projectsRoot: path.join(dir, "projects"), gitMode: "off", maxRounds: 8, ...language ? { language } : {} });
   t.after(async () => { await c.close(); });
   return { c, dir, calls, opened };
 }
@@ -270,4 +272,113 @@ test("si el director bloquea porque nadie puede abrir la página, se le devuelve
   await settled(real.c);
   assert.equal(real.c.active.status, "blocked");
   assert.equal(real.calls.auditor.filter((x) => x.phase === "review").length, 1, "un bloqueo legítimo no se cuestiona");
+});
+
+// ---- P4 stabilization: evidence for the director, blocks that Automata can resolve, messages in the configured language ----
+const seenPage = (extra = {}) => ({ ok: true, title: "Propinas", controls: 2, browser: "chrome.exe", resources: { total: 2, loaded: 2, failed: [], files: ["index.html", "app.js"] }, storageKeys: [], scenarios: [], scenarioProblems: [], problems: [], ...extra });
+// A browser that "runs" the scenarios it is given: those whose name has «malo» fail, the rest pass.
+const fakeBrowser = (opened = []) => async (url, o) => {
+  opened.push({ url, scenarios: o.scenarios ?? [] });
+  const results = (o.scenarios ?? []).map((s) => ({ name: s.name, ok: !/malo/.test(s.name), steps: s.steps.length, failed: /malo/.test(s.name) ? { index: 1, step: "expectText x", message: "expectText x: ese texto no apareció." } : null }));
+  return seenPage({ scenarios: results, scenarioProblems: results.filter((x) => !x.ok).map((x) => `En el escenario «${x.name}», paso 2: ${x.failed.message}`) });
+};
+const blockedOn = (project, text, extra = {}) => reviewOf(project, "blocked", 0, { summary: text, nextPrompt: text, task: "T1", plan: { add: [], update: [{ id: 1, status: "blocked", evidence: "", note: text }] }, ...extra });
+const writeUi = (dir, name = "Guardar") => fs.writeFileSync(path.join(dir, "ui-check.json"), JSON.stringify({ scenarios: [{ name, steps: [{ fill: "#total", value: "10" }, { click: "button" }, { expectText: "5" }] }] }));
+
+test("el director recibe, ronda a ronda, lo que Automata comprobó: pruebas, arranque, recursos, errores del navegador, interfaz y codificación", async (t) => {
+  const opened = [];
+  const { c, dir, calls } = setup(t, { browser: fakeBrowser(opened), coderWrites: (folder) => { writeApp(folder); fs.writeFileSync(path.join(folder, "nota.md"), "# Nota\nCon acentos: canción."); } });
+  await create(c, dir);
+  await settled(c);
+  const first = calls.auditor.find((x) => x.phase === "review");
+  assert.match(first.prompt, /COMPROBACIONES DE AUTOMATA \(ronda 1; las ejecutó Automata por su cuenta/);
+  assert.match(first.prompt, /PRUEBAS: correcto · node --test → código 0/);
+  assert.match(first.prompt, /ARRANQUE: correcto · la página se abrió en chrome\.exe sin ventana: «Propinas», 2 controles\./);
+  assert.match(first.prompt, /RECURSOS: correcto · 2 de 2 archivos cargaron \(index\.html, app\.js\)/);
+  assert.match(first.prompt, /ERRORES DEL NAVEGADOR: ninguno/);
+  assert.match(first.prompt, /INTERFAZ: SIN ESCENARIOS · no hay ui-check\.json/);
+  assert.match(first.prompt, /CODIFICACIÓN: correcto[\s\S]*Get-Content -Raw -Encoding UTF8/);
+  assert.ok(opened.some((o) => /index\.html$/.test(o.url)), "con solo index.html (aún sin lanzador) ya se abrió la página en el navegador");
+  assert.equal(c.active.autoEvidence.tests.status, "ok");
+  assert.equal(c.active.checks.length, 1, "las comprobaciones de Automata no cambian la lista de verificaciones del proyecto");
+});
+
+test("un escenario de interfaz que falla lo ve el director y la entrega vuelve a Claude con el paso exacto; al corregirlo queda lista", async (t) => {
+  const opened = [];
+  const { c, dir, calls } = setup(t, { browser: fakeBrowser(opened), coderWrites: (folder, n) => { writeApp(folder); writeDelivery(folder); writeUi(folder, n === 1 ? "Guardar malo" : "Guardar"); } });
+  await create(c, dir);
+  await until(() => calls.auditor.filter((x) => x.phase === "review").length >= 1);
+  const first = calls.auditor.find((x) => x.phase === "review");
+  assert.match(first.prompt, /INTERFAZ: FALLA · 1 escenario\(s\) hechos en un navegador real: «Guardar malo» \(falló el paso 2: expectText x: ese texto no apareció\.\)/);
+  assert.match(first.prompt, /ENTREGA \(la comprobó Automata y sigue pendiente[\s\S]*Escenarios de interfaz \(ui-check\.json\): En el escenario «Guardar malo», paso 2/);
+  await settled(c);
+  assert.equal(c.active.status, "complete", c.active.error);
+  assert.equal(c.active.delivery.status, "ready");
+  assert.ok(opened.some((o) => o.scenarios.some((s) => s.name === "Guardar")), "los escenarios llegaron al navegador");
+});
+
+test("un ui-check.json ilegible es un problema de la entrega que Claude puede corregir, no un bloqueo", async (t) => {
+  const { c, dir } = setup(t, { browser: fakeBrowser(), coderWrites: (folder, n) => { writeApp(folder); writeDelivery(folder); fs.writeFileSync(path.join(folder, "ui-check.json"), n === 1 ? "{ roto" : JSON.stringify({ scenarios: [{ name: "Ok", steps: [{ expectText: "Propinas" }] }] })); } });
+  await create(c, dir);
+  await settled(c);
+  assert.equal(c.active.status, "complete", c.active.error);
+  assert.ok(c.active.deliveryChecks.some((x) => !x.ok && x.problems.some((p) => /Escenarios de interfaz \(ui-check\.json\): ui-check\.json no es un JSON válido/.test(p))), "la compuerta final lo devolvió a Claude con el motivo");
+});
+
+test("con navegador, el director que bloquea por una prueba manual recibe dos reenvíos y, si insiste, el bloqueo pasa a ser una tarea para Claude; nunca se aprueba solo", async (t) => {
+  for (const block of JSON.parse(fs.readFileSync(new URL("./fixtures/real-blocks.json", import.meta.url), "utf8"))) {
+    const { c, dir, calls } = setup(t, { browser: fakeBrowser(), coderWrites: (folder) => { writeApp(folder); writeDelivery(folder); }, director: (a, n) => n <= 3 ? blockedOn(a.project, block.summary, { nextPrompt: block.nextPrompt }) : null });
+    await create(c, dir);
+    await settled(c);
+    const reviews = calls.auditor.filter((x) => x.phase === "review");
+    assert.equal(c.active.status, "complete", `${block.label}: ${c.active.error}`);
+    assert.equal(reviews.length, 4, "dos reenvíos, un tercer bloqueo convertido en tarea y la revisión siguiente");
+    assert.match(reviews[1].prompt, /AUTOMATA ejecuta esas comprobaciones por su cuenta[\s\S]*Lo que Automata YA comprobó y no debe repetir una persona: las pruebas del proyecto/);
+    assert.equal(c.active.blockOverrides, 1);
+    assert.ok(c.events.some((e) => /El director pidió que una persona repitiera una comprobación que Automata ya puede hacer \(ya comprobó: .*\)\. No hace falta tu intervención: Claude recibe la tarea[\s\S]*\(1 de 2\)/.test(e.text)));
+    assert.ok(!c.events.some((e) => /^Se necesita tu intervención/.test(e.text)), "la persona no fue molestada");
+    assert.ok(calls.coder.some((x) => /Automata ya hace esas comprobaciones por su cuenta[\s\S]*ui-check\.json/.test(x.prompt)), `${block.label}: Claude recibió la tarea de dejar el escenario`);
+    assert.equal(c.active.review.decision, "complete");
+    assert.equal(c.active.delivery.status, "ready");
+  }
+});
+
+test("el director que sigue bloqueando después de dos conversiones deja el bloqueo a la persona; y un bloqueo sensible no se toca nunca", async (t) => {
+  const stubborn = setup(t, { browser: fakeBrowser(), coderWrites: (folder) => { writeApp(folder); writeDelivery(folder); }, director: (a) => blockedOn(a.project, "Falta que alguien haga doble clic en Abrir.cmd y confirme que se abre la página.") });
+  await create(stubborn.c, stubborn.dir);
+  await settled(stubborn.c);
+  assert.equal(stubborn.c.active.status, "blocked");
+  assert.equal(stubborn.c.active.blockOverrides, 2, "como máximo dos conversiones por trabajo");
+  assert.equal(stubborn.calls.auditor.filter((x) => x.phase === "review").length, 9, "tres consultas por ronda: dos reenvíos y la conversión o el bloqueo definitivo");
+  assert.match(stubborn.c.events.at(-1).text, /Se necesita tu intervención: Falta que alguien haga doble clic/);
+  for (const text of ["Falta la credencial de la API; alguien debe abrir la cuenta y entregarla.", "Falta saber en qué moneda debe mostrar los importes."]) {
+    const legit = setup(t, { browser: fakeBrowser(), coderWrites: (folder) => { writeApp(folder); writeDelivery(folder); }, director: (a) => blockedOn(a.project, text) });
+    await create(legit.c, legit.dir);
+    await settled(legit.c);
+    assert.equal(legit.c.active.status, "blocked");
+    assert.equal(legit.calls.auditor.filter((x) => x.phase === "review").length, 1, "un bloqueo legítimo no se cuestiona");
+    assert.equal(legit.c.active.blockOverrides ?? 0, 0);
+  }
+});
+
+test("si la tarea que nombró el director no puede recibir el trabajo, su bloqueo se respeta en vez de romper el trabajo", async (t) => {
+  const { c, dir } = setup(t, { browser: fakeBrowser(), coderWrites: (folder) => { writeApp(folder); writeDelivery(folder); }, director: (a, n) => n <= 3 ? blockedOn(a.project, "Falta que alguien haga doble clic en Abrir.cmd.", { task: "T6" }) : null });
+  await create(c, dir);
+  await settled(c);
+  assert.notEqual(c.active.status, "error", c.active.error);
+  assert.equal(c.active.status, "blocked", "T6 depende de tareas sin hacer: no admite el trabajo");
+  assert.equal(c.active.blockOverrides ?? 0, 0);
+});
+
+test("en inglés, los problemas de entrega, los avisos y la orden a Claude están en inglés", async (t) => {
+  const { c, dir, calls } = setup(t, { language: "en", coderWrites: (folder, n) => { writeApp(folder); fs.writeFileSync(path.join(folder, GUIDE), GUIDE_TEXT); if (n >= 2) fs.writeFileSync(path.join(folder, LAUNCHER), '@echo off\r\nstart "" "%~dp0index.html"\r\n'); } });
+  await create(c, dir);
+  await settled(c);
+  assert.equal(c.active.status, "complete", c.active.error);
+  const warning = c.events.find((e) => /not ready to hand over yet/.test(e.text));
+  assert.match(warning.text, /The app is not ready to hand over yet \(attempt 1 of 3\)\. Abrir\.cmd is missing from the project folder\. Claude fixes it and it is checked again\./);
+  const fix = calls.coder[1].prompt;
+  assert.match(fix, /The app is not ready to be handed to a person yet\. Automata checked the delivery and found:\n- Abrir\.cmd is missing from the project folder\./);
+  assert.ok(c.events.some((e) => /Your app is ready\. It was saved in/.test(e.text)));
+  assert.doesNotMatch(c.active.deliveryChecks[0].problems.join(" "), /Falta /);
 });

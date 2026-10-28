@@ -1,4 +1,6 @@
 import { MODES } from "./config.mjs";
+import { SCENARIO_FILE, SCENARIO_FORMAT } from "./scenarios.mjs";
+import { MAX_AGENT_CHECK_CALLS } from "./agenttools.mjs";
 export function brief(project, settings) {
   return `PROYECTO: ${project.name}
 CARPETA: ${project.directory}
@@ -131,12 +133,24 @@ ${directorFilesRule}
 ${directorMemoryRule}
 ${closing}`;
 }
-export function coderPrompt(project, settings, task, baseline, team = null, short = false, memory = "", plan = "", files = []) {
+// What Claude can and cannot check by itself, and where the proof comes from. Limited access cannot run node, npm or
+// PowerShell (it asks for an approval nobody gives), so Automata runs the authorized checks for it and, for a web page,
+// opens it in a real browser; nothing of that is a blocker to report. extras: { checkCommand, web }.
+export function verifySection(settings, { checkCommand = null, web = false } = {}) {
+  const limited = settings.accessMode === "limited";
+  const parts = [];
+  if (limited) parts.push(`No puedes ejecutar node, npm ni PowerShell, ni abrir archivos como Abrir.cmd: tu permiso lo rechaza, y eso NO es un bloqueo ni algo que una persona deba hacer por ti; no lo reportes como pendiente. ${checkCommand ? `Para correr las verificaciones autorizadas del proyecto (las que la persona aprobó) ejecuta exactamente  ${checkCommand}  sin argumentos (hasta ${MAX_AGENT_CHECK_CALLS} veces por tarea): Automata las ejecuta por ti y devuelve el resultado. No ejecutes otros comandos.` : "Automata ejecuta las verificaciones autorizadas del proyecto después de tu turno y muestra el resultado al director y a ti en la ronda siguiente."}`);
+  if (web) parts.push(`Automata abre la página en un navegador real y ejecuta los escenarios que dejes en ${SCENARIO_FILE} (en la raíz del proyecto): si un criterio depende de la interfaz (escribir datos, pulsar, recargar y ver qué aparece), escribe esos pasos con los datos exactos del criterio en vez de pedir que alguien lo pruebe a mano. Formato: ${SCENARIO_FORMAT}. Acciones: fill, select, click, reload, wait, expectText, expectNoText, expectValue, expectCount, expectVisible.`);
+  parts.push("Los archivos de texto se guardan en UTF-8. Si algún lector (PowerShell 5.1 sin -Encoding UTF8) muestra «Ã³» en lugar de acentos, es solo cómo se muestra: no «corrijas» archivos que están bien.");
+  return "COMPROBACIONES: " + parts.join(" ");
+}
+export function coderPrompt(project, settings, task, baseline, team = null, short = false, memory = "", plan = "", files = [], extras = {}) {
   const teamLine = team ? ` (codificador ${team.index + 1} de ${team.count}; los codificadores se turnan por ronda, así que revisa el trabajo previo en lugar de duplicarlo)` : "";
   const report = `Al terminar entrega un reporte en ${language(settings)} con: cambios y archivos, comprobaciones realmente ejecutadas y resultados, fallos o limitaciones, trabajo pendiente y, si la app ya se puede abrir, el comando para correrla. No declares completado el objetivo global: eso lo decide la auditoría independiente. ${rememberRule}`;
   const noGit = "No hagas commit, push ni merge por tu cuenta: el director decide cuándo y Automata lo ejecuta.";
   if (short) {
     return `Seguimos en la misma sesión como codificador de Automata${teamLine}. Siguen vigentes el proyecto, los criterios y tus reglas de la primera instrucción.
+${verifySection(settings, extras)}
 ${planSection(plan)}
 ${memorySection(memory)}
 ${filesSection(files)}
@@ -148,6 +162,7 @@ Implementa la tarea hasta dejarla revisable. ${noGit} ${report}`;
 ${brief(project, settings)}
 CAMBIOS QUE YA EXISTIAN AL INICIAR:
 ${baseline}
+${verifySection(settings, extras)}
 ${planSection(plan)}
 ${memorySection(memory)}
 ${filesSection(files)}
