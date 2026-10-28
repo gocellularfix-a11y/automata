@@ -1116,6 +1116,19 @@ export class Coordinator extends EventEmitter {
     if (this.demo || !p.platform || platformKind(p.platform) !== "web" || !VERIFIED_TARGETS.includes("web")) return false;
     return ["es", "en"].some((l) => p.criteria.includes(deliveryCriteria(l).launcher));
   }
+  // Evidence for the director, before it decides: the director is read-only and cannot double-click a launcher, so
+  // Automata checks the delivery as soon as both files exist and says so in the evidence. It is not a failing check
+  // (the checks list keeps its size); the gate at completion has the last word.
+  async checkDeliveryEvidence(r) {
+    if (!this.deliveryManaged(r)) return;
+    const dir = r.project.directory, has = (name) => { try { return fs.readdirSync(dir).some((f) => f.toLowerCase() === name.toLowerCase()); } catch { return false; } };
+    if (!has(LAUNCHER) || !has(GUIDE)) { delete r.deliveryCheck; return; }
+    const env = await this.detect().catch(() => null);
+    const result = await this.verify({ directory: dir, runCommand: r.review?.run?.ready ? r.review.run.command : "", env, language: r.settings.language ?? this.settings.language });
+    r.deliveryCheck = { at: now(), round: r.round, ok: result.ok, browser: !!result.browser?.ran };
+    if (result.ok) delete r.deliveryProblems;
+    else r.deliveryProblems = result.problems;
+  }
   // Returns "skip" (not managed), "ready", "retry" (the director's approval is turned into a task for the coder with
   // the problems) or "blocked" (the person is needed after MAX_DELIVERY_ATTEMPTS tries).
   async deliveryGate(r, review) {
@@ -1368,7 +1381,9 @@ ${JSON.stringify(r.checks)}
 ${p.checks.length ? "" : "Sin verificaciones automáticas configuradas; exige evidencia explícita."}${r.deliveryProblems?.length ? `
 
 ENTREGA (la comprobó Automata y sigue pendiente; no apruebes el objetivo hasta que esté resuelta):
-${r.deliveryProblems.map((x) => "- " + x).join("\n")}` : ""}`;
+${r.deliveryProblems.map((x) => "- " + x).join("\n")}` : r.deliveryCheck?.ok ? `
+
+ENTREGA (la comprobó Automata en la ronda ${r.deliveryCheck.round}: el lanzador Abrir.cmd, la guía COMO_USAR.md y el arranque real${r.deliveryCheck.browser ? ", abriendo la página en un navegador" : ""}): correcta. Es la evidencia de los criterios del lanzador y de la guía. Eres de solo lectura y no puedes hacer doble clic ni ejecutar el lanzador: no pidas que una persona lo haga ni marques blocked por eso.` : ""}`;
         const evidenceFull = `CAMBIOS PREVIOS:
 ${r.baseline}
 
@@ -1532,6 +1547,7 @@ ${state}`;
         await this.requireResources();
         r.checks = await this.checks(p, dir, this.controller.signal, (e) => this.event(e));
         r.checksRound = r.round;
+        await this.checkDeliveryEvidence(r);
         // Failing checks become open errors; a check that passes again resolves them with what changed.
         const recorded = this.remember("guardar", () => this.memory.recordChecks(p.id, { runId: r.id, round: r.round, checks: r.checks, files: changedFiles(r.watch, p.directory), report: r.coderReport }));
         if (recorded?.recurred.length) this.event({ role: "system", kind: "warning", text: `Este error ya había pasado en este proyecto (${recorded.recurred.map((id) => "E" + id).join(", ")}). La solución anterior va en la siguiente instrucción.` });

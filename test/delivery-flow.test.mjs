@@ -100,8 +100,9 @@ test("el director aprueba sin lanzador ni guía: la entrega vuelve al ciclo con 
   // The director is told, in the evidence, that the delivery is open — it cannot approve past it unnoticed.
   const reviews = calls.auditor.filter((x) => x.phase === "review");
   assert.equal(reviews.length, 2);
-  assert.match(reviews[1].prompt, /ENTREGA \(la comprobó Automata y sigue pendiente[\s\S]*Falta Abrir\.cmd/);
-  assert.doesNotMatch(reviews[0].prompt, /ENTREGA \(la comprobó/);
+  assert.doesNotMatch(reviews[0].prompt, /ENTREGA \(la comprobó/, "sin lanzador ni guía todavía no hay nada que comprobar");
+  // Round 2: both files exist, so Automata checks them before the director decides, and tells it that it cannot double-click.
+  assert.match(reviews[1].prompt, /ENTREGA \(la comprobó Automata en la ronda 2: el lanzador Abrir\.cmd, la guía COMO_USAR\.md y el arranque real\): correcta[\s\S]*no pidas que una persona lo haga ni marques blocked por eso/);
   assert.equal(r.deliveryChecks.length, 2);
   assert.deepEqual(r.deliveryChecks.map((x) => x.ok), [false, true]);
   assert.equal(r.deliveryAttempts, 0);
@@ -208,4 +209,19 @@ test("una app con servidor se abre desde el botón: la arranca, espera a que res
   assert.deepEqual(await c.deliveryAction("r1", "open", { local: true }), { opened: "url", url: `http://localhost:${port}` });
   await c.appControl("stop");
   assert.equal(c.app.view().status, "stopped");
+});
+
+test("con el lanzador y la guía ya escritos, el director recibe la comprobación como evidencia; si algo falla, ve el problema, no «correcta»", async (t) => {
+  let wrong = true;
+  const { c, dir, calls } = setup(t, { coderWrites: (folder) => { writeApp(folder); writeDelivery(folder); if (wrong) fs.writeFileSync(path.join(folder, "index.html"), '<title>x</title><script src="falta.js"></script>'); } });
+  await create(c, dir);
+  await until(() => calls.auditor.filter((x) => x.phase === "review").length >= 1);
+  const first = calls.auditor.find((x) => x.phase === "review");
+  assert.match(first.prompt, /ENTREGA \(la comprobó Automata y sigue pendiente[\s\S]*carga «falta\.js», pero ese archivo no existe/);
+  assert.doesNotMatch(first.prompt, /: correcta\./);
+  wrong = false;
+  await settled(c);
+  assert.equal(c.active.status, "complete", c.active.error);
+  assert.equal(c.active.deliveryCheck.ok, true);
+  assert.equal(c.active.checks.length, 1, "la lista de verificaciones del proyecto no cambia de tamaño");
 });
