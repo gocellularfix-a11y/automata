@@ -111,9 +111,13 @@ async function fixture() {
 test.after(async () => { if (shared) (await shared).w.cleanup(); });
 
 const failed = (report) => report.checks.filter((c) => !c.ok && c.level === "error").map((c) => c.id).sort();
+// One verification at a time: each starts a JVM, and the suite already runs many files in parallel.
+let queue = Promise.resolve();
+const serial = (work) => { const next = queue.then(work, work); queue = next.catch(() => {}); return next; };
+const verifyOne = (options) => serial(() => verifyApk(options));
 async function verify(f, overrides = {}) {
   const { expected = {}, ...rest } = overrides;
-  return verifyApk({ apkPath: f.built.apk, dataDir: f.w.data, projectDir: f.project, toolchain, expected: { permissions: [], webRoot: f.project, ...expected }, ...rest });
+  return verifyOne({ apkPath: f.built.apk, dataDir: f.w.data, projectDir: f.project, toolchain, expected: { permissions: [], webRoot: f.project, ...expected }, ...rest });
 }
 // A copy of the APK with changes, next to a copy of its build-info.json (the claim stays the original).
 function variant(f, name, change, { source = f.built } = {}) {
@@ -231,8 +235,8 @@ test("identidad, niveles de SDK, permisos aprobados y referencias se comparan co
     verify(f, { expected: { minSdk: 28 } }),
     verify(f, { expected: { targetSdk: 33 } }),
     verify(f, { expected: { knownPackages: ["apps.local.x.p1", info.app.packageName] } }),
-    verifyApk({ apkPath: f.withNet.apk, toolchain, expected: { permissions: [] } }),
-    verifyApk({ apkPath: f.withNet.apk, toolchain, expected: { permissions: ["android.permission.INTERNET"] } })
+    verifyOne({ apkPath: f.withNet.apk, toolchain, expected: { permissions: [] } }),
+    verifyOne({ apkPath: f.withNet.apk, toolchain, expected: { permissions: ["android.permission.INTERNET"] } })
   ]);
   assert.deepEqual(failed(wrongPackage), ["package"]);
   assert.deepEqual(failed(wrongMin), ["sdk"]);
@@ -244,7 +248,7 @@ test("identidad, niveles de SDK, permisos aprobados y referencias se comparan co
   assert.match(noPermission.errors.join("\n"), /Permisos sin aprobar: android\.permission\.INTERNET/);
   assert.equal(open.ok, true, open.errors.join("\n"));
   assert.deepEqual(open.facts.permissions, ["android.permission.INTERNET"]);
-  const notGranted = await verifyApk({ apkPath: f.withNet.apk, toolchain, expected: { permissions: ["android.permission.INTERNET", "android.permission.CAMERA"] } });
+  const notGranted = await verifyOne({ apkPath: f.withNet.apk, toolchain, expected: { permissions: ["android.permission.INTERNET", "android.permission.CAMERA"] } });
   assert.ok(failed(notGranted).includes("permissions"));
   assert.match(notGranted.errors.join("\n"), /CAMERA/);
 });

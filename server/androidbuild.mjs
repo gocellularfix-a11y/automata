@@ -377,10 +377,11 @@ export async function resolveToolchain({ env = process.env, home = os.homedir(),
     try { release = fs.readFileSync(path.join(dir, "release"), "utf8"); } catch { /* no release file */ }
     const version = /JAVA_VERSION="?([\d.]+)/.exec(release)?.[1] ?? null;
     const major = version ? Number(version.split(".")[0]) : 0;
-    if (SUPPORTED_JDKS.includes(major)) jdks.push({ home: dir, version, major, vendor: /IMPLEMENTOR="?([^"\r\n]+)/.exec(release)?.[1] ?? null });
+    if (SUPPORTED_JDKS.includes(major)) jdks.push({ explicit: !!javaHome && key === normalized(javaHome), home: dir, version, major, vendor: /IMPLEMENTOR="?([^"\r\n]+)/.exec(release)?.[1] ?? null });
   }
-  jdks.sort((a, b) => SUPPORTED_JDKS.indexOf(a.major) - SUPPORTED_JDKS.indexOf(b.major));
-  const jdk = jdks[0] ?? null;
+  // A JDK named on purpose (option or AUTOMATA_ANDROID_JAVA_HOME) wins; otherwise 21 before 25.
+  jdks.sort((a, b) => Number(b.explicit) - Number(a.explicit) || SUPPORTED_JDKS.indexOf(a.major) - SUPPORTED_JDKS.indexOf(b.major));
+  const jdk = jdks[0] ? { home: jdks[0].home, version: jdks[0].version, major: jdks[0].major, vendor: jdks[0].vendor } : null;
   if (!jdk) missing.push(`Un JDK ${SUPPORTED_JDKS.join(" o ")} (con javac y keytool).`);
 
   const sdk = info.tools.androidSdk;
