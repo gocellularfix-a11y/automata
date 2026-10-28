@@ -297,7 +297,8 @@ test("el director recibe, ronda a ronda, lo que Automata comprobó: pruebas, arr
   assert.match(first.prompt, /RECURSOS: correcto · 2 de 2 archivos cargaron \(index\.html, app\.js\)/);
   assert.match(first.prompt, /ERRORES DEL NAVEGADOR: ninguno/);
   assert.match(first.prompt, /INTERFAZ: SIN ESCENARIOS · no hay ui-check\.json/);
-  assert.match(first.prompt, /CODIFICACIÓN: correcto[\s\S]*Get-Content -Raw -Encoding UTF8/);
+  assert.match(first.prompt, /CODIFICACIÓN: correcto · \d+ archivos de texto leídos byte a byte/);
+  assert.match(first.prompt, /PowerShell 5\.1 ves «Ã³»[\s\S]*Get-Content -Raw -Encoding UTF8/, "las reglas del director explican la lectura sin falsas alarmas");
   assert.ok(opened.some((o) => /index\.html$/.test(o.url)), "con solo index.html (aún sin lanzador) ya se abrió la página en el navegador");
   assert.equal(c.active.autoEvidence.tests.status, "ok");
   assert.equal(c.active.checks.length, 1, "las comprobaciones de Automata no cambian la lista de verificaciones del proyecto");

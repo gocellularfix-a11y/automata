@@ -1,6 +1,7 @@
 import { MODES } from "./config.mjs";
 import { SCENARIO_FILE, SCENARIO_FORMAT } from "./scenarios.mjs";
 import { MAX_AGENT_CHECK_CALLS } from "./agenttools.mjs";
+import { READING_NOTE } from "./textcheck.mjs";
 export function brief(project, settings) {
   return `PROYECTO: ${project.name}
 CARPETA: ${project.directory}
@@ -21,7 +22,7 @@ function boundaries(settings, readOnly = false) {
   return `ACCESO COMPLETO autorizado para las tareas del usuario: puedes crear carpetas y archivos, editar, ejecutar comandos, instalar dependencias y usar la red con los permisos de esta cuenta de Windows. Si el usuario pide crear un repositorio GitHub, usa su sesión de GitHub CLI y realiza esa tarea; si no indicó visibilidad, créalo privado. Commit, push y despliegue se permiten cuando forman parte de la petición del usuario. No inventes una prohibición de crear archivos o usar servicios cuando la tarea lo solicita. No hagas acciones ajenas al objetivo ni borres trabajo existente sin una petición concreta. No tienes privilegios de administrador por este modo; si Windows o el proveedor deniega una operación, informa el error real. ${common}`;
 }
 // The director inspects and decides; it never writes. Claude writes the code and Automata runs the Git steps the director decides.
-const directorRules = `Eres de solo lectura: inspecciona el proyecto y decide, pero NO edites archivos, NO ejecutes comandos que cambien el estado y NO uses Git para modificar nada (commit, push, merge o cambio de rama). El ejecutor (Claude) escribe todo el código y las operaciones de Git que decidas en el campo git las ejecuta Automata por él. ${common}`;
+const directorRules = `Eres de solo lectura: inspecciona el proyecto y decide, pero NO edites archivos, NO ejecutes comandos que cambien el estado y NO uses Git para modificar nada (commit, push, merge o cambio de rama). El ejecutor (Claude) escribe todo el código y las operaciones de Git que decidas en el campo git las ejecuta Automata por él. ${READING_NOTE.es} ${common}`;
 function gitSection(git) {
   if (!git || git.mode === "off") return "GIT: en este proyecto no decides operaciones de Git; deja git con commit=false, push=false y cadenas vacías.";
   const info = git.info ?? {};

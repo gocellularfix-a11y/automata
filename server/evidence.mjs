@@ -3,8 +3,7 @@
 // results are produced by Automata (the project's checks, a real browser, a byte-level text check) and shown as
 // evidence. An area that was not run is never reported as correct, and a missing area is something Claude can produce,
 // not a reason to ask a person to repeat it by hand.
-import { SCENARIO_FILE, SCENARIO_FORMAT } from "./scenarios.mjs";
-import { READING_NOTE } from "./textcheck.mjs";
+import { SCENARIO_FILE } from "./scenarios.mjs";
 
 const clip = (text, max) => { const value = String(text ?? "").replace(/\s+/g, " ").trim(); return value.length > max ? value.slice(0, max - 1) + "…" : value; };
 
@@ -59,7 +58,7 @@ const T = {
     resourcesLine: (r) => `${r.failed.length ? "FALLA" : "correcto"} · ${r.loaded} de ${r.total} archivos cargaron${r.files.length ? ` (${r.files.slice(0, 8).join(", ")})` : ""}${r.failed.length ? `; no cargaron: ${r.failed.join(", ")}` : ""}.`,
     errorsNone: "ninguno (sin errores de programa, sin mensajes de error en la consola y sin recursos fallidos).",
     errorsSome: (list) => `HAY: ${list.join(" | ")}`,
-    uiNone: `SIN ESCENARIOS · no hay ${SCENARIO_FILE}. Los pasos de interfaz (escribir, pulsar, recargar y ver qué aparece) los ejecuta Automata en un navegador real si Claude los deja en ese archivo; si un criterio depende de la interfaz y nada lo demuestra, pide a Claude (decision=continue) que escriba el escenario. Formato: ${SCENARIO_FORMAT}`,
+    uiNone: `SIN ESCENARIOS · no hay ${SCENARIO_FILE}. Si un criterio depende de la interfaz (escribir, pulsar, recargar, ver qué aparece) y nada lo demuestra, pide a Claude (decision=continue) que deje ese escenario: Automata lo ejecuta en un navegador real.`,
     uiInvalid: (u) => `INVÁLIDO · ${u.problems.join(" ")}`,
     uiNotRun: "NO SE EJECUTÓ · se necesita el navegador y no pudo abrirse.",
     uiList: (u) => `${u.status === "ok" ? "correcto" : "FALLA"} · ${u.scenarios.length} escenario(s) hechos en un navegador real: ${u.scenarios.map((s) => `«${clip(s.name, 50)}» ${s.ok ? `(${s.steps} pasos, bien)` : `(falló el paso ${s.failed.step}: ${s.failed.message})`}`).join("; ")}. Compara lo que prueban con el texto exacto del criterio.${u.problems.length ? ` Avisos: ${u.problems.join(" ")}` : ""}`,
@@ -79,7 +78,7 @@ const T = {
     resourcesLine: (r) => `${r.failed.length ? "FAILS" : "ok"} · ${r.loaded} of ${r.total} files loaded${r.files.length ? ` (${r.files.slice(0, 8).join(", ")})` : ""}${r.failed.length ? `; did not load: ${r.failed.join(", ")}` : ""}.`,
     errorsNone: "none (no program errors, no console error messages and no failed resources).",
     errorsSome: (list) => `THERE ARE: ${list.join(" | ")}`,
-    uiNone: `NO SCENARIOS · there is no ${SCENARIO_FILE}. Automata runs interface steps (type, press, reload and see what appears) in a real browser if Claude leaves them in that file; if a criterion depends on the interface and nothing proves it, ask Claude (decision=continue) to write the scenario. Format: ${SCENARIO_FORMAT}`,
+    uiNone: `NO SCENARIOS · there is no ${SCENARIO_FILE}. If a criterion depends on the interface (type, press, reload, see what appears) and nothing proves it, ask Claude (decision=continue) to leave that scenario: Automata runs it in a real browser.`,
     uiInvalid: (u) => `INVALID · ${u.problems.join(" ")}`,
     uiNotRun: "NOT RUN · the browser was needed and could not open.",
     uiList: (u) => `${u.status === "ok" ? "ok" : "FAILS"} · ${u.scenarios.length} scenario(s) done in a real browser: ${u.scenarios.map((s) => `«${clip(s.name, 50)}» ${s.ok ? `(${s.steps} steps, fine)` : `(step ${s.failed.step} failed: ${s.failed.message})`}`).join("; ")}. Compare what they prove with the exact criterion text.${u.problems.length ? ` Warnings: ${u.problems.join(" ")}` : ""}`,
@@ -110,7 +109,6 @@ export function renderAutomataEvidence(ev, language = "es") {
   }
   if (ev.encoding) lines.push(`- ${t.encoding}: ${ev.encoding.status === "ok" ? t.encodingOk(ev.encoding) : t.encodingBad(ev.encoding)}`);
   lines.push(t.rules);
-  if (ev.encoding?.withAccents) lines.push(READING_NOTE[language === "en" ? "en" : "es"]);
   return lines.join("\n");
 }
 

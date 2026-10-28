@@ -61,11 +61,9 @@ test("un error del navegador o un recurso que no carga aparece como falla, no co
 test("la codificación: un error real se lista; si todo está bien se avisa de cómo leer sin falsas alarmas", () => {
   const good = renderAutomataEvidence(buildAutomataEvidence({ round: 1, checks: checks(), encoding: { status: "ok", files: 7, withAccents: 2, problems: [] } }));
   assert.match(good, /CODIFICACIÓN: correcto · 7 archivos de texto leídos byte a byte: UTF-8 válido[\s\S]*\(2 con acentos\)/);
-  assert.match(good, /PowerShell 5\.1 ves «Ã³»[\s\S]*Get-Content -Raw -Encoding UTF8/);
+  assert.doesNotMatch(good, /PowerShell 5\.1/, "la advertencia de lectura va en las reglas del director, no se repite cada ronda");
   const bad = renderAutomataEvidence(buildAutomataEvidence({ round: 1, checks: checks(), encoding: { status: "problems", files: 7, withAccents: 2, problems: [{ file: "app.js", kind: "invalid", detail: "no es UTF-8 válido" }] } }));
   assert.match(bad, /CODIFICACIÓN: ERROR REAL · app\.js no es UTF-8 válido/);
-  const noAccents = renderAutomataEvidence(buildAutomataEvidence({ round: 1, checks: checks(), encoding: { status: "ok", files: 3, withAccents: 0, problems: [] } }));
-  assert.doesNotMatch(noAccents, /PowerShell 5\.1/, "sin acentos no hace falta la advertencia");
 });
 
 test("en inglés la evidencia está completa en inglés", () => {
