@@ -4,3 +4,5 @@
 process.env.AUTOMATA_MIN_FREE_MB = "0";
 process.env.AUTOMATA_MIN_COMMIT_MB = "0";
 process.env.AUTOMATA_RAM_BUDGET_MB = "0";
+// Looking at the PC's tools (environment.mjs) never runs a program during the tests.
+process.env.AUTOMATA_ENV_PROBE = "0";
