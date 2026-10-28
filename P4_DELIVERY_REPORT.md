@@ -45,9 +45,9 @@ Fecha: 28 oct 2026 · Rama: `feature/p3-idea-to-project` (sobre `70670a0`) · **
 | `a86cb91` | Interfaz: fila «Tu aplicación está lista», diálogo de detalles, inglés, teléfono; `smoke-delivery` |
 | `a87adb0` | Documentación (`ARCHITECTURE.md`, `README`) y verificación independiente para la prueba real |
 | `47c90b9` | El director recibe la comprobación de la entrega como evidencia antes de decidir |
-| *(siguiente)* | Esa evidencia **por partes**, en cuanto existe cada una (lanzador, guía) |
-| *(siguiente)* | Si el director bloquea porque nadie puede abrir la página, se le devuelve **una vez** |
-| *(commit de cierre)* | Scripts de la prueba real corregidos y este reporte |
+| `27203d4` | Esa evidencia **por partes**, en cuanto existe cada una (lanzador, guía) |
+| `87e965e` | Si el director bloquea porque nadie puede abrir la página, se le devuelve **una vez** |
+| `30d9a7b` | Scripts de la prueba real corregidos y este reporte |
 
 **Entorno** (`environment.mjs`): solo lee. Detecta Windows, Node, npm, Git, PowerShell, Chrome o Edge, Java/JDK (PATH, `JAVA_HOME`, carpetas habituales y el JBR de Android Studio), Android SDK (plataforma, build-tools, `apksigner`, `d8`, `adb`), Gradle y empaquetadores globales. Las únicas consultas son versiones. `VERIFIED_TARGETS = ["web"]` separa «hay herramientas» de «Automata entrega y comprueba esto»; el director recibe ese texto al proponer. Resultado real en esta PC:
 
