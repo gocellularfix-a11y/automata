@@ -8,6 +8,7 @@ import { parseLauncher, parseGuide, checkGuide, pageReferences, verifyDelivery, 
 import { validateProposal } from "../server/config.mjs";
 import { detectEnvironment } from "../server/environment.mjs";
 import { checkInBrowser } from "../server/browsercheck.mjs";
+import { removeFolder } from "./rmretry.mjs";
 
 const GOOD_GUIDE = `# Calculadora de propinas
 
@@ -31,7 +32,7 @@ No guarda un historial y no tiene versión para teléfono.
 `;
 function project(t, files = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "automata-delivery-"));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => removeFolder(dir));
   for (const [name, content] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
     fs.writeFileSync(path.join(dir, name), content);
@@ -218,7 +219,7 @@ test("a una propuesta web se le añaden el lanzador y la guía, cada uno con su 
 
 test("el aviso previo es honesto sobre lo que Automata entrega hoy, aunque existan las herramientas", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "automata-plan-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => removeFolder(root));
   const env = await detectEnvironment({ env: { PATH: "" }, platform: "win32", home: root, probe: false, release: "10.0.26200" });
   const web = deliveryPlan("página web local", env);
   assert.deepEqual([web.kind, web.verified, web.toolsReady], ["web", true, true]);

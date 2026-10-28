@@ -15,10 +15,11 @@ import { CliAgents } from "../server/agents.mjs";
 import { validateProject } from "../server/config.mjs";
 import { installCheckScript, plainDirectory, allowedCheckTool, CHECK_SCRIPT, CHECK_ENDPOINT_PATH, MAX_AGENT_CHECK_CALLS } from "../server/agenttools.mjs";
 import { coderPrompt, verifySection } from "../server/prompts.mjs";
+import { removeFolder } from "./rmretry.mjs";
 
 const dirs = [];
 const fixture = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "automata-acheck-")); dirs.push(d); return d; };
-after(() => { for (const d of dirs) if (path.resolve(d).startsWith(path.join(os.tmpdir(), "automata-acheck-"))) fs.rmSync(d, { recursive: true, force: true }); });
+after(() => { for (const d of dirs) if (path.resolve(d).startsWith(path.join(os.tmpdir(), "automata-acheck-"))) removeFolder(d); });
 const settled = async (c) => { await c.pending; await c.proposalPending; while (c.busy) await new Promise((r) => setTimeout(r, 5)); };
 const CRITERION = "La suma funciona.";
 const review = (decision, plan = { add: [], update: [] }, task = "") => ({ decision, summary: `Revisión ${decision}.`, nextPrompt: decision === "continue" ? "Haz la tarea." : "", task, files: [], findings: [], criteria: [{ criterion: CRITERION, met: decision === "complete", evidence: decision === "complete" ? "ok" : "" }], git: { commit: false, message: "", push: false, branch: "", merge_into: "" }, run: { ready: false, command: "", url: "", note: "" }, memory: { add: [], retire: [] }, plan });

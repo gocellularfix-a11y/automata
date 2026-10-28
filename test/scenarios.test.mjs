@@ -90,3 +90,12 @@ test("un alert() no cuelga la comprobación y un recurso que falta se informa po
   assert.equal(seen.ok, false);
   assert.ok(seen.problems.some((p) => /falta\.js/.test(p)));
 });
+
+test("lo que aparece con un poco de retraso se espera (hasta dos segundos) y lo que nunca aparece falla con el texto que sí se vio", { skip: !chrome && "no hay Chrome ni Edge" }, async (t) => {
+  const dir = project(t, { "index.html": '<!doctype html><meta charset="utf-8"><title>Tarde</title><button id="b">Pedir</button><p id="r"></p><script>document.getElementById("b").onclick = () => setTimeout(() => { document.getElementById("r").textContent = "Listo después"; }, 700);</script>' });
+  const started = Date.now();
+  const seen = await open(dir, [scenario([{ click: "#b" }, { expectText: "Listo después" }], "Con retraso"), scenario([{ click: "#b" }, { expectText: "Nunca" }], "Nunca aparece")]);
+  assert.deepEqual(seen.scenarios.map((x) => x.ok), [true, false]);
+  assert.match(seen.scenarioProblems[0], /Nunca aparece», paso 2: expectText Nunca: ese texto no apareció\. La página decía: «.*Pedir/);
+  assert.ok(Date.now() - started > 2000, "la expectativa que no se cumple se reintentó antes de fallar");
+});

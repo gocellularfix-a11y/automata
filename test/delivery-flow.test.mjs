@@ -10,10 +10,11 @@ import { validateProject } from "../server/config.mjs";
 import { Store } from "../server/store.mjs";
 import { Coordinator } from "../server/coordinator.mjs";
 import { LAUNCHER, GUIDE, deliveryCriteria, verifyDelivery } from "../server/delivery.mjs";
+import { removeFolder } from "./rmretry.mjs";
 
 const dirs = [];
 const fixture = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "automata-dflow-")); dirs.push(d); return d; };
-after(() => { for (const d of dirs) if (path.resolve(d).startsWith(path.join(os.tmpdir(), "automata-dflow-"))) fs.rmSync(d, { recursive: true, force: true }); });
+after(() => { for (const d of dirs) if (path.resolve(d).startsWith(path.join(os.tmpdir(), "automata-dflow-"))) removeFolder(d); });
 const settled = async (c) => { await c.pending; await c.proposalPending; while (c.busy) await new Promise((r) => setTimeout(r, 5)); };
 const until = async (condition, ms = 8000) => { const limit = Date.now() + ms; while (!condition() && Date.now() < limit) await new Promise((r) => setTimeout(r, 10)); };
 

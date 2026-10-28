@@ -136,6 +136,9 @@ export async function checkInBrowser(url, { executable, timeoutMs = 20000, settl
     await Promise.race([loadedPromise, wait(Math.max(1000, deadline - Date.now()))]);
     await wait(settleMs);
     const evaluate = async (expression) => (await s("Runtime.evaluate", { returnByValue: true, awaitPromise: true, expression })).result?.value;
+    // A page is ready to be used when it says so, not when a fixed time has passed: on a busy PC the load event can be late
+    // and a click on a half-loaded page would submit the form natively instead of running the app's own code.
+    const settled = async () => { for (let i = 0; i < 100 && await evaluate("document.readyState").catch(() => "") !== "complete"; i++) await wait(100); await wait(150); };
     const page = JSON.parse(await evaluate(`JSON.stringify({ title: document.title, text: (document.body?.innerText || "").trim().length, controls: document.querySelectorAll("input, button, select, textarea, a[href]").length, children: document.body?.children.length || 0 })`) ?? "{}");
     if (!page.children && !page.text) note(en ? "The page opens blank." : "La página se abre en blanco.");
     const resources = { total: requests.size, loaded: [...requests.values()].filter((x) => x.state === "loaded").length, failed: [...requests.values()].filter((x) => x.state === "failed").map((x) => x.name), files: [...new Set([...requests.values()].map((x) => x.name))].slice(0, 30) };
@@ -150,6 +153,7 @@ export async function checkInBrowser(url, { executable, timeoutMs = 20000, settl
       const fresh = nextLoad();
       await s("Page.navigate", { url });
       await fresh;
+      await settled();
       await wait(250);
       const outcome = { name: scenario.name, ok: true, steps: scenario.steps.length, failed: null };
       for (const [index, step] of scenario.steps.entries()) {
@@ -159,11 +163,20 @@ export async function checkInBrowser(url, { executable, timeoutMs = 20000, settl
           const again = nextLoad();
           await s("Page.reload");
           await again;
+          await settled();
           await wait(250);
           continue;
         }
         let result;
-        try { result = await evaluate(stepExpression(step)); } catch (error) { result = { ok: false, message: "error", seen: String(error.message).slice(0, 100) }; }
+        // What a person sees can take a moment to appear (a list drawn after a timer): expectations are asked again for up to
+        // two seconds before they count as failed. Actions run once.
+        const expecting = Object.keys(step).some((k) => k.startsWith("expect"));
+        const until = Date.now() + (expecting ? 2000 : 0);
+        for (;;) {
+          try { result = await evaluate(stepExpression(step)); } catch (error) { result = { ok: false, message: "error", seen: String(error.message).slice(0, 100) }; }
+          if (result?.ok || Date.now() >= until) break;
+          await wait(100);
+        }
         if (!result?.ok) { outcome.ok = false; outcome.failed = { index, step: describeStep(step), message: stepMessage(step, result ?? {}, en) }; break; }
         await wait(step.click !== undefined || step.fill !== undefined || step.select !== undefined ? 120 : 20);
       }
