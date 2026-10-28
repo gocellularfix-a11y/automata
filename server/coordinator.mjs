@@ -961,7 +961,10 @@ export class Coordinator extends EventEmitter {
     if (decision.branch) actions.push({ kind: "branch", branch: decision.branch });
     if (decision.commit) actions.push({ kind: "commit", message: decision.message });
     if (decision.push) actions.push({ kind: "push" });
-    if (decision.mergeInto) actions.push({ kind: "merge", into: decision.mergeInto, push: decision.push });
+    // Merging a branch into itself is never useful and would only ask the person for an approval that changes nothing.
+    const from = decision.branch || info.branch;
+    if (decision.mergeInto && from === decision.mergeInto) this.event({ role: "system", kind: "note", text: `Se omitió fusionar ${from} en sí misma.`, runId: r.id, projectId: r.projectId });
+    else if (decision.mergeInto) actions.push({ kind: "merge", into: decision.mergeInto, push: decision.push });
     for (const action of actions) {
       const item = this.queueGit(r, action);
       if (!item) continue;

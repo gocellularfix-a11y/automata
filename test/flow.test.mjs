@@ -26,17 +26,20 @@ async function settled(c) {
 // A Git that records what the coordinator asks it to do.
 function fakeGit({ repo = true, failOn = null, dirty = true } = {}) {
   const calls = [], steps = (command) => [{ command, code: 0, output: "ok" }];
+  let current = "main";
   const answer = (kind, command, summary) => async (_dir, ...rest) => {
     calls.push([kind, ...rest.filter((value) => typeof value === "string")]);
     for (const step of steps(command)) rest.at(-1)?.onStep?.(step);
     if (failOn === kind) return { ok: false, error: `falló ${kind}`, steps: [] };
     // A saved commit leaves nothing pending.
     if (kind === "commit") dirty = false;
+    // Like the real repository, a new branch becomes the current one.
+    if (kind === "branch") current = rest.find((value) => typeof value === "string") ?? current;
     return { ok: true, summary, steps: steps(command) };
   };
   return {
     calls,
-    inspect: async () => { calls.push(["inspect"]); return repo ? { repo: true, root: "x", nested: false, branch: "main", dirty, remote: "https://github.com/a/b", hasCommits: true } : { repo: false }; },
+    inspect: async () => { calls.push(["inspect"]); return repo ? { repo: true, root: "x", nested: false, branch: current, dirty, remote: "https://github.com/a/b", hasCommits: true } : { repo: false }; },
     pending: async () => ({ files: dirty ? ["src/app.mjs"] : [], sensitive: [], savable: dirty ? ["src/app.mjs"] : [] }),
     branch: answer("branch", "git switch -c feature/x", "Rama nueva feature/x"),
     commit: answer("commit", "git commit -m x", "Commit abc1234"),

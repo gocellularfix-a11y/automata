@@ -184,3 +184,24 @@ test("un proyecto creado desde una idea nunca hace push ni merge por su cuenta, 
   await settled(own.c);
   assert.equal(own.pushes.length, 1);
 });
+
+test("nunca se pide fusionar una rama en sí misma: main hacia main se omite sin aprobación pendiente", async (t) => {
+  const s = setup(t, { decisions: [{ decision: "continue" }, { decision: "complete", git: { commit: true, message: "docs: entrega", merge_into: "main" } }] });
+  s.c.start(s.p.id);
+  await settled(s.c);
+  assert.equal(s.c.active.status, "complete", s.c.active.error);
+  assert.ok(!s.c.active.gitQueue.some((item) => item.kind === "merge"), "no hay ningún merge en la cola");
+  assert.ok(s.c.events.some((e) => /Se omitió fusionar main en sí misma/.test(e.text)));
+  assert.equal(git(s.folder, "branch", "--show-current"), "main");
+});
+
+test("una rama de trabajo sí puede pedir su fusión en main, y queda pendiente de aprobación", async (t) => {
+  const s = setup(t, { decisions: [{ decision: "continue", git: { branch: "feature/calculo" } }, { decision: "complete", git: { commit: true, message: "feat: calculo", merge_into: "main" } }] });
+  s.c.start(s.p.id);
+  await settled(s.c);
+  const merge = s.c.active.gitQueue.find((item) => item.kind === "merge");
+  assert.ok(merge, "el merge desde una rama distinta se solicita");
+  assert.equal(merge.status, "pending");
+  assert.equal(git(s.folder, "branch", "--show-current"), "feature/calculo");
+  assert.equal(git(s.folder, "log", "main", "--format=%s"), "chore: inicio", "main no recibió nada sin aprobación");
+});

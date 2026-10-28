@@ -1,12 +1,14 @@
 # P3 · Estabilización: reporte
 
-Fecha: 27 oct 2026 · Rama: `feature/p3-idea-to-project` (sobre `868d2dc`) · Sin push, sin merge, sin P4.
+Fecha: 27 oct 2026, actualizado el 28 oct (validación final en la sección 6) · Rama: `feature/p3-idea-to-project` (sobre `868d2dc`) · Sin push, sin merge, sin P4.
 
 ## Veredicto
 
-Las secciones 1 a 4 están implementadas y probadas (188 pruebas automáticas en verde). **Actualización del 28 oct, 1:36 am: el ciclo real completo de la sección 5 ya se ejecutó dos veces con agentes reales y las dos llegaron a `complete`** (4 y 12 rondas, 8/8 y 9/9 tareas, commits locales, árbol limpio, sin push ni merge, sin procesos residuales). La primera corrida del 27 oct (detenida por el arnés por memoria crítica) queda como antecedente. Quedan límites reales (sección 5): la aplicación entregada se comprobó por sus archivos y sus pruebas, no abriéndola en un navegador; y los agentes se probaron con una sola idea pequeña.
+**P3 queda validado y listo para tu aprobación; no hice push ni merge ni empecé P4.** Con agentes reales, el ciclo completo (idea → propuesta → una aprobación → construcción → `complete`) se ejecutó dos veces el 28 oct (4 y 12 rondas, 8/8 y 9/9 tareas, 7 y 2 commits locales hechos por el flujo de Automata, árbol limpio, sin procesos residuales). La validación final (sección 6) añadió: las dos calculadoras entregadas abiertas en Chrome y usadas de verdad, 12 pruebas de interfaz en Chrome (incluida una nueva para los botones de Git), `npm test` en 195 de 195, la prueba de las correcciones del script de ensayo y la corrección del merge de `main` hacia `main`. La primera corrida del 27 oct (detenida por el arnés por memoria crítica) queda como antecedente.
 
-Lo que sí quedó probado con agentes reales, con números abajo: la renovación independiente (Codex 3, Claude 8), el contexto real medido, los commits locales en hitos, la comprobación de memoria actuando sola y la ausencia de procesos residuales. Y tres correcciones al reporte P3 anterior:
+**Fallos y límites que siguen** (detalle en la sección 6.7): una de las calculadoras no avisa con importe 0 ni con propina inválida (no lo exigía su lista de criterios); el script de ensayo se refactorizó y **no se volvió a ejecutar de punta a punta** con agentes; no se ejecutaron `smoke-phone` (necesita un teléfono Android por adb), `smoke-desktop`, `smoke-recovery` y `smoke-console` (Electron y el `.exe` empaquetado); el cierre con Git sucio en vivo y el recordatorio al director solo se probaron con director simulado, porque en los ciclos reales el árbol quedó limpio.
+
+Lo que quedó probado con agentes reales, con números abajo: la renovación independiente (Codex 3, Claude 8), el contexto real medido, los commits locales en hitos, la comprobación de memoria actuando sola y la ausencia de procesos residuales. Y tres correcciones al reporte P3 anterior:
 
 | El reporte P3 decía | Lo que muestran los datos |
 |---|---|
@@ -21,7 +23,11 @@ Lo que sí quedó probado con agentes reales, con números abajo: la renovación
 | `c372117` | Citas de criterios en propuestas |
 | `547698a` | Cierre sin cambios de Git sin decidir |
 | `71f4d53` | Procesos hijos, limpieza de huérfanos y comprobación de memoria |
-| *(este commit)* | Script del ensayo ampliado, aislamiento de las pruebas respecto a la RAM, documentación y este reporte |
+| `7df6749` | Script del ensayo ampliado, aislamiento de las pruebas respecto a la RAM, documentación y el reporte inicial |
+| `2173793` | Presupuesto de RAM (30 GiB) del árbol de procesos de Automata, supervisado, no un límite duro |
+| `9364dd8` | Solo el revisor primario recibe el recordatorio de commit antes de aprobar |
+| `3deea58` | Reportes con el ciclo real completo y correcciones del script del ensayo |
+| *(commit de cierre)* | Validación final: merge a sí misma, prueba de Chrome de Git, script de ensayo probado, reporte final |
 
 ---
 
@@ -65,7 +71,7 @@ La carpeta quedó sin cambios pendientes. La cola de Git del trabajo solo tiene 
 
 Probado con un repositorio real, `GitOps` real y un hook `pre-commit` que de verdad falla (`test/git-gate.test.mjs`, 8 pruebas): hito guardado, recordatorio al director, bloqueo, aprobación, fallo con el error visible, reintento tras arreglar la causa, decisión de dejar sin guardar, archivos sensibles, Git desactivado y la regla de push/merge.
 
-**No validado con agentes reales:** el cierre mismo (el ciclo real no llegó a `complete`) y el recordatorio al director. Queda cubierto solo por las pruebas con Git real y un director simulado.
+**Con agentes reales (28 oct):** los dos ciclos llegaron a `complete` con la carpeta limpia y cada commit salió de la cola de Git de Automata (sección 6.5). **Sigue sin validarse con agentes reales** el caso de cierre con cambios sin guardar (bloqueo y botones Guardar, Reintentar, Dejar sin guardar) y el recordatorio al director, porque los directores reales ya habían guardado todo. Eso queda cubierto por las pruebas con Git real y director simulado y, desde la validación final, por una prueba de Chrome (`smoke-git`, sección 6.2).
 
 ## 3. Propuestas
 
@@ -95,7 +101,7 @@ Se resuelven además, sin pedir otra propuesta: otra mayúscula, acento o puntua
 
 - Los procesos de Claude (4, 1,6 a 2 GB en total) son sesiones interactivas de Claude Code, no de Automata. No había `codex.exe` ni instancias de Automata en memoria.
 - **No hay evidencia de que Automata, Claude o Codex agotaran la memoria**: en la primera inspección los procesos de Node sumaban 324 MB y no había restos de los ensayos anteriores. Windows tampoco registró eventos de agotamiento de recursos (nada desde las 12:00 ni en las últimas 3 horas).
-- La causa más probable de los dos cortes (el de ayer y el de hoy) es la presión de memoria creada por el entrenamiento, que creció durante la sesión, y la regla del propio Claude Code, que detiene procesos en segundo plano cuando el sistema queda crítico. **Es una inferencia**: no tengo medición de la memoria del árbol de Automata durante el ciclo, porque el muestreo se perdió con el corte (el reporte del script se escribe al final).
+- La causa más probable de los dos cortes (el de ayer y el de hoy) es la presión de memoria creada por el entrenamiento, que creció durante la sesión, y la regla del propio Claude Code, que detiene procesos en segundo plano cuando el sistema queda crítico. **Es una inferencia**: no tengo medición de la memoria del árbol de Automata durante aquel ciclo, porque el muestreo se perdió con el corte. La medición real de un ciclo completo llegó el 28 oct (sección 5.1): el árbol de Automata llegó a 577 MB como máximo.
 - Tras el corte no quedó ningún proceso del ensayo (servidor, Claude, Codex o `node`).
 
 **Cambios en Automata:**
@@ -112,7 +118,7 @@ Se resuelven además, sin pedir otra propuesta: otra mayúscula, acento o puntua
 
 Misma frase, misma configuración y segunda instancia (puerto 4796, datos propios). La RAM estaba libre porque terminó el entrenamiento; se lanzó con tu autorización para esa noche y solo Claude hacía pruebas. Dos corridas:
 
-| | Corrida A (presupuesto apagado) | Corrida B (presupuesto 61 440 MB) |
+| | Corrida A (presupuesto apagado, 0) | Corrida B (presupuesto 61 440 MB = 60 GiB; no era el valor previsto, ver 6.1) |
 |---|---|---|
 | Propuesta | 34 s, 7 criterios, 8 tareas | 28 s, 8 criterios, 9 tareas |
 | Fin | `complete`, ronda 4, plan 8/8, ≈ 3,5 min | `complete`, ronda 12, plan 9/9, ≈ 10 min |
@@ -141,10 +147,10 @@ Misma frase, misma configuración y segunda instancia (puerto 4796, datos propio
 Conclusión sobre memoria: el consumo propio de Automata con agentes reales es **menos de 1 GB**, muy por debajo de los 30 GiB; mi estimación previa de 1 a 3 GB era alta. El presupuesto sirve como red de seguridad, no como restricción en la práctica.
 
 **Qué faltó o salió distinto:**
-- `ok: false` en las dos corridas lo puso el **script**, no Automata: contaba su propio PowerShell como resto; se cortaba el muestreo al abrir Chrome (`browser.process()` no existe en Playwright; la corrida A quedó con 1 muestra); trataba como fallo un merge solo *pedido* y pendiente de aprobación; y no sabía comprobar una página estática sin dirección. Los cuatro puntos están corregidos en `scripts/real-idea.mjs` pero **no se volvió a ejecutar el script con esas correcciones** (la verificación de la aplicación se hizo a mano, ver abajo).
+- `ok: false` en las dos corridas lo puso el **script**, no Automata: contaba su propio PowerShell como resto; se cortaba el muestreo al abrir Chrome (`browser.process()` no existe en Playwright; la corrida A quedó con 1 muestra); trataba como fallo un merge solo *pedido* y pendiente de aprobación; y no sabía comprobar una página estática sin dirección. Los cuatro puntos están corregidos y probados (sección 6.4).
 - Con el presupuesto en 0, Automata **no mide** por ejecución (`run.memory` queda vacío): es el comportamiento diseñado, pero por eso la corrida A no sirve para RAM.
-- **La aplicación entregada** se comprobó por sus archivos: ambas tienen `index.html` con título, 3 campos y los scripts enlazados, y sus pruebas pasan. **No la abrí en un navegador ni probé el cálculo en pantalla.**
-- El director pidió un merge a `main` aunque el proyecto solo tiene `main`: no se ejecutó (requiere aprobación). Es un comportamiento por revisar del prompt del director, no un daño.
+- **La aplicación entregada**: en el momento de estas corridas solo se había comprobado por sus archivos y sus pruebas. Después se abrió en Chrome y se usó de verdad (sección 6.3).
+- El director pidió un merge a `main` aunque el proyecto solo tiene `main`: no se ejecutó (requiere aprobación). Se corrigió (sección 6.5): ya no se pide ni se encola.
 - Una sola idea, pequeña y de una página: no demuestra el comportamiento con proyectos grandes ni con Git ensuciado a propósito en vivo.
 
 Carpetas resultantes: `C:\Users\cellh\Automata Projects\repartidor-de-propina` (A) y `calculadora-de-propinas-2` (B); artefactos en `artifacts\real-idea-2026-10-28T08-36-28-071Z` y `...T08-41-12-371Z`.
@@ -171,13 +177,99 @@ node scripts/real-idea.mjs --port 4796 --rounds 16 --idea "Quiero una calculador
 
 El proyecto parcial quedó en `C:\Users\cellh\Automata Projects\calculadora-de-propinas`; un nuevo ciclo creará otra carpeta.
 
-## Pruebas
+## 6. Validación final (28 oct)
 
-`npm test`: **180 de 180** (154 anteriores más 26 nuevas: `usage` 5, `proposals` 4, `git-gate` 8, `processes` 9). Se ajustaron cuatro pruebas antiguas por cambios intencionales (el cierre con Git sucio, el nuevo valor por defecto de Codex y el contexto medido por solicitud). **No se volvieron a ejecutar las pruebas de interfaz en Chrome** (`smoke-*`), y los cambios de `public/` (campos de renovación, botones Guardar / Reintentar / Dejar sin guardar) solo pasaron la comprobación de sintaxis: no los vi en un navegador. `smoke-plan` se actualizó para los dos campos nuevos pero no se ejecutó.
+Sin funciones nuevas: solo comprobaciones, la corrección del merge de `main` hacia `main` y las pruebas que faltaban. Entrenamiento de AI-DJ terminado (sin procesos Python, GPU casi en reposo) y 50 414 MB de RAM libre al cerrar esta sección; no hubo ningún entrenamiento simultáneo.
+
+### 6.1 Memoria: valor efectivo y qué significa
+
+| Comprobación | Resultado |
+|---|---|
+| `AUTOMATA_RAM_BUDGET_MB=30720` | `defaultBudget()` = **30 720 MB = 30 GiB**; `coordinator.settings.ramBudgetMB` = 30 720; `/api/state` = 30 720. Sin la variable, el valor por defecto es el mismo (30 720) |
+| Lectura real con ese presupuesto | árbol de Automata 239 MB (5 procesos) · estado `ok` |
+| ¿Fue 60 GiB? | **Sí, en la corrida B del 28 oct**: la lancé con 61 440 MB por decisión mía, para tener medición, y no era el valor previsto. Quedó anotado en 5.1. El script de ensayo ahora usa 30 720 salvo que se le indique otro valor y guarda el valor realmente usado en `report.final.memory.budgetMB` |
+| Variable de entorno del sistema | **No la fijé de forma permanente**: sería un cambio de configuración global de tu equipo. No hace falta para el valor efectivo (el defecto ya es 30 720). Si la quieres explícita, es un comando tuyo. Un valor guardado en Ajustes manda sobre la variable |
+
+**Presupuesto supervisado, no límite duro.** Automata mide cada 20 s el árbol que cuelga de su proceso, y antes de abrir un agente o una verificación comprueba que el árbol más 1 024 MB de reserva quepa en el presupuesto y que al sistema le queden 1 536 MB libres y 2 048 MB de margen. Si no cabe, espera; si se excede, avisa y **no inicia procesos nuevos**, pero **no cierra ni limita** el que ya corre. Un proceso que crezca de golpe más allá del presupuesto no se detiene. El único límite duro posible sería un Job Object de Windows, que **no se probó** (el permiso del experimento fue denegado) y no está implementado.
+
+### 6.2 Interfaz en Chrome
+
+Las 12 pruebas `smoke-*` que usan Chrome se ejecutaron con agentes simulados (sin IA) y terminaron con código 0: `smoke` (13 comprobaciones), `smoke-access` (8), `smoke-auth` (14), `smoke-chat` (7), **`smoke-git` (20, nueva)**, `smoke-github` (10), `smoke-ideas` (27/27), `smoke-memory`, `smoke-plan` (18/18), `smoke-settings` (ampliada), `smoke-waiting` (12/12) y `smoke-window`.
+
+| Lo que pediste ver | Qué lo cubre y qué comprobó |
+|---|---|
+| Botones de Git | `smoke-git`, con repositorios reales: con cambios sin guardar el trabajo queda bloqueado y aparece **Guardar** y **Dejar sin guardar** (Guardar crea el commit y el trabajo termina con la carpeta limpia); con un `pre-commit` que falla se ve «No se pudo guardar · las pruebas locales no pasan» con **Reintentar** (funciona al arreglar la causa); **Dejar sin guardar** termina sin commit, deja los cambios y lo anota; un merge desde una rama de trabajo pide **Aprobar / Rechazar** y Rechazar no toca `main`; `main` hacia `main` no genera nada |
+| Configuración por agente | `smoke`: modelo y razonamiento de Claude y de Codex por separado. `smoke-settings`: renovación de sesión de cada agente (Claude 8, Codex 3, editadas a 5 y 2 y guardadas) y el presupuesto de RAM (valor inicial, un valor inválido se rechaza sin guardar, 20 480 se guarda) |
+| Panel Plan | `smoke-plan` (18/18): agregar, corregir, reordenar, descartar y restaurar tareas, ciclo con el director, contador PLAN, inglés y teléfono |
+| Creación de ideas | `smoke-ideas` (27/27): mensaje casual que no inicia nada, propuesta en palabras sencillas, ajuste, una sola aprobación y avance |
+| Móvil | 390 px sin desbordamiento horizontal en `smoke`, `smoke-ideas`, `smoke-plan`, `smoke-memory`, `smoke-settings`, `smoke-waiting` y `smoke-git` (que además comprueba que los botones de Git quedan dentro de la pantalla) |
+
+Un fallo antiguo que apareció: `smoke-settings` fallaba en «Settings opens connection controls». **No era una regresión de P3**: falla igual en `868d2dc` (lo comprobé en un árbol temporal, ya eliminado). El diálogo se abre después de que responde la petición de emparejamiento y la prueba lo leía sin esperar; ahora espera. Nada de la aplicación cambió.
+
+**No se ejecutaron:** `smoke-phone` (necesita un teléfono Android por adb; el puerto 5037 lo usa un `adb.exe` que no toqué), `smoke-desktop` y `smoke-recovery` (abren Electron y el `.exe` empaquetado), `smoke-console` (sondeo de ventanas de Windows con llamadas nativas). Las pruebas usan Chrome sin ventana (headless) y datos aislados: no vi la interfaz en una pantalla real del teléfono.
+
+### 6.3 Aplicación entregada, abierta en Chrome
+
+Abrí en Chrome real, con `file://`, las **dos** calculadoras (`repartidor-de-propina` y `calculadora-de-propinas-2`) y las usé como una persona: 24 comprobaciones por aplicación, con capturas en `artifacts/final-validation` (el guion `app-check.mjs` y `app-check.json` están ahí; esa carpeta no se versiona).
+
+| | A · repartidor-de-propina | B · calculadora-de-propinas-2 |
+|---|---|---|
+| Resultado | **24 de 24** | **21 de 24** |
+| Operaciones normales (100/2/10 %, 80/4/15 %, 45,60/1/20 %, 0 %) | correctas, con coma decimal en pantalla | correctas |
+| División entre personas (100, 3 personas, 10 %) | 36,67 | 36.67 |
+| Redondeo (33.33/3/15 % → 5.00 · 38.33 · 12.78; 1.005 al 100 % → 1.01; coma «85,50») | correcto | correcto |
+| Importe vacío, cero, negativo o texto | aviso y sin resultado | vacío, negativo y texto: aviso y sin resultado. **Cero: muestra 0.00 / 0.00 / 0.00 sin aviso** |
+| Personas vacías, cero, negativas, decimales o texto | aviso y sin resultado | aviso y sin resultado |
+| Propina negativa o texto | aviso | **oculta el resultado pero sin ningún mensaje** |
+| Tras un error | el resultado anterior desaparece; se recupera con datos válidos | igual |
+| Teléfono (390 px) | sin desbordamiento | sin desbordamiento |
+| Errores de consola | ninguno | ninguno |
+
+Los 3 fallos de B son contra lo que una persona esperaría; **ninguno incumple los 8 criterios de su propia lista** (el 5 pide aviso solo para importe vacío, negativo o no numérico, y el código lo dice: «el porcentaje aún no tiene mensaje propio»). Aun así son huecos de calidad que la revisión del director no vio. A cumple también el cero y la propina inválida porque su lista sí lo pedía. Además: el cálculo por persona redondea a céntimos el total dividido (por ejemplo 38,33 entre 3 da 12,78 y 3 × 12,78 = 38,34), y B no tiene estilos; eso no estaba pedido.
+
+### 6.4 Las correcciones del script de ensayo, probadas
+
+Las cuatro correcciones quedaron en `scripts/real-idea-checks.mjs` y se prueban en `test/real-idea-checks.test.mjs` (5 pruebas):
+
+1. **Restos:** el PowerShell/conhost de muestreo del propio script no cuenta; los huérfanos de un servidor ya muerto **sí** (probado con una tabla simulada y con procesos `node` reales que la prueba lanza y cierra ella misma); un servidor que sobrevive también se informa, con todo su árbol (esto lo descubrí al escribir la prueba: mi primera regla lo habría escondido); lo que ya existía antes, lo anterior al inicio y Chrome no cuentan.
+2. **Muestreo con Chrome abierto:** Chrome se reconoce por los `chrome.exe` nuevos, sin `browser.process()` (la prueba también falla si el script lo vuelve a usar). Con la corrección, la corrida B tuvo 106 muestras.
+3. **Merge/push pedido frente a ejecutado:** pendiente → no es un fallo (se cuenta aparte); hecho o fallido → sí; un `merge` o `push` en el reflog delata uno real aunque no esté en la cola.
+4. **Página estática:** se comprueba el archivo que abre el comando entregado (existe, título, campos); un archivo inexistente o un comando sin página no se da por bueno.
+
+**Límite:** después del refactor el script solo se comprobó por sintaxis y por estas pruebas; **no se volvió a ejecutar de punta a punta con agentes**, porque no hacía falta otro ciclo de desarrollo.
+
+### 6.5 Git
+
+- **`main` hacia `main` nunca se propone:** el prompt del director ahora le dice la rama actual y que no pida fusionar una rama en sí misma; el coordinador además descarta la petición sin cola ni aprobación (`Se omitió fusionar main en sí misma`). Una rama de trabajo sí puede pedir su merge, que queda pendiente de aprobación. 2 pruebas nuevas, más `smoke-git`. La prueba antigua que simulaba Git ahora cambia de rama como el repositorio real.
+- **Los commits los hizo el flujo de Automata:** cruzando la cola de Git de cada trabajo con `git log`, los 7 commits de B y los 2 de A coinciden **uno a uno** con una entrada `commit` «hecha» de la cola (mismos hashes, rondas 2 a 12); no hay ningún commit fuera de la cola, salvo el inicial, que crea Automata al abrir el proyecto (`chore: inicio del proyecto`). Una entrada de B fue «Sin cambios para confirmar» (no creó nada). Se firmaron con la identidad de Git de este equipo.
+- **Sin push ni merge:** ningún proyecto tiene remoto, no hay `merge` ni `push` en los reflogs y el único merge pedido (el de `main` hacia `main`) no se ejecutó. En este repositorio tampoco hice push.
+
+### 6.6 Pruebas
+
+`npm test`: **195 de 195** (188 anteriores + 5 de `real-idea-checks` + 2 de `git-gate`). Ligeras y deterministas.
+
+### 6.7 Fallos y límites que siguen
+
+- B no avisa con importe 0 ni con propina negativa o de texto (6.3).
+- No se ejecutaron `smoke-phone`, `smoke-desktop`, `smoke-recovery` ni `smoke-console` (6.2).
+- El script de ensayo no se reejecutó de punta a punta tras corregirlo (6.4).
+- El cierre con Git sucio y el recordatorio al director no se vieron con agentes reales, solo con director simulado (sección 2).
+- Una sola idea pequeña; no se probaron proyectos grandes ni la espera larga por memoria (las esperas por memoria consumen los reintentos de P1 y tras ≈ 17 min pasan a `error`).
+- No hay límite duro de memoria (6.1).
+- `package-lock.json` sigue sin versionarse, a propósito.
+
+## Pruebas (resumen)
+
+`npm test`: **195 de 195** (180 al cerrar la estabilización inicial, 188 con el presupuesto de RAM y 195 con la validación final). Las pruebas de interfaz en Chrome (`smoke-*`) **sí se ejecutaron** en la validación final: 12 de 12 con código 0 (sección 6.2), salvo las que necesitan teléfono o Electron. Ya no queda ningún cambio de `public/` sin verse en un navegador.
 
 ## Decisiones que necesito de ti
 
-1. **Revisar el resultado de 5.1** y decidir si quieres una tercera corrida con otra idea (con interfaz o varios archivos) y abriendo la aplicación entregada en un navegador. No la hice por mi cuenta.
-2. ¿Creo automáticamente la tarea «Comprobar: …» para criterios omitidos por el director?
-3. ¿Mantienes Codex en 3 rondas? Con contextos de 39 000 en una ventana de 258 400, la renovación no es necesaria por tamaño.
-4. ¿Aceptas que se cierre lo que un agente deja corriendo al terminar su llamada?
+1. **Aprobar el cierre de P3** (rama `feature/p3-idea-to-project`, sin push ni merge) o indicar qué falta. No empiezo P4 ni hago push hasta tu autorización.
+2. Las dos calculadoras entregadas tienen huecos menores (6.3): ¿pedimos a Automata que los corrija como un trabajo nuevo, o se dejan como prueba de que el director puede pasar por alto detalles que su lista no exigía?
+3. ¿Creo automáticamente la tarea «Comprobar: …» para criterios omitidos por el director? (Causa dominante de rechazos de propuestas.)
+4. ¿Mantienes Codex en 3 rondas? Con contextos de 37 000 a 39 000 en una ventana de 258 400, la renovación no es necesaria por tamaño; en el último ciclo hubo 5 renovaciones.
+5. ¿Aceptas que se cierre lo que un agente deja corriendo al terminar su llamada?
+6. ¿Hago que las esperas por falta de memoria no consuman los reintentos de P1 y se repitan sin límite? Hoy a los ≈ 17 minutos pasan a `error`.
+7. ¿Fijo `AUTOMATA_RAM_BUDGET_MB=30720` como variable de usuario de Windows? Hoy no hace falta: el valor por defecto ya es 30 720.
+8. ¿Subes el mínimo de RAM libre del sistema de 1 536 MB a unos 4 096 MB? Con el entrenamiento ya terminado no estorba, pero mientras entrene sí.
+9. Job Objects: sigo sin probarlos; solo con tu permiso de PowerShell para ese experimento.

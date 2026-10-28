@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { listProcesses } from "../server/procs.mjs";
 import { readMemory } from "../server/resources.mjs";
+import { descend, chromeProcesses, findLeftovers, classifyPushOrMerge, checkStaticPage } from "./real-idea-checks.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
 const arg = (name, fallback) => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : fallback; };
@@ -33,19 +34,13 @@ const others = fs.readdirSync(projectsRoot, { withFileTypes: true }).filter((e) 
 const gitState = (dir) => { try { return execFileSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8" }) + execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }); } catch { return "sin git"; } };
 const before = Object.fromEntries([...others, root].map((dir) => [dir, gitState(dir)]));
 const env = { ...process.env };
+// The drill runs with the 30 GiB budget unless told otherwise; the value the run really used is saved in report.final.memory.budgetMB.
+env.AUTOMATA_RAM_BUDGET_MB ??= "30720";
 delete env.ELECTRON_RUN_AS_NODE;
 const server = spawn(process.execPath, [path.join(root, "server", "index.mjs"), "--port", String(port), "--data", data], { env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
 server.stdout.on("data", (chunk) => fs.appendFileSync(path.join(output, "server.log"), chunk));
 server.stderr.on("data", (chunk) => fs.appendFileSync(path.join(output, "server.log"), chunk));
 // Memory and processes every few seconds: the server tree (Claude, Codex, checks), the browser, and everything else.
-const descend = (table, root) => {
-  const out = [], seen = new Set([root]), queue = [root];
-  while (queue.length) {
-    const parent = queue.shift();
-    for (const p of table) if (p.ppid === parent && !seen.has(p.pid)) { seen.add(p.pid); out.push(p); queue.push(p.pid); }
-  }
-  return [...table.filter((p) => p.pid === root), ...out];
-};
 const samples = [], baseline = new Set((await listProcesses()).map((p) => p.pid));
 let browser, sampling = false;
 const sample = async () => {
@@ -53,8 +48,7 @@ const sample = async () => {
   sampling = true;
   try {
     const [memory, table] = await Promise.all([readMemory(), listProcesses()]);
-    // Playwright's Browser has no process(): Chrome is whatever chrome.exe appeared after the script started.
-    const tree = descend(table, server.pid), chrome = table.filter((p) => /^chrome/i.test(p.name) && !baseline.has(p.pid));
+    const tree = descend(table, server.pid), chrome = chromeProcesses(table, baseline);
     const sum = (list, test = () => true) => Math.round(list.filter(test).reduce((a, p) => a + (p.workingSet ?? 0), 0) / 1048576);
     const python = table.filter((p) => /^python/i.test(p.name));
     samples.push({ at: Date.now(), freeMB: memory.freeMB, commitFreeMB: memory.commitFreeMB, serverTreeMB: sum(tree), claudeMB: sum(tree, (p) => /claude/i.test(p.name)), codexMB: sum(tree, (p) => /codex/i.test(p.name)), nodeMB: sum(tree, (p) => /^node/i.test(p.name)), chromeMB: sum(chrome), pythonMB: sum(python), processes: tree.length, names: tree.map((p) => p.name) });
@@ -127,7 +121,7 @@ try {
   if (!final) throw new Error("No terminó en 90 minutos.");
   await shot("04-final");
   log(`final: ${final.run.status} en la ronda ${final.run.round}, plan ${final.plan.done}/${final.plan.active}`, { error: final.run.error });
-  report.final = { status: final.run.status, round: final.run.round, error: final.run.error ?? null, usage: final.run.usage, sessionLog: final.run.sessionLog, recovery: final.run.recovery?.log, gitQueue: final.run.gitQueue, review: final.run.review, plan: final.plan };
+  report.final = { memory: final.run.memory ?? null, status: final.run.status, round: final.run.round, error: final.run.error ?? null, usage: final.run.usage, sessionLog: final.run.sessionLog, recovery: final.run.recovery?.log, gitQueue: final.run.gitQueue, review: final.run.review, plan: final.plan };
   const saved = JSON.parse(fs.readFileSync(path.join(data, "runs.json"), "utf8")).find((r) => r.projectId === project.id);
   report.usageLog = saved.usageLog;
   report.planTasks = (await api("plan", { method: "POST", body: JSON.stringify({ projectId: project.id, action: "list" }) })).tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, dependsOn: t.dependsOn, source: t.source, criterion: !!t.criterion }));
@@ -144,10 +138,9 @@ try {
   report.verification.gitRemotes = gitIn("remote", "-v");
   report.verification.gitBranches = gitIn("branch", "-a").split("\n").map((b) => b.trim());
   report.verification.gitReflog = gitIn("reflog", "--format=%gs").split("\n");
-  // A merge or push asked for but still waiting for approval is the expected behavior; only an executed one is a failure.
-  const asked = (final.run.gitQueue ?? []).filter((i) => ["push", "merge"].includes(i.kind));
-  report.verification.pushOrMergePending = asked.filter((i) => i.status === "pending").length;
-  report.verification.pushOrMerge = [...asked.filter((i) => i.status !== "pending"), ...report.verification.gitReflog.filter((l) => /^(merge|push)/i.test(l))];
+  const asked = classifyPushOrMerge(final.run.gitQueue, report.verification.gitReflog);
+  report.verification.pushOrMergePending = asked.pending;
+  report.verification.pushOrMerge = asked.executed;
   // The app itself, the way its own review said it starts: it must answer on the address it announced.
   const offer = final.run.review?.run;
   report.verification.app = { offered: !!offer?.ready, command: offer?.command ?? null, url: offer?.url ?? null, answered: null };
@@ -159,12 +152,7 @@ try {
     }
     try { execFileSync("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" }); } catch {}
   }
-  // A static page has no address: the delivered file the command opens must exist and look like a page.
-  if (offer?.ready && !offer.url) {
-    const file = /([\w./\\-]+\.html?)/i.exec(offer.command ?? "")?.[1];
-    const full = file ? path.resolve(project.directory, file) : null;
-    if (full && fs.existsSync(full)) { const html = fs.readFileSync(full, "utf8"); report.verification.app.answered = "file"; report.verification.app.title = html.match(/<title>([^<]*)/i)?.[1] ?? null; report.verification.app.inputs = (html.match(/<input\b/gi) ?? []).length; }
-  }
+  if (offer?.ready && !offer.url) Object.assign(report.verification.app, checkStaticPage(offer.command, project.directory) ?? {});
   report.verification.files = execFileSync("git", ["ls-files"], { cwd: project.directory, encoding: "utf8" }).trim().split("\n");
   report.verification.othersUntouched = Object.entries(before).every(([dir, value]) => gitState(dir) === value);
   report.verification.changed = Object.entries(before).filter(([dir, value]) => gitState(dir) !== value).map(([dir]) => dir);
@@ -184,9 +172,7 @@ try {
   await sleep(2500);
   // Anything of ours still running after the server is gone: created since the start, by name, not in the baseline.
   const after = await listProcesses();
-  // The script's own sampler (powershell.exe + conhost.exe) is not a leftover of Automata.
-  const mine = new Set(descend(after, process.pid).map((p) => p.pid));
-  report.leftovers = after.filter((p) => !baseline.has(p.pid) && !mine.has(p.pid) &&/^(claude|codex|node|git|powershell|conhost)/i.test(p.name) && p.pid !== process.pid && p.created >= Date.parse(report.at) - 5000 && !/chrome/i.test(p.name)).map((p) => ({ pid: p.pid, name: p.name, ppid: p.ppid }));
+  report.leftovers = findLeftovers(after, { baseline, scriptPid: process.pid, serverPid: server.pid, startedAt: Date.parse(report.at) });
   const stat = (key, fn) => samples.length ? fn(samples.map((x) => x[key]).filter((v) => v != null)) : null;
   report.memory = { samples: samples.length, everySeconds: 6, freeMB: { first: samples[0]?.freeMB ?? null, last: samples.at(-1)?.freeMB ?? null, min: stat("freeMB", (v) => Math.min(...v)), max: stat("freeMB", (v) => Math.max(...v)) }, commitFreeMB: { min: stat("commitFreeMB", (v) => Math.min(...v)), max: stat("commitFreeMB", (v) => Math.max(...v)) }, peakMB: { serverTree: stat("serverTreeMB", (v) => Math.max(...v)), claude: stat("claudeMB", (v) => Math.max(...v)), codex: stat("codexMB", (v) => Math.max(...v)), node: stat("nodeMB", (v) => Math.max(...v)), chrome: stat("chromeMB", (v) => Math.max(...v)), externalPython: stat("pythonMB", (v) => Math.max(...v)) }, peakProcessesInTree: stat("processes", (v) => Math.max(...v)), series: samples.map((x) => ({ t: Math.round((x.at - Date.parse(report.at)) / 1000), freeMB: x.freeMB, commitFreeMB: x.commitFreeMB, serverTreeMB: x.serverTreeMB, claudeMB: x.claudeMB, codexMB: x.codexMB, chromeMB: x.chromeMB, pythonMB: x.pythonMB, processes: x.processes })) };
   fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(report, null, 2));

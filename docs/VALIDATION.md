@@ -66,6 +66,8 @@ Con agentes y CLI simulados: clasificación de errores reales de ambas CLI (lím
 
 `node scripts/smoke-waiting.mjs`: **12 de 12** en Chrome. Muestra el motivo, el agente y la hora; Continuar ahora, Pausar y Detener disponibles; traducción al inglés; pausa que cancela la cita; final sin repetir la ronda; teléfono sin desbordamiento.
 
+`node scripts/smoke-git.mjs`: **20 de 20** en Chrome, con repositorios reales y agentes simulados. Botones de Git del cierre (Guardar, Reintentar con el error visible, Dejar sin guardar), aprobación y rechazo de un merge, `main` hacia `main` omitido, y el teléfono a 390 px. Validación final de P3 (28 oct): las 12 pruebas `smoke-*` de Chrome terminan con código 0; no se ejecutan `smoke-phone` (teléfono Android por adb), `smoke-desktop`, `smoke-recovery` ni `smoke-console`.
+
 El ciclo real con Claude y Codex, con una interrupción forzada, está documentado en `P1_RECOVERY_REPORT.md`. Los límites de cuota reales no se pudieron provocar: sus mensajes se tomaron de las cadenas de las CLI instaladas y la política tiene un respaldo genérico.
 
 ## Prueba de interfaz

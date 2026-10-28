@@ -17,12 +17,17 @@ try {
   await page.waitForFunction(()=>document.querySelector('#projectName').textContent==='Hola, Automata');
   await open();
   check('Settings includes language, access, both models and reasoning, pace, rounds, timeout, accounts and phone', ['language','accessMode','coderModel','coderEffort','auditorModel','auditorEffort','mode','maxRounds','timeoutMinutes'].every(name=>page.locator(`#settingsForm [name=${name}]`)) && (await page.locator('#settingsForm [name]').evaluateAll(els=>els.map(e=>e.name))).filter(n=>['language','accessMode','coderModel','coderEffort','auditorModel','auditorEffort','mode','maxRounds','timeoutMinutes'].includes(n)).length===9 && await page.locator('#settingsAccounts').isVisible());
+  check('Settings shows the RAM budget, 30 GiB unless AUTOMATA_RAM_BUDGET_MB says otherwise',await page.inputValue('[name=ramBudgetMB]')===String(app.coordinator.settings.ramBudgetMB) && app.coordinator.settings.ramBudgetMB===Number(process.env.AUTOMATA_RAM_BUDGET_MB||30720));
+  check('Settings shows the session renewal of each agent (Claude 8, Codex 3)',await page.inputValue('[name=coderRefreshRounds]')==='8' && await page.inputValue('[name=auditorRefreshRounds]')==='3');
+  await page.fill('[name=ramBudgetMB]','1000');await page.click('#settingsForm button[type=submit]');await page.waitForTimeout(400);
+  check('An invalid RAM budget is refused with its reason and nothing is saved',await page.locator('#settingsDialog').evaluate(d=>d.open) && app.coordinator.settings.ramBudgetMB===Number(process.env.AUTOMATA_RAM_BUDGET_MB||30720));
+  await page.fill('[name=ramBudgetMB]','20480');await page.fill('[name=coderRefreshRounds]','5');await page.fill('[name=auditorRefreshRounds]','2');
   await page.selectOption('[name=language]','en');
   await page.fill('[name=coderModel]','opus');await page.selectOption('[name=coderEffort]','max');
   await page.fill('[name=auditorModel]','gpt-6-luna');await page.selectOption('[name=auditorEffort]','high');
   await page.selectOption('[name=mode]','medium');await page.fill('[name=maxRounds]','9');await page.fill('[name=timeoutMinutes]','25');
   await save();
-  check('English UI and settings persist on server',await page.locator('html').getAttribute('lang')==='en' && app.coordinator.settings.language==='en' && app.coordinator.settings.coderModel==='opus' && app.coordinator.settings.maxRounds===9);
+  check('English UI and settings persist on server',await page.locator('html').getAttribute('lang')==='en' && app.coordinator.settings.language==='en' && app.coordinator.settings.coderModel==='opus' && app.coordinator.settings.maxRounds===9 && app.coordinator.settings.ramBudgetMB===20480 && app.coordinator.settings.coderRefreshRounds===5 && app.coordinator.settings.auditorRefreshRounds===2);
   check('Main controls use English', (await page.locator('#newIdeaTop').innerText()).includes('New idea') && await page.locator('#chatKind option:checked').textContent()==='Work' && await page.locator('#accessMode option:checked').textContent()==='Full access');
   await page.click('#accountsButton');
   check('Accounts dialog translated', (await page.locator('#accountsTitle').textContent()).includes('Connect your team'));
@@ -41,6 +46,7 @@ try {
   await page.selectOption('[name=language]','es');await save();
   check('Spanish restores without translating historical AI report',await page.locator('html').getAttribute('lang')==='es' && await page.locator('#chatKind option:checked').textContent()==='Trabajar' && (await page.locator('.chat-answer:not(.pending-msg)').first().textContent()).includes('local demo'));
   await page.click('#mobileSettings');await page.click('#settingsPhone');
+  await page.locator('#connectionDialog').waitFor({state:'visible',timeout:5000}).catch(()=>{});
   check('Settings opens connection controls',await page.locator('#connectionDialog').isVisible());
   await page.click('#connectionDialog [data-close]');
   await page.evaluate(()=>{localStorage.removeItem('automata.connection');});await page.reload();
