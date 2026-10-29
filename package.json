@@ -13,6 +13,7 @@
     "test": "node --import ./test/setup.mjs --test test/*.test.mjs",
     "smoke": "node scripts/smoke.mjs",
     "build:windows": "node scripts/build-windows.mjs",
+    "build:installer": "node scripts/build-installer.mjs",
     "build:android": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1"
   },
   "devDependencies": {
