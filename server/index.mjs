@@ -25,7 +25,7 @@ const proxied = (req) => PROXY_HEADERS.some((name) => req.headers[name] !== unde
 const isLocal = (req) => loopback(req.socket.remoteAddress) && !proxied(req);
 // A host name (no port) a private-network proxy publishes Automata under, e.g. cellhub.tailnet.ts.net.
 const cleanHost = (value) => String(value ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[:/].*$/, "").replace(/\.$/, "");
-export async function createServer({ port = 4780, lan = false, remoteHost = "", remoteLogins = [], demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), auth = new AuthManager({ demo }), github = new GitHubProjects({ auth }), codexModels = new CodexModels(), ...injections } = {}) {
+export async function createServer({ port = 4780, lan = false, remoteHost = "", remoteUrl = "", remoteLogins = [], demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), auth = new AuthManager({ demo }), github = new GitHubProjects({ auth }), codexModels = new CodexModels(), ...injections } = {}) {
   const store = new Store(dataDir), release = store.acquire();
   let coordinator;
   try {
@@ -56,7 +56,9 @@ export async function createServer({ port = 4780, lan = false, remoteHost = "", 
     fs.writeFileSync(tokenFile, token, { mode: 384 });
   }
   const clients = /* @__PURE__ */ new Set();
-  const remoteName = cleanHost(remoteHost), remoteAllowed = (Array.isArray(remoteLogins) ? remoteLogins : []).map((l) => String(l).trim().toLowerCase()).filter(Boolean);
+  // remoteUrl is the address the private-network proxy publishes (https://host:port); remoteHost alone names just the host.
+  const remoteUrlOrigin = (() => { try { const u = new URL(remoteUrl); return u.protocol === "https:" ? u.origin : ""; } catch { return ""; } })();
+  const remoteName = cleanHost(remoteHost || remoteUrlOrigin), remoteAllowed = (Array.isArray(remoteLogins) ? remoteLogins : []).map((l) => String(l).trim().toLowerCase()).filter(Boolean);
   let origin;
   const notify = (type, payload) => {
     const data = `event: ${type}
@@ -177,7 +179,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
         }
         if (url.pathname === "/api/pairing" && req.method === "GET") {
           if (!isLocal(req)) return send(403, { error: "Abre la conexión de Android desde la PC." });
-          return send(200, { token, lan, addresses: Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) });
+          return send(200, { token, lan, remote: remoteName ? { host: remoteName, url: remoteUrlOrigin || `https://${remoteName}`, restricted: remoteAllowed.length > 0 } : null, addresses: Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) });
         }
         if (url.pathname === "/api/projects" && req.method === "POST") {
           const input = await body();

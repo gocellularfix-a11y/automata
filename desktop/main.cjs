@@ -38,6 +38,12 @@ else {
     const demo = process.argv.includes("--demo");
     const portAt = process.argv.indexOf("--port");
     const options = { port: portAt >= 0 ? Number(process.argv[portAt + 1]) : 4780, lan: process.argv.includes("--lan"), demo, dataDir: path.join(app.getPath("userData"), demo ? "demo" : "workspace") };
+    // Remote access through a private network (Tailscale): remote.json in the user data folder,
+    // {"url": "https://<this PC>.<your tailnet>.ts.net:8444", "logins": ["you@example.com"]}. The coordinator itself stays on 127.0.0.1.
+    try {
+      const remote = JSON.parse(fs.readFileSync(path.join(app.getPath("userData"), "remote.json"), "utf8"));
+      if (remote?.url) Object.assign(options, { remoteUrl: String(remote.url), remoteLogins: Array.isArray(remote.logins) ? remote.logins : [] });
+    } catch { /* remote access is not configured */ }
     try {
       service = await createServer(options);
     } catch (e) {

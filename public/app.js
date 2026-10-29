@@ -1083,7 +1083,11 @@ async function connectionDialog() {
   if (connection?.token) {
     try {
       const pair = await api("pairing");
-      $("#pairingInfo").innerHTML = `<div class="note">${pair.lan ? "En Android, escribe una de estas direcciones y el código de abajo. Mantén la PC encendida." : "Para conectar Android, inicia Automata en tu PC con la opción --lan. El acceso remoto no está habilitado en esta sesión."}</div>${pair.lan ? `<p class="pairing-code">${pair.addresses.map(esc).join("<br>")}</p><details><summary>Mostrar código de acceso</summary><p class="pairing-code">${esc(pair.token)}</p></details>` : ""}`;
+      $("#pairingInfo").innerHTML = (() => {
+        const addresses = [...pair.remote ? [pair.remote.url] : [], ...pair.lan ? pair.addresses : []];
+        const note = pair.remote ? "Desde cualquier lugar: abre Tailscale en el teléfono, escribe esta dirección y el código de abajo. Mantén la PC encendida." : pair.lan ? "En Android, escribe una de estas direcciones y el código de abajo. Mantén la PC encendida." : "Para conectar Android, inicia Automata en tu PC con la opción --lan. El acceso remoto no está habilitado en esta sesión.";
+        return `<div class="note">${note}</div>${addresses.length ? `<p class="pairing-code">${addresses.map(esc).join("<br>")}</p><details><summary>Mostrar código de acceso</summary><p class="pairing-code">${esc(pair.token)}</p></details>` : ""}`;
+      })();
     } catch {
     }
   }

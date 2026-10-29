@@ -100,3 +100,19 @@ test("el servidor sigue escuchando solo en 127.0.0.1 con acceso remoto", async (
   const { app } = await start(t, { remoteHost: REMOTE });
   assert.equal(app.server.address().address, "127.0.0.1");
 });
+
+test("con una dirección remota, el emparejamiento (solo desde la PC) la ofrece junto al código", async (t) => {
+  const { app, call, remote } = await start(t, { remoteUrl: `https://${REMOTE}:8444`, remoteLogins: ["jorge@example.com"] });
+  assert.deepEqual(app.remote, { host: REMOTE, restricted: true });
+  const pairing = (await call("/api/pairing")).body;
+  assert.deepEqual(pairing.remote, { host: REMOTE, url: `https://${REMOTE}:8444`, restricted: true });
+  assert.equal(pairing.token, app.token);
+  assert.equal((await remote("/api/pairing")).status, 403, "por el túnel no se entrega");
+  assert.equal((await remote("/api/state")).status, 200, "el nombre sale de la dirección");
+});
+
+test("una dirección remota que no es https se ignora", async (t) => {
+  const { app, remote } = await start(t, { remoteUrl: `http://${REMOTE}:8444` });
+  assert.equal(app.remote, null);
+  assert.equal((await remote("/api/state")).status, 403);
+});

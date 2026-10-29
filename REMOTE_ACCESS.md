@@ -7,7 +7,15 @@ Estado al 28 oct 2026: **probado** por Tailscale con el Samsung S25 Ultra (clien
 - Tailscale publica ese puerto local como `https://<tu-pc>.<tu-red>.ts.net:<puerto>` (`tailscale serve`), solo dentro de tu red privada y con un certificado HTTPS válido. El teléfono necesita la app de Tailscale conectada a la misma cuenta.
 - La PC debe estar encendida y despierta, con Automata abierto.
 
-## Activarlo
+## Activarlo en la app de Windows instalada (lo normal)
+1. Crea `%APPDATA%Automataemote.json` con tu dirección de Tailscale y, si quieres, tu cuenta: `{"url": "https://cellhub.tail3ce5f0.ts.net:8444", "logins": ["tu-cuenta@correo.com"]}`.
+2. Publica el puerto de la app (4780) en tu red privada: `tailscale serve --bg --https=8444 http://127.0.0.1:4780`.
+3. Reinicia Automata. En el diálogo de conexión del teléfono (icono del enlace) ya aparece la dirección remota y el código.
+4. Para no teclear en el teléfono (Android conectado por USB): `node scripts/android-connect.mjs --serial <serie> --url https://cellhub.tail3ce5f0.ts.net:8444 --token-file "%APPDATA%Automataworkspaceaccess-token"` escribe la dirección y el código dentro del cliente sin mostrarlos.
+
+Si otra copia de Automata ya usa el puerto 4780, la app instalada escucha en otro puerto y el paso 2 deja de apuntarle: cierra la otra copia.
+
+## Activarlo con la línea de comandos (pruebas)
 1. Arranca el coordinador con el nombre que publica Tailscale (y, si quieres, limitado a tu cuenta):
    `node server/index.mjs --port 4790 --remote-host cellhub.tail3ce5f0.ts.net --remote-login tu-cuenta@correo.com`
 2. Publica el puerto en tu red privada (añade una entrada; no toca las que ya tengas):
