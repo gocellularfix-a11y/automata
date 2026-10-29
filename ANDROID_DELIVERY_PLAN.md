@@ -102,3 +102,12 @@ Dos agentes (Codex director, Claude desarrollador); Claude con permisos limitado
 2. **JDK:** ¿usar JDK 21 de `~/.gradle/jdks` (leerlo, sin tocarlo) o el JBR 25 con `--release 8`? (recomiendo 21 si existe, 25 como alternativa).
 3. **A3/A5:** ¿autorizas instalar y desinstalar **un APK de prueba** en el teléfono `R5CY61KW8LT`? Alternativa: un AVD nuevo propio de Automata (escribe en `~/.android/avd`, también requiere tu autorización).
 4. **Gradle:** ¿lo dejamos fuera de esta versión (recomendado) y solo lo reconsideramos si hace falta una dependencia?
+
+## 9. Pista paralela: validación de los clientes móviles de Automata (añadido el 28 oct 2026)
+
+No cambia ni retrasa A1–A6. El usuario pidió que, cuando Automata esté listo, se pruebe en el **Samsung Galaxy S25 Ultra** (el `SM_S938B` de la auditoría, a confirmar) y en un **iPhone 13**, contra el mismo coordinador. El plan completo está en `MOBILE_CLIENTS_VALIDATION_PLAN.md` (hitos M0–M6, escalera de autorizaciones, riesgos) y los requisitos de una app iOS nativa, por separado, en `IOS_NATIVE_REQUIREMENTS.md`.
+
+- **No confundir:** el cliente Android **de Automata** (`app.automata.workspace`, `dist/Automata-Android.apk`, ya instalado en el Samsung) y las **apps creadas por Automata** (`apps.local.*`, `<proyecto>/dist/android/*.apk`). A3 y A5 solo pueden instalar/desinstalar el paquete de prueba registrado en su `build-info.json`; antes y después se comprueba, en solo lectura, que el cliente no cambió.
+- **Encaje:** M0–M1 (sin teléfonos) ahora → A3 → M2–M3a → A4 → A5 → M3b/M4/M5 con la autorización final → M6 junto al informe final de entrega.
+- Se incorporan al plan final como criterios de aceptación: conexión y reconexión, proyectos, progreso, aprobaciones y seguridad coherentes en ambos teléfonos; iPhone por Safari (y PWA solo si se verifica en el teléfono real); ninguna promesa de compilación nativa iOS desde Windows.
+- Hasta recibir autorización específica no se instala, desinstala ni modifica nada en los teléfonos ni se crea ninguna regla de Windows.
