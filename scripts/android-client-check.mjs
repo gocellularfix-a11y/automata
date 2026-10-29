@@ -13,6 +13,9 @@ import { openWebView } from "./adb-webview.mjs";
 const args = process.argv.slice(2);
 const flag = (name) => { const at = args.indexOf("--" + name); return at >= 0 ? args[at + 1] : undefined; };
 const serial = flag("serial"), port = Number(flag("port") ?? 4781);
+// Remote mode: the phone reaches the coordinator through a private-network proxy (e.g. `tailscale serve` publishing
+// 127.0.0.1:<port> as https://<host>:<proxy port>) instead of USB. The coordinator is still started here, on 127.0.0.1.
+const remoteUrl = flag("remote-url") ? new URL(flag("remote-url")).origin : null, remoteLogin = flag("remote-login");
 const out = path.resolve(flag("out") ?? path.join("artifacts", "client-" + Date.now()));
 const PKG = "app.automata.workspace";
 if (!serial) { console.error("Uso: node scripts/android-client-check.mjs --serial <serie> [--out <carpeta>] [--port 4781]"); process.exit(2); }
@@ -28,7 +31,7 @@ const check = (name, ok, detail = "") => { report.checks.push({ name, ok: !!ok, 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), "automata-client-check-"));
 let server = null;
 const startServer = async () => {
-  server = spawn(process.execPath, [path.join(root, "server", "index.mjs"), "--demo", "--port", String(port), "--data", data], { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  server = spawn(process.execPath, [path.join(root, "server", "index.mjs"), "--demo", "--port", String(port), "--data", data, ...remoteUrl ? ["--remote-host", new URL(remoteUrl).hostname, ...remoteLogin ? ["--remote-login", remoteLogin] : []] : []], { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   let text = "";
   server.stdout.on("data", (c) => { text += c; });
   server.stderr.on("data", (c) => { text += c; });
@@ -70,8 +73,11 @@ const finish = async () => {
 
 try {
   await startServer();
-  const reversed = await adb("reverse", `tcp:${port}`, `tcp:${port}`);
-  check("USB: el teléfono llega al coordinador de la PC (adb reverse)", reversed.code === 0, reversed.stderr.trim());
+  if (!remoteUrl) {
+    const reversed = await adb("reverse", `tcp:${port}`, `tcp:${port}`);
+    check("USB: el teléfono llega al coordinador de la PC (adb reverse)", reversed.code === 0, reversed.stderr.trim());
+  } else console.log(`Modo remoto: el teléfono entra por ${remoteUrl} (sin USB, sin Wi-Fi local obligatoria)`);
+  const clientOrigin = remoteUrl ?? origin;
   await adb("shell", "am", "force-stop", PKG);
   const start = await adb("shell", "am", "start", "-W", "-n", `${PKG}/.MainActivity`);
   check("el cliente arranca", /Status: ok/.test(start.stdout), start.stdout.replace(/\r?\n/g, " | ").slice(0, 160));
@@ -85,13 +91,13 @@ try {
 
   // Connection: a wrong code must not connect or be saved; the right one connects.
   const savedBefore = await view.evaluate(`localStorage.getItem("automata.connection")`);
-  await openConnection(origin, "0".repeat(64));
+  await openConnection(clientOrigin, "0".repeat(64));
   await wait(1500);
   const wrong = await connectionState();
   const saved = await view.evaluate(`localStorage.getItem("automata.connection")`);
   const wrongSaved = !!saved && saved.includes("0".repeat(64));
   check("código incorrecto: no conecta y no sustituye lo guardado", wrong.offline && !wrongSaved && saved === savedBefore, JSON.stringify(wrong) + " · el código erróneo " + (wrongSaved ? "SE GUARDÓ" : "no se guardó"));
-  await openConnection(origin, token());
+  await openConnection(clientOrigin, token());
   const online = await until(async () => { const s = await connectionState(); return !s.offline && /Conectado/.test(s.text) ? s : null; });
   check("código correcto: «Conectado a tu PC»", !!online, JSON.stringify(online));
   await closeDialogs();
@@ -141,9 +147,16 @@ try {
   check("código ajeno: 401", (await api("state", { auth: "f".repeat(64) })).status === 401);
   check("origen web ajeno: 403", (await api("state", { headers: { Origin: "https://evil.example" } })).status === 403);
   check("método no permitido sobre archivos: 405", (await fetch(`${origin}/index.html`, { method: "DELETE" })).status === 405);
-  const pairing = await api("pairing");
-  report.note = `Por USB (adb reverse) las peticiones del teléfono llegan como locales: /api/pairing responde ${pairing.status}. Es por diseño de la conexión USB; por Wi-Fi sería 403.`;
-  console.log("nota: " + report.note);
+  // What the PHONE itself is allowed to ask for. Over USB its requests look local; through the proxy they must not.
+  const fromPhone = JSON.parse(await view.evaluate(`(async () => { const t = JSON.parse(localStorage.getItem("automata.connection")); const r = await fetch(t.origin + "/api/pairing", { headers: { Authorization: "Bearer " + t.token } }); const a = await fetch(t.origin + "/api/auth", { method: "POST", headers: { Authorization: "Bearer " + t.token, "Content-Type": "application/json" }, body: JSON.stringify({ action: "login", role: "coder", method: "subscription" }) }); return JSON.stringify({ pairing: r.status, login: a.status }); })()`));
+  report.fromPhone = fromPhone;
+  if (remoteUrl) check("remoto: el teléfono NO puede pedir el código de emparejamiento ni conectar cuentas", fromPhone.pairing === 403 && fromPhone.login === 403, JSON.stringify(fromPhone));
+  else report.note = `Por USB (adb reverse) las peticiones del teléfono llegan como locales: /api/pairing responde ${fromPhone.pairing}. Es por diseño de la conexión USB.`;
+  if (report.note) console.log("nota: " + report.note);
+  if (remoteUrl) {
+    const through = async (route, extra = {}) => { const r = await fetch(remoteUrl + "/api/" + route, { headers: { ...extra.auth === null ? {} : { Authorization: "Bearer " + (extra.auth ?? token()) }, ...extra.headers } }); return r.status; };
+    check("remoto desde la PC: sin código 401, código ajeno 401, origen ajeno 403", await through("state", { auth: null }) === 401 && await through("state", { auth: "f".repeat(64) }) === 401 && await through("state", { headers: { Origin: "https://evil.example" } }) === 403);
+  }
   await finish();
 } catch (error) {
   check("la prueba terminó sin error", false, error.stack?.split("\n").slice(0, 3).join(" | ") ?? error.message);
