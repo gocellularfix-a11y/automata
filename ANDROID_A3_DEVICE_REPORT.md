@@ -32,3 +32,20 @@ No se instaló nada y no se podía desde Windows: no hay compilación nativa (ve
 ## Notas
 - Las capturas contienen la pantalla del teléfono (incluida una notificación de tu reproductor): quedaron solo en la carpeta temporal de la sesión, **no** en el repositorio.
 - `android/build/automata-debug.keystore` es nuevo (ignorado por Git).
+
+---
+## Ronda 2 (tras «sí» a las tres preguntas)
+
+### Hecho
+- **Variante de prueba** (`--variant test`): otro paquete (`<paquete>.test`), depurable, en `dist/android/test/`, `build-info` propio con `deliverable:false`. El verificador la acepta solo si se le dice que es de prueba, y rechaza una entrega depurable o un `.test` presentado como entrega. 3 pruebas nuevas.
+- **Escenarios dentro del WebView** (`scripts/android-webview-scenarios.mjs`): usa el socket de depuración del propio WebView con `adb forward` (puerto solo en la PC). **No** usa el modo Android de Playwright, que instala su propio controlador en el teléfono.
+- **Resultado en el S25 Ultra** (WebView Chrome 156, 384×750 CSS px a 2,8125): **11/11 escenarios de `ui-check.json` correctos**; arranque en frío 418 ms; sin excepciones de JavaScript; sin `FATAL EXCEPTION`. Paquete de prueba desinstalado (solo ese), sin restos, `adb forward` retirado, cliente intacto (versionCode 5, misma firma y fecha).
+- **Alcance real de esa prueba:** los escenarios manipulan el DOM (rellenan valores y hacen `click()`), no toques físicos: no prueban el selector nativo de fecha, el teclado numérico ni gestos. Eso queda para una pasada manual o con `adb input`.
+- **Cliente instalado = interfaz vieja:** se descargó (solo lectura) el `base.apk` instalado y se comparó con el recién compilado: `app.js`, `i18n.js`, `index.html`, `styles.css` e `icon.svg` **difieren**. Es decir, el cliente del teléfono no tiene las pantallas de P3/P4 (p. ej. «Tu aplicación está lista»). Actualizarlo es necesario, no cosmético.
+
+### Bloqueado (no lo rodeé)
+1. **Desinstalar `app.automata.workspace`:** el sistema de permisos de Claude Code denegó el comando (sin explicación). No intenté otra vía. Para continuar: o lo ejecutas tú, o añades una regla de permiso para ese comando exacto.
+2. **Regla de Firewall:** esta sesión no es administrador (`Administrador: False`), así que necesita un PowerShell elevado tuyo.
+
+### Datos de red medidos
+Wi-Fi `GOCELLULAR 2` (perfil **Privado**), PC en `192.168.50.167`; también hay un adaptador Tailscale (`100.107.206.48`). Si esa Wi-Fi es la del negocio, tenerla como «de confianza» incluye a cualquiera conectado a ella: el código de acceso es la única barrera (va sin cifrar por HTTP).
