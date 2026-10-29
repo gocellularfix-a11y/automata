@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { resolveToolchain, runTool, APP_HOST } from "../server/androidbuild.mjs";
+import { openWebView } from "./adb-webview.mjs";
 import { loadScenarios } from "../server/scenarios.mjs";
 import { stepExpression } from "../server/browsercheck.mjs";
 
@@ -21,44 +22,23 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const { scenarios, problems } = loadScenarios(project);
 if (!scenarios.length) { console.error("No hay escenarios válidos: " + problems.join(" ")); process.exit(2); }
 
-const pid = (await adb("shell", `pidof ${pkg}`)).stdout.trim().split(/\s+/)[0];
-if (!/^\d+$/.test(pid)) { console.error("La app de prueba no está en ejecución; ábrela primero."); process.exit(2); }
-const sockets = (await adb("shell", "cat /proc/net/unix")).stdout;
-const socket = new RegExp(`webview_devtools_remote_${pid}\\b`).exec(sockets)?.[0];
-if (!socket) { console.error("El WebView no expone su socket de depuración (¿variante de prueba?)."); process.exit(2); }
-const port = 9300 + Math.floor(Math.random() * 400);
-const forwarded = await adb("forward", `tcp:${port}`, `localabstract:${socket}`);
-if (forwarded.code !== 0) { console.error(forwarded.stderr); process.exit(2); }
-let ws, nextId = 1;
-const pending = new Map(), results = [];
+const results = [];
+let view;
 const finish = async (code) => {
-  try { ws?.close(); } catch { /* closed */ }
-  await adb("forward", "--remove", `tcp:${port}`);
+  await view?.close();
   fs.writeFileSync(path.join(out, "webview-scenarios.json"), JSON.stringify({ package: pkg, at: new Date().toISOString(), results }, null, 2));
   const failed = results.filter((r) => !r.ok);
   console.log(failed.length ? `Escenarios: ${failed.length} de ${results.length} fallaron.` : `Escenarios: ${results.length}/${results.length} correctos dentro del WebView.`);
   process.exit(code ?? (failed.length ? 1 : 0));
 };
 try {
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-  const target = targets.find((t) => t.type === "page" && new URL(t.url).host === APP_HOST) ?? targets.find((t) => t.type === "page");
-  if (!target) throw new Error("El WebView no tiene ninguna página abierta.");
-  ws = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error("No se pudo abrir el canal de depuración.")); });
-  const listeners = [];
-  ws.onmessage = (event) => {
-    const message = JSON.parse(event.data);
-    if (message.id && pending.has(message.id)) { const { resolve, reject } = pending.get(message.id); pending.delete(message.id); message.error ? reject(new Error(message.error.message)) : resolve(message.result); } else listeners.forEach((l) => l(message));
-  };
-  const send = (method, params = {}) => new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params })); });
-  const evaluate = async (expression) => (await send("Runtime.evaluate", { returnByValue: true, awaitPromise: true, expression })).result?.value;
+  view = await openWebView({ adb: tc.adb, serial, pkg });
+  const { send, evaluate } = view;
   const consoleErrors = [];
-  listeners.push((m) => { if (m.method === "Runtime.exceptionThrown") consoleErrors.push(String(m.params.exceptionDetails?.exception?.description ?? m.params.exceptionDetails?.text).split("\n")[0].slice(0, 160)); });
-  await send("Runtime.enable");
-  await send("Page.enable");
+  view.onEvent((m) => { if (m.method === "Runtime.exceptionThrown") consoleErrors.push(String(m.params.exceptionDetails?.exception?.description ?? m.params.exceptionDetails?.text).split("\n")[0].slice(0, 160)); });
   const origin = `https://${APP_HOST}/index.html`;
   const settled = async () => { for (let i = 0; i < 100 && await evaluate("document.readyState").catch(() => "") !== "complete"; i++) await wait(100); await wait(250); };
-  const info = JSON.parse(await evaluate("JSON.stringify({ href: location.href, ua: navigator.userAgent, width: innerWidth, height: innerHeight, dpr: devicePixelRatio, title: document.title, scroll: document.documentElement.scrollWidth <= innerWidth })"));
+  const info = view.info;
   console.log(`WebView: ${info.ua.match(/Chrome\/[\d.]+/)?.[0] ?? info.ua} · ${info.width}x${info.height} @${info.dpr} · ${info.href}`);
   fs.writeFileSync(path.join(out, "webview-info.json"), JSON.stringify(info, null, 2));
   for (const scenario of scenarios) {
