@@ -49,3 +49,30 @@ No se instaló nada y no se podía desde Windows: no hay compilación nativa (ve
 
 ### Datos de red medidos
 Wi-Fi `GOCELLULAR 2` (perfil **Privado**), PC en `192.168.50.167`; también hay un adaptador Tailscale (`100.107.206.48`). Si esa Wi-Fi es la del negocio, tenerla como «de confianza» incluye a cualquiera conectado a ella: el código de acceso es la única barrera (va sin cifrar por HTTP).
+
+---
+## Ronda 3: cliente de Automata reinstalado y validado en el Samsung (tras desinstalarlo el usuario)
+
+- El usuario desinstaló `app.automata.workspace` (esa orden la bloqueó el sistema de permisos de Claude Code). Se instaló `dist/Automata-Android.apk` (v0.4.0, versionCode 5, compilado con JDK 21, `sha256 261203e8…ffd4f`, firmado con la llave nueva de `android/build/`). **Guarda una copia de `android/build/automata-debug.keystore` fuera del repositorio**: si se pierde, volveremos a necesitar desinstalar el cliente para actualizarlo.
+- `scripts/android-client-check.mjs` (coordinador de demostración propio en `127.0.0.1:4781`, USB con `adb reverse`, sin red local ni Firewall, el cliente guiado por su socket de depuración). **Resultado: todas las comprobaciones correctas, 4 corridas consecutivas** (la última con la prueba de aprobaciones):
+
+| Área | Comprobado en el teléfono real |
+|---|---|
+| Interfaz | el APK trae la interfaz actual (fila «Tu aplicación está lista»), sin desbordamiento horizontal a 384 px |
+| Conexión | código incorrecto: no conecta y no sustituye lo guardado; correcto: «Conectado a tu PC» |
+| Proyectos | el cliente muestra el proyecto del coordinador |
+| Progreso | ciclo completo iniciado desde el teléfono: cliente «Completado» = coordinador `complete` |
+| Reconexión | al parar el coordinador pasa a «Reconectando»; al volver, se reconecta solo y sigue mostrando el ciclo completo |
+| Aprobaciones | la propuesta del director aparece; «Ahora no» en el teléfono queda `declined` en el coordinador y desaparece del cliente; una segunda respuesta (cliente atrasado) se rechaza con 422; no se ejecutó nada sin una persona |
+| Seguridad (PC → coordinador) | sin código 401, código ajeno 401, origen web ajeno 403, `DELETE` sobre archivos 405 |
+
+- Se repitió la prueba de los 11 escenarios web en la variante de prueba tras refactorizar el ayudante: 11/11. Paquete de prueba retirado; sin restos; sin `adb forward`/`reverse` activos; solo queda instalado el cliente.
+
+### Hallazgos
+1. **Texto cortado en el móvil:** en la tarjeta «El director propone», el texto «Proyecto terminado. ¿Quieres correr la app?» se trunca («¿Qu…») junto a los botones. Cosmético, pero se vería igual o peor en el iPhone; pendiente de arreglar con tu aprobación.
+2. **Por USB `/api/pairing` responde 200 al teléfono** (llega como local). Es consecuencia de `adb reverse`; por Wi-Fi sería 403. Hay que confirmarlo por Wi-Fi.
+3. La segunda respuesta a una aprobación recibe «No se encontró esa propuesta» (la ya resuelta se retira), no «ya se resolvió»: rechazada correctamente, mensaje mejorable.
+4. El cliente sigue siendo de desarrollo (depurable, HTTP permitido, `INTERNET`): aceptable para esta prueba, no como entrega.
+
+### No probado todavía
+Conexión por **Wi-Fi/LAN** (necesita la regla de Firewall), código sobre HTTP en la red de la tienda, segundo plano/bloqueo de pantalla, y todo el **iPhone** (Safari, iOS 18.0).
