@@ -17,7 +17,15 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
 const mime = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json", ".woff2": "font/woff2" };
 const loopback = (address) => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address);
-export async function createServer({ port = 4780, lan = false, demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), auth = new AuthManager({ demo }), github = new GitHubProjects({ auth }), codexModels = new CodexModels(), ...injections } = {}) {
+// A reverse proxy on this PC (Tailscale serve, a tunnel…) makes every remote request arrive from 127.0.0.1. Those requests
+// say so in their headers, and they are NOT "this PC": the things reserved for the person at the PC (connecting accounts,
+// the pairing code, opening apps, Claude's check tool) refuse them.
+const PROXY_HEADERS = ["x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "forwarded", "x-real-ip", "via"];
+const proxied = (req) => PROXY_HEADERS.some((name) => req.headers[name] !== undefined) || Object.keys(req.headers).some((name) => name.startsWith("tailscale-"));
+const isLocal = (req) => loopback(req.socket.remoteAddress) && !proxied(req);
+// A host name (no port) a private-network proxy publishes Automata under, e.g. cellhub.tailnet.ts.net.
+const cleanHost = (value) => String(value ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[:/].*$/, "").replace(/\.$/, "");
+export async function createServer({ port = 4780, lan = false, remoteHost = "", remoteLogins = [], demo = false, dataDir = path.join(ROOT, ".automata", demo ? "demo" : "live"), auth = new AuthManager({ demo }), github = new GitHubProjects({ auth }), codexModels = new CodexModels(), ...injections } = {}) {
   const store = new Store(dataDir), release = store.acquire();
   let coordinator;
   try {
@@ -48,6 +56,7 @@ export async function createServer({ port = 4780, lan = false, demo = false, dat
     fs.writeFileSync(tokenFile, token, { mode: 384 });
   }
   const clients = /* @__PURE__ */ new Set();
+  const remoteName = cleanHost(remoteHost), remoteAllowed = (Array.isArray(remoteLogins) ? remoteLogins : []).map((l) => String(l).trim().toLowerCase()).filter(Boolean);
   let origin;
   const notify = (type, payload) => {
     const data = `event: ${type}
@@ -69,12 +78,13 @@ data: ${JSON.stringify(payload)}
     try {
       const url = new URL(req.url, "http://localhost");
       const host = req.headers.host?.split(":")[0];
-      if (!host || !lan && !["127.0.0.1", "localhost", "["].includes(host)) {
+      const viaRemote = !!remoteName && host?.toLowerCase().replace(/\.$/, "") === remoteName;
+      if (!host || !lan && !viaRemote && !["127.0.0.1", "localhost", "["].includes(host)) {
         send(403, { error: "Host no permitido." });
         return;
       }
       const requestOrigin = req.headers.origin;
-      const originAllowed = !requestOrigin || requestOrigin === origin || requestOrigin === "https://automata.local" || lan && (() => {
+      const originAllowed = !requestOrigin || requestOrigin === origin || requestOrigin === "https://automata.local" || viaRemote && (() => { try { const u = new URL(requestOrigin); return u.protocol === "https:" && u.hostname.replace(/\.$/, "") === remoteName; } catch { return false; } })() || lan && (() => {
         try {
           const u = new URL(requestOrigin);
           return u.port === String(server.address().port) && ["http:", "https:"].includes(u.protocol) && ["localhost", "127.0.0.1", ...Object.values(os.networkInterfaces()).flat().filter(Boolean).map((i) => i.address)].includes(u.hostname);
@@ -85,6 +95,15 @@ data: ${JSON.stringify(payload)}
       if (!originAllowed) {
         send(403, { error: "Origen no permitido." });
         return;
+      }
+      // Through the private-network proxy: it must really be the proxy (it adds its own headers) and, when the person named
+      // who may come in, only those accounts. The access code is still required for everything under /api.
+      if (viaRemote) {
+        const login = String(req.headers["tailscale-user-login"] ?? "").toLowerCase();
+        if (!proxied(req) || remoteAllowed.length && !remoteAllowed.includes(login)) {
+          send(403, { error: "Esta cuenta no tiene permiso para entrar a Automata desde fuera." });
+          return;
+        }
       }
       if (requestOrigin) {
         res.setHeader("Access-Control-Allow-Origin", requestOrigin);
@@ -103,7 +122,7 @@ data: ${JSON.stringify(payload)}
       // The one call that does not use the person's access code: Claude's check tool, with a token that exists for one call
       // of one task. Only from this PC and never from a web page (a page always sends an Origin).
       if (url.pathname === CHECK_ENDPOINT_PATH && req.method === "POST") {
-        if (!loopback(req.socket.remoteAddress) || requestOrigin) return send(403, { error: "Solo se puede pedir desde esta PC." });
+        if (!isLocal(req) || requestOrigin) return send(403, { error: "Solo se puede pedir desde esta PC." });
         try { return send(200, await coordinator.agentChecks(String(req.headers.authorization ?? "").replace(/^Bearer /, ""))); } catch (e) { return send(e.status ?? 422, { error: e.message }); }
       }
       if (url.pathname.startsWith("/api/")) {
@@ -134,7 +153,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
           const text = Buffer.concat(chunks).toString("utf8");
           return text ? JSON.parse(text) : {};
         };
-        const localLogin = loopback(req.socket.remoteAddress) && requestOrigin !== "https://automata.local";
+        const localLogin = isLocal(req) && requestOrigin !== "https://automata.local";
         if (url.pathname === "/api/auth" && req.method === "GET") return send(200, await auth.status({ local: localLogin }));
         if (url.pathname === "/api/auth" && req.method === "POST") {
           if (!localLogin) return send(403, { error: "Conecta las cuentas desde Automata en tu PC. Android muestra su estado." });
@@ -154,10 +173,10 @@ data: ${JSON.stringify(coordinator.snapshot())}
           const catalog = demo ? { source: "builtin", models: MODELS.auditor } : await codexModels.list({ force: url.searchParams.has("refresh") });
           // "Open with Windows" only makes sense for the packaged desktop app (a dev run would register electron.exe).
           const loginItem = !!process.versions.electron && !process.defaultApp && process.platform === "win32";
-          return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"], autoResume: true, loginItem, plan: true, conversations: true, ideas: true, delivery: true }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: { coder: MODELS.coder, auditor: catalog.models }, modelSource: catalog.source, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
+          return send(200, { demo, version: VERSION, features: { directTasks: true, accessControl: true, team: true, git: true, newRepos: true, languages: ["es", "en"], autoResume: true, loginItem, plan: true, conversations: true, ideas: true, delivery: true }, team: { coders: TEAM_LIMITS.coder, auditors: TEAM_LIMITS.auditor }, gitModes: GIT_MODES, projectsRoot: projectsRootOf(coordinator.settings), models: { coder: MODELS.coder, auditor: catalog.models }, modelSource: catalog.source, modes: MODES, efforts: { coder: effortsFor("sonnet", "coder"), auditor: effortsFor("gpt-6.1-sol", "auditor") }, agents: { coder: !!findAgent("coder"), auditor: !!findAgent("auditor") }, lan, remote: remoteName ? { host: remoteName, restricted: remoteAllowed.length > 0 } : null, addresses: lan ? Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) : [] });
         }
         if (url.pathname === "/api/pairing" && req.method === "GET") {
-          if (!loopback(req.socket.remoteAddress)) return send(403, { error: "Abre la conexión de Android desde la PC." });
+          if (!isLocal(req)) return send(403, { error: "Abre la conexión de Android desde la PC." });
           return send(200, { token, lan, addresses: Object.values(os.networkInterfaces()).flat().filter((i) => i?.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${server.address().port}`) });
         }
         if (url.pathname === "/api/projects" && req.method === "POST") {
@@ -201,7 +220,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
         // The «Tu aplicación está lista» row: open it, show its folder, read its guide. Opening is for this PC only.
         if (url.pathname === "/api/delivery" && req.method === "POST") {
           const data = await body();
-          return send(200, await coordinator.deliveryAction(String(data.runId ?? ""), String(data.action ?? ""), { local: loopback(req.socket.remoteAddress) }));
+          return send(200, await coordinator.deliveryAction(String(data.runId ?? ""), String(data.action ?? ""), { local: isLocal(req) }));
         }
         if (url.pathname === "/api/environment" && req.method === "GET") return send(200, await coordinator.detect({ force: url.searchParams.has("refresh") }));
         if (url.pathname === "/api/memory" && req.method === "POST") return send(200, coordinator.memoryAction(await body()));
@@ -265,7 +284,7 @@ data: ${JSON.stringify(coordinator.snapshot())}
   heartbeat.unref();
   // Only once the server listens: whatever the last session left unfinished continues (if allowed).
   coordinator.startAutoResume();
-  return { server, coordinator, auth, origin, token, store, async close() {
+  return { server, coordinator, auth, origin, token, store, remote: remoteName ? { host: remoteName, restricted: remoteAllowed.length > 0 } : null, async close() {
     clearInterval(heartbeat);
     await Promise.all([coordinator.close(), auth.close(), github.close()]);
     for (const c of clients) c.end();
@@ -276,9 +295,10 @@ data: ${JSON.stringify(coordinator.snapshot())}
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2), at = args.indexOf("--port"), dataAt = args.indexOf("--data");
-  const app = await createServer({ port: at >= 0 ? Number(args[at + 1]) : 4780, lan: args.includes("--lan"), demo: args.includes("--demo"), ...dataAt >= 0 ? { dataDir: path.resolve(args[dataAt + 1]) } : {} });
+  const app = await createServer({ port: at >= 0 ? Number(args[at + 1]) : 4780, lan: args.includes("--lan"), demo: args.includes("--demo"), remoteHost: args.includes("--remote-host") ? args[args.indexOf("--remote-host") + 1] : "", remoteLogins: args.flatMap((a, i) => a === "--remote-login" ? [args[i + 1]] : []), ...dataAt >= 0 ? { dataDir: path.resolve(args[dataAt + 1]) } : {} });
   console.log(`Automata · ${app.origin}
 Abre la aplicación de Windows o conecta desde Android.
 Código de conexión local: ${app.token}`);
+  if (app.remote) console.log(`Acceso remoto: https://${app.remote.host} (por el proxy privado; el coordinador sigue solo en 127.0.0.1)${app.remote.restricted ? " · limitado a las cuentas indicadas" : ""}`);
   for (const sig of ["SIGINT", "SIGTERM"]) process.once(sig, () => void app.close().then(() => process.exit(0)));
 }
