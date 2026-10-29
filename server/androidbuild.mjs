@@ -158,11 +158,11 @@ function iconColor(id) {
   const [r, g, b] = [0, 8, 4].map((shift) => { const k = (shift + hue / 30) % 12; return 0.35 - 0.3 * Math.max(-1, Math.min(k - 3, 9 - k, 1)); });
   return "#" + [r, g, b].map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("");
 }
-export function manifestSource({ packageName, versionCode, versionName, minSdk, targetSdk, permissions }) {
+export function manifestSource({ packageName, versionCode, versionName, minSdk, targetSdk, permissions, variant = "release" }) {
   return `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="${packageName}" android:versionCode="${versionCode}" android:versionName="${escapeXml(versionName)}">
   <uses-sdk android:minSdkVersion="${minSdk}" android:targetSdkVersion="${targetSdk}" />
-${permissions.map((p) => `  <uses-permission android:name="${p}" />\n`).join("")}  <application android:label="@string/app_name" android:icon="@drawable/app_icon" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:debuggable="false" android:allowBackup="false" android:usesCleartextTraffic="false" android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
+${permissions.map((p) => `  <uses-permission android:name="${p}" />\n`).join("")}  <application android:label="@string/app_name" android:icon="@drawable/app_icon" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:debuggable="${variant === "test"}" android:allowBackup="false" android:usesCleartextTraffic="false" android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
     <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|uiMode" android:windowSoftInputMode="adjustResize">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
@@ -175,12 +175,13 @@ ${permissions.map((p) => `  <uses-permission android:name="${p}" />\n`).join("")
 }
 const ALLOWED_ELEMENTS = new Set(["manifest", "uses-sdk", "uses-permission", "application", "activity", "intent-filter", "action", "category"]);
 // The generated manifest must contain nothing but the elements Automata knows: no services, receivers, providers…
-export function manifestProblems(xml, { permissions }) {
+export function manifestProblems(xml, { permissions, variant = "release" }) {
   const problems = [];
   for (const [, name] of xml.matchAll(/<([a-zA-Z][\w-]*)/g)) if (!ALLOWED_ELEMENTS.has(name)) problems.push(`Elemento no permitido en el manifiesto: <${name}>.`);
   const asked = [...xml.matchAll(/<uses-permission android:name="([^"]+)"/g)].map((m) => m[1]);
   if (asked.join("|") !== permissions.join("|")) problems.push("Los permisos del manifiesto no coinciden con los aprobados.");
-  if (/debuggable="true"|usesCleartextTraffic="true"/.test(xml)) problems.push("El manifiesto activa depuración o tráfico HTTP sin cifrar.");
+  if (/usesCleartextTraffic="true"/.test(xml) || variant !== "test" && /debuggable="true"/.test(xml)) problems.push("El manifiesto activa depuración o tráfico HTTP sin cifrar.");
+  if (variant === "test" && !/debuggable="true"/.test(xml)) problems.push("La variante de prueba debe ser depurable.");
   return problems;
 }
 export function stringsSource(label) {
@@ -196,7 +197,7 @@ export function iconSource(id) {
 }
 // The only Java in the APK. It serves the packed web files over a private https origin, refuses every other
 // address (navigation and sub-resources), exposes no Java to the page, and turns the risky WebView switches off.
-export function activitySource(packageName) {
+export function activitySource(packageName, { variant = "release" } = {}) {
   const types = Object.entries(WEB_TYPES).map(([extension, type]) => `        if (path.endsWith(".${extension}")) return "${type}";`).join("\n");
   return `package ${packageName};
 
@@ -264,7 +265,7 @@ public class MainActivity extends Activity {
         settings.setSupportMultipleWindows(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setGeolocationEnabled(false);
-        web.setWebViewClient(new AppClient());
+${variant === "test" ? "        WebView.setWebContentsDebuggingEnabled(true); // TEST VARIANT ONLY: never in the delivered app\n" : ""}        web.setWebViewClient(new AppClient());
         web.setWebChromeClient(new AppChrome());
         web.loadUrl("https://" + HOST + "/index.html");
     }
@@ -525,7 +526,8 @@ export async function buildAndroid(options) {
 }
 
 async function build(options, { startedAt, log, setWork }) {
-  const { projectDir, dataDir, name, projectId = null, versionCode = 1, versionName = "1.0", webRoot = ".", permissions = [], keep = 5 } = options;
+  const { projectDir, dataDir, name, projectId = null, versionCode = 1, versionName = "1.0", webRoot = ".", permissions = [], keep = 5, variant = "release" } = options;
+  if (variant !== "release" && variant !== "test") throw new AndroidBuildError("validar", "bad-variant", "La variante debe ser release o test.");
   const env = options.env ?? process.env;
   // --- 1. Inputs
   if (!projectDir || !dataDir) throw new AndroidBuildError("validar", "missing-input", "Faltan la carpeta del proyecto o la de datos de Automata.");
@@ -539,7 +541,8 @@ async function build(options, { startedAt, log, setWork }) {
   if (within(data, project)) throw new AndroidBuildError("validar", "data-in-project", "La carpeta de datos (llaves y archivos temporales) no puede estar dentro del proyecto.");
   const label = appLabel(name);
   const id = keyIdOf(project, projectId);
-  const packageName = options.packageName ?? defaultPackageName(label, id);
+  const basePackage = options.packageName ?? defaultPackageName(label, id);
+  const packageName = variant === "test" ? basePackage + ".test" : basePackage;
   const packageProblem = packageNameProblem(packageName);
   if (packageProblem) throw new AndroidBuildError("validar", "bad-package", packageProblem);
   if (!Number.isInteger(versionCode) || versionCode < 1 || versionCode > 2100000000) throw new AndroidBuildError("validar", "bad-version", "versionCode debe ser un entero entre 1 y 2 100 000 000.");
@@ -549,14 +552,14 @@ async function build(options, { startedAt, log, setWork }) {
   const target = options.targetSdk ?? DEFAULT_TARGET_SDK;
   const minSdk = options.minSdk ?? DEFAULT_MIN_SDK;
   if (!Number.isInteger(minSdk) || minSdk < LOWEST_MIN_SDK || minSdk > target) throw new AndroidBuildError("validar", "bad-sdk", `minSdk debe estar entre ${LOWEST_MIN_SDK} y ${target}.`);
-  const owner = packageOwner(data, packageName, id);
+  const owner = variant === "test" ? null : packageOwner(data, packageName, id);
   if (owner) throw new AndroidBuildError("validar", "package-taken", `El identificador ${packageName} ya lo usa otro proyecto de Automata.`);
 
   const webAbs = path.resolve(project, webRoot);
   if (!within(webAbs, project)) throw new AndroidBuildError("validar", "web-outside", "La carpeta web debe estar dentro del proyecto.");
   if (!fs.existsSync(webAbs) || !fs.statSync(webAbs).isDirectory()) throw new AndroidBuildError("validar", "no-web", "No existe la carpeta web del proyecto.");
   if (!within(realOf(webAbs), project)) throw new AndroidBuildError("validar", "web-outside", "La carpeta web apunta fuera del proyecto.");
-  const outAbs = path.resolve(project, options.outDir ?? path.join("dist", "android"));
+  const outAbs = path.resolve(project, options.outDir ?? path.join("dist", "android"), variant === "test" ? "test" : ".");
   if (!within(outAbs, project) || normalized(outAbs) === normalized(project)) throw new AndroidBuildError("validar", "out-outside", "El APK debe quedar en una subcarpeta del proyecto (por ejemplo dist/android).");
   const web = collectWebAssets(webAbs);
   if (web.problems.length) throw new AndroidBuildError("validar", "bad-web", `La web del proyecto no se puede empaquetar:\n- ${web.problems.slice(0, 12).join("\n- ")}`);
@@ -578,14 +581,14 @@ async function build(options, { startedAt, log, setWork }) {
   fs.mkdirSync(path.join(dirs.res, "drawable"), { recursive: true });
   fs.mkdirSync(dirs.classes, { recursive: true });
   fs.mkdirSync(dirs.dex, { recursive: true });
-  const manifestXml = manifestSource({ packageName, versionCode, versionName, minSdk, targetSdk: target, permissions });
-  const manifestIssues = manifestProblems(manifestXml, { permissions });
+  const manifestXml = manifestSource({ packageName, versionCode, versionName, minSdk, targetSdk: target, permissions, variant });
+  const manifestIssues = manifestProblems(manifestXml, { permissions, variant });
   if (manifestIssues.length) throw new AndroidBuildError("validar", "bad-manifest", manifestIssues.join(" "));
   const manifestFile = path.join(work, "AndroidManifest.xml");
-  const activityCode = activitySource(packageName);
+  const activityCode = activitySource(packageName, { variant });
   fs.writeFileSync(manifestFile, manifestXml);
   fs.writeFileSync(path.join(javaDir, "MainActivity.java"), activityCode);
-  fs.writeFileSync(path.join(dirs.res, "values", "strings.xml"), stringsSource(label));
+  fs.writeFileSync(path.join(dirs.res, "values", "strings.xml"), stringsSource(variant === "test" ? `${label.slice(0, 20)} (prueba)` : label));
   fs.writeFileSync(path.join(dirs.res, "drawable", "app_icon.xml"), iconSource(id));
   for (const file of web.files) {
     const dest = path.join(dirs.assets, "web", ...file.path.split("/"));
@@ -595,7 +598,7 @@ async function build(options, { startedAt, log, setWork }) {
   }
 
   const signing = await ensureSigningKey({ dataDir: data, id, packageName, label, tc, log });
-  if (signing.meta.packageName !== packageName) {
+  if (variant !== "test" && signing.meta.packageName !== packageName) {
     signing.meta.packageName = packageName;
     fs.writeFileSync(path.join(signing.dir, "key.json"), JSON.stringify(signing.meta, null, 2), { mode: 0o600 });
   }
@@ -650,7 +653,7 @@ async function build(options, { startedAt, log, setWork }) {
   ]);
   fs.mkdirSync(outAbs, { recursive: true });
   if (!within(realOf(outAbs), project)) throw new AndroidBuildError("publicar", "out-outside", "La carpeta de salida apunta fuera del proyecto.");
-  const apkName = `${slugFile(label)}.apk`;
+  const apkName = `${slugFile(label)}${variant === "test" ? "-test" : ""}.apk`;
   const apkOut = path.join(outAbs, apkName);
   writeFileAtomic(apkOut, fs.readFileSync(signed));
   const apkBytes = fs.statSync(apkOut).size;
@@ -658,6 +661,8 @@ async function build(options, { startedAt, log, setWork }) {
   const dexHash = sha256File(path.join(dirs.dex, "classes.dex"));
   const info = {
     schema: 1,
+    variant,
+    deliverable: variant === "release",
     generator: { ...GENERATOR, activitySha256: sha256(activityCode), manifestSha256: sha256(manifestXml) },
     startedAt: startedAt.toISOString(),
     builtAt: new Date().toISOString(),

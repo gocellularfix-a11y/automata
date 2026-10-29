@@ -308,3 +308,35 @@ test("webProject (ayuda de las pruebas) no depende del orden de creación", (t) 
   webProject(b);
   assert.deepEqual(collectWebAssets(a).files.map((f) => f.sha256), collectWebAssets(b).files.map((f) => f.sha256));
 });
+
+test("la variante de prueba es otro paquete, depurable, aparte y marcada como no entregable", { skip: SKIP }, async (t) => {
+  const w = workspace(t);
+  const dir = w.project();
+  const release = await build({ projectDir: dir, dataDir: w.data, name: "Con prueba" });
+  assert.equal(release.ok, true, release.error);
+  const releaseInfo = fs.readFileSync(release.buildInfoPath, "utf8");
+  const test = await build({ projectDir: dir, dataDir: w.data, name: "Con prueba", variant: "test" });
+  assert.equal(test.ok, true, test.error + test.detail);
+  assert.equal(test.buildInfo.app.packageName, release.buildInfo.app.packageName + ".test");
+  assert.equal(test.buildInfo.variant, "test");
+  assert.equal(test.buildInfo.deliverable, false);
+  assert.equal(release.buildInfo.deliverable, true);
+  assert.equal(path.dirname(test.apk), path.join(path.dirname(release.apk), "test"));
+  assert.ok(path.basename(test.apk).endsWith("-test.apk"));
+  assert.equal(fs.readFileSync(release.buildInfoPath, "utf8"), releaseInfo, "la variante de prueba no toca el build-info de la entrega");
+  assert.equal(test.buildInfo.signing.certSha256, release.buildInfo.signing.certSha256, "misma llave del proyecto");
+  const meta = JSON.parse(fs.readFileSync(path.join(release.keyDir, "key.json"), "utf8"));
+  assert.equal(meta.packageName, release.buildInfo.app.packageName, "el registro de paquetes sigue apuntando a la entrega");
+  assert.equal((await build({ projectDir: dir, dataDir: w.data, name: "Con prueba", variant: "otra" })).code, "bad-variant");
+});
+
+test("solo la variante de prueba activa la depuración del WebView", () => {
+  const spec = { packageName: "apps.local.calc.p1a2b3c4d", versionCode: 1, versionName: "1", minSdk: 26, targetSdk: 36, permissions: [] };
+  assert.match(manifestSource({ ...spec, variant: "test" }), /android:debuggable="true"/);
+  assert.match(manifestSource(spec), /android:debuggable="false"/);
+  assert.deepEqual(manifestProblems(manifestSource({ ...spec, variant: "test" }), { permissions: [], variant: "test" }), []);
+  assert.ok(manifestProblems(manifestSource({ ...spec, variant: "test" }), { permissions: [] }).length, "como entrega, un manifiesto depurable se rechaza");
+  assert.ok(manifestProblems(manifestSource(spec), { permissions: [], variant: "test" }).length, "una variante de prueba no depurable no sirve");
+  assert.match(activitySource("a.b.c.test", { variant: "test" }), /setWebContentsDebuggingEnabled\(true\)/);
+  assert.doesNotMatch(activitySource("a.b.c"), /setWebContentsDebuggingEnabled/);
+});

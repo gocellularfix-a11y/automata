@@ -1,7 +1,7 @@
 // A3: installs ONE app created by Automata on ONE authorized phone, starts it, watches it, and removes it again.
 // It touches no other package: the package comes from the APK's build-info.json, it may never be Automata's own client
 // (app.automata.*), and the client's fingerprint is read before and after to prove it did not change.
-//   node scripts/android-device-check.mjs --apk <file.apk> --serial <adb serial> [--keep] [--out <folder>]
+//   node scripts/android-device-check.mjs --apk <file.apk> --serial <adb serial> [--variant test] [--keep] [--out <folder>]
 import fs from "node:fs";
 import { execFile } from "node:child_process";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { verifyApk } from "../server/androidverify.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name) => { const at = args.indexOf("--" + name); return at >= 0 ? args[at + 1] : undefined; };
+const variant = flag("variant") ?? "release";
 const apk = path.resolve(flag("apk") ?? ""), serial = flag("serial"), keep = args.includes("--keep");
 const out = path.resolve(flag("out") ?? path.join("artifacts", "device-" + Date.now()));
 const CLIENT = "app.automata.workspace";
@@ -20,7 +21,7 @@ const tc = await resolveToolchain();
 if (!tc.ok || !tc.adb) { console.error("Faltan herramientas (adb incluido): " + [...tc.missing ?? [], tc.adb ? "" : "adb"].join(" ")); process.exit(2); }
 const info = JSON.parse(fs.readFileSync(path.join(path.dirname(apk), "build-info.json"), "utf8"));
 const pkg = info.app.packageName;
-if (packageNameProblem(pkg) || pkg === CLIENT || pkg.startsWith("app.automata.")) { console.error(`Paquete no permitido para esta prueba: ${pkg}`); process.exit(2); }
+if ((info.variant ?? "release") !== variant || packageNameProblem(pkg) || pkg === CLIENT || pkg.startsWith("app.automata.")) { console.error(`Paquete no permitido para esta prueba: ${pkg}`); process.exit(2); }
 
 const adb = async (...a) => runTool(tc.adb, ["-s", serial, ...a], { timeoutMs: 120000 });
 const shell = async (cmd) => (await adb("shell", cmd)).stdout.trim();
@@ -43,7 +44,7 @@ const finish = async (code) => {
 
 report.clientBefore = await fingerprint();
 // 1. Nothing goes to the phone unless the package is exactly what was verified.
-const verified = await verifyApk({ apkPath: apk, toolchain: tc, expected: { permissions: info.permissions } });
+const verified = await verifyApk({ apkPath: apk, toolchain: tc, expected: { permissions: info.permissions, variant } });
 if (!check("el APK pasa la verificación estática antes de instalarlo", verified.ok, verified.errors.join(" | "))) await finish(1);
 if (!check("el paquete no está ya instalado (no se pisa nada)", !/package:/.test(await shell(`pm path ${pkg}`)))) await finish(1);
 
@@ -52,7 +53,7 @@ const install = await adb("install", apk);
 installed = /Success/.test(install.stdout);
 if (!check("instalación", installed, install.stdout.trim() + install.stderr.trim())) await finish(1);
 const dump = await shell(`dumpsys package ${pkg}`);
-check("versionCode y firma instalados", new RegExp(`versionCode=${info.app.versionCode}\\b`).test(dump) && !/DEBUGGABLE/.test(dump), (/versionCode=\d+/.exec(dump) ?? [""])[0] + (/DEBUGGABLE/.test(dump) ? " DEBUGGABLE" : " no depurable"));
+check("versionCode y firma instalados", new RegExp(`versionCode=${info.app.versionCode}\\b`).test(dump) && /DEBUGGABLE/.test(dump) === (variant === "test"), (/versionCode=\d+/.exec(dump) ?? [""])[0] + (/DEBUGGABLE/.test(dump) ? " DEBUGGABLE" : " no depurable"));
 check("sin permisos peligrosos concedidos", !/granted=true/.test(dump.split("requested permissions:")[1]?.split("User 0")[0] ?? ""), "");
 await adb("logcat", "-c");
 const start = await adb("shell", "am", "start", "-W", "-n", `${pkg}/${pkg}.MainActivity`);

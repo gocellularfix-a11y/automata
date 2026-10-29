@@ -293,3 +293,20 @@ test("sin herramientas del SDK no se puede dar nada por verificado", { skip: SKI
   assert.match(report.errors.join("\n"), /Build-Tools/);
   assert.ok(!report.checks.some((c) => c.id === "signature"), "no inventa una firma");
 });
+
+test("la variante de prueba pasa como prueba y nunca como entrega; la entrega no pasa como prueba", { skip: SKIP }, async () => {
+  const f = await fixture();
+  const test = await build({ projectDir: f.project, dataDir: f.w.data, name: "Verificada", variant: "test" });
+  assert.equal(test.ok, true, test.error);
+  const asTest = await verifyOne({ apkPath: test.apk, toolchain, expected: { permissions: [], variant: "test", webRoot: f.project } });
+  assert.equal(asTest.ok, true, asTest.errors.join("\n"));
+  assert.equal(asTest.variant, "test");
+  assert.equal(asTest.deliverable, false, "una variante de prueba nunca es entregable");
+  const asRelease = await verifyOne({ apkPath: test.apk, toolchain, expected: { permissions: [], webRoot: f.project } });
+  assert.equal(asRelease.ok, false);
+  assert.ok(failed(asRelease).includes("hardening") && failed(asRelease).includes("bridge") && failed(asRelease).includes("package"), failed(asRelease).join());
+  assert.equal((await verify(f)).deliverable, true);
+  const releaseAsTest = await verify(f, { expected: { variant: "test" } });
+  assert.equal(releaseAsTest.ok, false);
+  assert.ok(failed(releaseAsTest).includes("hardening") && failed(releaseAsTest).includes("package"), failed(releaseAsTest).join());
+});

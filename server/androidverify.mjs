@@ -62,11 +62,13 @@ export function parseSigner(text) {
 }
 
 // What is wrong with a compiled manifest (parseXmlTree) and its badging, in plain words; [] when it is hardened.
-export function hardeningProblems(tree, badge) {
+export function hardeningProblems(tree, badge, { variant = "release" } = {}) {
   const app = tree.find((e) => e.name === "application")?.attrs ?? {};
   const extra = [...new Set(tree.map((e) => e.name).filter((n) => !ALLOWED_ELEMENTS.has(n)))];
   const problems = [];
-  if (badge.debuggable || app["android:debuggable"] === "true") problems.push("la app es depurable");
+  const debuggable = badge.debuggable || app["android:debuggable"] === "true";
+  if (debuggable && variant !== "test") problems.push("la app es depurable");
+  if (!debuggable && variant === "test") problems.push("la variante de prueba debía ser depurable y no lo es");
   if (app["android:usesCleartextTraffic"] !== "false") problems.push("el tráfico HTTP sin cifrar no está desactivado explícitamente");
   if (app["android:allowBackup"] !== "false") problems.push("las copias de seguridad no están desactivadas");
   if (app["android:networkSecurityConfig"] !== undefined) problems.push("trae una configuración de red propia");
@@ -92,12 +94,13 @@ export async function verifyApk(options) {
   const result = () => {
     const errors = checks.filter((c) => !c.ok && c.level === "error").map((c) => `${c.title}: ${c.detail}`);
     const warnings = checks.filter((c) => !c.ok && c.level === "warning").map((c) => `${c.title}: ${c.detail}`);
-    const report = { ok: errors.length === 0, verifiedAt: new Date().toISOString(), functional: false, pending: PENDING_NOTE, apk: facts.apk ?? null, facts, checks, errors, warnings };
+    const report = { ok: errors.length === 0, variant, deliverable: errors.length === 0 && variant === "release", verifiedAt: new Date().toISOString(), functional: false, pending: PENDING_NOTE, apk: facts.apk ?? null, facts, checks, errors, warnings };
     if (options.reportPath) try { fs.mkdirSync(path.dirname(options.reportPath), { recursive: true }); fs.writeFileSync(options.reportPath, JSON.stringify(report, null, 2) + "\n"); } catch { /* the report must not hide the result */ }
     return report;
   };
   const expected = options.expected ?? {};
   const approved = expected.permissions ?? [];
+  const variant = expected.variant ?? "release";
 
   // 1. The file exists, is a plain file and is not empty
   let apkPath, buffer;
@@ -255,7 +258,7 @@ export async function verifyApk(options) {
       const tree = parseXmlTree(xmlRun.stdout);
       Object.assign(facts, { package: badge.package, versionCode: badge.versionCode, versionName: badge.versionName, minSdk: badge.minSdk, targetSdk: badge.targetSdk, launcher: badge.launchables, permissions: badge.permissions });
       const wantedPackage = expected.packageName ?? info?.app?.packageName;
-      const problem = badge.package ? packageNameProblem(badge.package) : "no se pudo leer";
+      const problem = badge.package ? packageNameProblem(badge.package) ?? (variant === "test" && !badge.package.endsWith(".test") ? "la variante de prueba debe terminar en .test" : variant !== "test" && badge.package.endsWith(".test") ? "un paquete .test no es una entrega" : null) : "no se pudo leer";
       const taken = (expected.knownPackages ?? []).includes(badge.package);
       check("package", "Identificador único del paquete", !problem && !taken && (!wantedPackage || badge.package === wantedPackage), problem ? `Identificador no válido (${problem})` : taken ? `${badge.package} ya lo usa otra app.` : wantedPackage && badge.package !== wantedPackage ? `El APK es ${badge.package} y se esperaba ${wantedPackage}.` : badge.package);
       const wantMin = expected.minSdk ?? info?.sdk?.minSdk, wantTarget = expected.targetSdk ?? info?.sdk?.targetSdk;
@@ -271,7 +274,7 @@ export async function verifyApk(options) {
       check("launcher", "Actividad inicial", badge.launchables.length === 1 && badge.launchables[0] === launcher && activities.length === 1 && !!classLoaded, `${badge.launchables.join(", ") || "ninguna"} · ${activities.length} actividad(es) en el manifiesto · clase ${classLoaded ? "presente" : "AUSENTE"} en el DEX`);
 
       // 12. Hardening of the manifest
-      const hard = xmlRun.code === 0 ? hardeningProblems(tree, badge) : ["aapt2 no pudo leer el manifiesto"];
+      const hard = xmlRun.code === 0 ? hardeningProblems(tree, badge, { variant }) : ["aapt2 no pudo leer el manifiesto"];
       check("hardening", "Manifiesto endurecido", hard.length === 0, hard.length ? hard.join("; ") : "sin depuración, sin HTTP sin cifrar, sin copias de seguridad, un solo componente exportado, solo elementos conocidos");
 
       // 13. Permissions asked vs approved
@@ -286,7 +289,7 @@ export async function verifyApk(options) {
     // 14. The wrapper must not expose Java to the page or open the WebView to remote debugging
     if (zip) {
     const dexAll = Buffer.concat([...data].filter(([n]) => /^classes\d*\.dex$/.test(n)).map(([, b]) => b));
-    const banned = ["addJavascriptInterface", "setWebContentsDebuggingEnabled"].filter((word) => dexAll.includes(Buffer.from(word)));
+    const banned = ["addJavascriptInterface", ...variant === "test" ? [] : ["setWebContentsDebuggingEnabled"]].filter((word) => dexAll.includes(Buffer.from(word)));
     check("bridge", "Sin puentes JavaScript ni depuración remota", banned.length === 0, banned.length ? `El código usa: ${banned.join(", ")}` : "el DEX no referencia addJavascriptInterface ni setWebContentsDebuggingEnabled");
     }
   }
