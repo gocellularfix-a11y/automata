@@ -1,6 +1,6 @@
 # Acceso remoto a Automata (desde casa o desde cualquier lugar)
 
-Estado al 28 oct 2026: **probado** por Tailscale con el Samsung S25 Ultra (cliente de Automata, interfaz actual) estando el teléfono en la misma Wi-Fi que la PC. **Sin probar:** con el teléfono en datos móviles / otra red, y con el iPhone. No hay ningún servicio de terceros: solo tu red privada de Tailscale.
+Estado al 28 oct 2026: **probado** por Tailscale con el Samsung S25 Ultra (cliente de Automata, interfaz actual), tanto en la misma Wi-Fi como **con el Wi-Fi apagado y solo datos móviles** (Tailscale lo alcanzó por relevo DERP, sin conexión directa): todas las comprobaciones correctas (conexión, código erróneo, ciclo completo, reconexión, aprobaciones, seguridad). **Sin probar:** el iPhone, y una sesión larga con el teléfono bloqueado/en segundo plano. No hay ningún servicio de terceros: solo tu red privada de Tailscale.
 
 ## Cómo funciona
 - El coordinador sigue en tu PC (ahí están los proyectos, Git y las sesiones de Claude y Codex) y **escucha solo en `127.0.0.1`**. No se abre ningún puerto en el Firewall ni en el router.
